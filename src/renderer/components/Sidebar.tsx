@@ -1,4 +1,4 @@
-import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { ChartBarIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 
@@ -22,10 +22,11 @@ import LoginButton from './LoginButton';
 interface SidebarProps {
   onShowSettings: () => void;
   onShowLogin?: () => void;
-  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents';
+  activeView: 'cowork' | 'skills' | 'scheduledTasks' | 'runtime' | 'mcp' | 'agents';
   onShowSkills: () => void;
   onShowCowork: () => void;
   onShowScheduledTasks: () => void;
+  onShowRuntimeDashboard: () => void;
   onShowMcp: () => void;
   onShowAgents: () => void;
   onNewChat: () => void;
@@ -41,6 +42,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onShowSkills,
   onShowCowork,
   onShowScheduledTasks,
+  onShowRuntimeDashboard,
   onShowMcp,
   onShowAgents,
   onNewChat,
@@ -198,6 +200,21 @@ const Sidebar: React.FC<SidebarProps> = ({
           >
             <ClockIcon className="h-4 w-4" />
             {i18nService.t('scheduledTasks')}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setIsSearchOpen(false);
+              onShowRuntimeDashboard();
+            }}
+            className={`w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
+              activeView === 'runtime'
+                ? 'bg-primary/10 text-primary hover:bg-primary/20'
+                : 'text-secondary hover:text-foreground hover:bg-surface-raised'
+            }`}
+          >
+            <ChartBarIcon className="h-4 w-4" />
+            {i18nService.t('runtimeDashboardNav')}
           </button>
           <button
             type="button"

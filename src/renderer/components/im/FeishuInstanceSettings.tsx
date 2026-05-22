@@ -3,18 +3,24 @@
  * Configuration form for a single Feishu bot instance in multi-instance mode
  */
 
-import React, { useState, useRef, useEffect } from 'react';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { ArrowPathIcon, CheckCircleIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import TrashIcon from '../icons/TrashIcon';
-import { QRCodeSVG } from 'qrcode.react';
-import type { FeishuInstanceConfig, FeishuInstanceStatus, FeishuOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
-import { i18nService } from '../../services/i18n';
+import { CoworkAgentEngine, type CoworkAgentEngine as CoworkAgentEngineType } from '@shared/cowork/constants';
 import { PlatformRegistry } from '@shared/platform';
+import { QRCodeSVG } from 'qrcode.react';
+import React, { useEffect, useRef, useState } from 'react';
+
+import { i18nService } from '../../services/i18n';
+import type { FeishuInstanceConfig, FeishuInstanceStatus, FeishuOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
+import TrashIcon from '../icons/TrashIcon';
 
 interface FeishuInstanceSettingsProps {
   instance: FeishuInstanceConfig;
   instanceStatus: FeishuInstanceStatus | undefined;
+  agentEngine: CoworkAgentEngineType;
+  isAgentEngineSupported: boolean;
+  isLocalOpenClawOwned?: boolean;
+  enabledInstanceCount: number;
   onConfigChange: (update: Partial<FeishuOpenClawConfig>) => void;
   onSave: (override?: Partial<FeishuOpenClawConfig>) => Promise<void>;
   onRename: (newName: string) => void;
@@ -129,6 +135,10 @@ const PairingSection: React.FC<{
 const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
   instance,
   instanceStatus,
+  agentEngine,
+  isAgentEngineSupported,
+  isLocalOpenClawOwned = false,
+  enabledInstanceCount,
   onConfigChange,
   onSave,
   onRename,
@@ -165,6 +175,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
   }, []);
 
   const handleStartQr = async () => {
+    if (!isAgentEngineSupported || hermesSingleInstanceBlocked) return;
     if (qrPollTimerRef.current) clearInterval(qrPollTimerRef.current);
     if (qrCountdownTimerRef.current) clearInterval(qrCountdownTimerRef.current);
     setQrStatus('loading');
@@ -234,8 +245,59 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
     }
   };
 
+  const engineLabel = agentEngine === CoworkAgentEngine.OpenClaw
+    ? i18nService.t('imFeishuAgentEngineOpenClaw')
+    : agentEngine === CoworkAgentEngine.Hermes
+      ? i18nService.t('imFeishuAgentEngineHermes')
+      : agentEngine === CoworkAgentEngine.ClaudeCode
+        ? i18nService.t('imFeishuAgentEngineClaudeCode')
+        : agentEngine === CoworkAgentEngine.Codex
+          ? i18nService.t('imFeishuAgentEngineCodex')
+          : i18nService.t('imFeishuAgentEngineUnsupported');
+  const hermesSingleInstanceBlocked = agentEngine === CoworkAgentEngine.Hermes
+    && !instance.enabled
+    && enabledInstanceCount > 0;
+  const enableDisabled = !instance.enabled
+    && (!(instance.appId && instance.appSecret) || !isAgentEngineSupported || hermesSingleInstanceBlocked || isLocalOpenClawOwned);
+  const enableTitle = instance.enabled
+    ? i18nService.t('imFeishuDisableInstance')
+    : !(instance.appId && instance.appSecret)
+      ? i18nService.t('imInstanceFillCredentials')
+      : !isAgentEngineSupported
+        ? i18nService.t('imFeishuAgentEngineUnsupportedHint')
+        : hermesSingleInstanceBlocked
+          ? i18nService.t('imFeishuHermesSingleInstanceHint')
+          : isLocalOpenClawOwned
+            ? i18nService.t('imFeishuLocalOpenClawOwnerHint')
+            : i18nService.t('imFeishuEnableInstance');
+
   return (
     <div className="space-y-3">
+      <div className={`rounded-lg border px-3 py-2 text-xs ${
+        isAgentEngineSupported
+          ? 'border-primary/20 bg-primary/5 text-foreground'
+          : 'border-yellow-500/30 bg-yellow-500/10 text-yellow-700 dark:text-yellow-300'
+      }`}>
+        <div className="font-medium">
+          {i18nService.t('imFeishuAgentEngineFollowGlobal').replace('{engine}', engineLabel)}
+        </div>
+        {!isAgentEngineSupported && (
+          <div className="mt-1 text-secondary">
+            {i18nService.t('imFeishuAgentEngineUnsupportedHint')}
+          </div>
+        )}
+        {hermesSingleInstanceBlocked && (
+          <div className="mt-1 text-secondary">
+            {i18nService.t('imFeishuHermesSingleInstanceHint')}
+          </div>
+        )}
+        {isLocalOpenClawOwned && (
+          <div className="mt-1 text-secondary">
+            {i18nService.t('imFeishuLocalOpenClawOwnerHint')}
+          </div>
+        )}
+      </div>
+
       {/* Instance Header: Name, Status, Enable Toggle, Delete */}
       <div className="flex items-center gap-3 pb-3 border-b border-border-subtle">
         <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -285,17 +347,13 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
         <button
           type="button"
           onClick={onToggleEnabled}
-          disabled={!instance.enabled && !(instance.appId && instance.appSecret)}
+          disabled={enableDisabled}
           className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
             instance.enabled
               ? (instanceStatus?.connected ? 'bg-green-500' : 'bg-yellow-500')
               : 'bg-gray-400 dark:bg-gray-600'
-          } ${!instance.enabled && !(instance.appId && instance.appSecret) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-          title={instance.enabled
-            ? (language === 'zh' ? '禁用此实例' : 'Disable this instance')
-            : (!(instance.appId && instance.appSecret)
-              ? i18nService.t('imInstanceFillCredentials')
-              : (language === 'zh' ? '启用此实例' : 'Enable this instance'))}
+          } ${enableDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+          title={enableTitle}
         >
           <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
             instance.enabled ? 'translate-x-4' : 'translate-x-0'
@@ -321,6 +379,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
             <button
               type="button"
               onClick={() => void handleStartQr()}
+              disabled={!isAgentEngineSupported || hermesSingleInstanceBlocked}
               className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {i18nService.t('feishuBotCreateWizardScanBtn')}

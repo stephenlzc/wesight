@@ -3,6 +3,14 @@
  * Mirrors src/main/im/types.ts for use in React components
  */
 
+import {
+  FeishuEngineKey,
+  type FeishuEngineKeyType,
+  type FeishuImportSourceType,
+  FeishuManagementMode,
+  type FeishuManagementModeType,
+  type FeishuSecretStatusType,
+} from '@shared/im/constants';
 import type { Platform } from '@shared/platform';
 
 // ==================== DingTalk Types ====================
@@ -97,6 +105,10 @@ export const MAX_FEISHU_INSTANCES = 5;
 export interface FeishuInstanceConfig extends FeishuOpenClawConfig {
   instanceId: string;
   instanceName: string;
+  engineKey?: FeishuEngineKeyType;
+  importSource?: FeishuImportSourceType;
+  secretStatus?: FeishuSecretStatusType;
+  sourceChannelKey?: string;
 }
 
 export interface FeishuInstanceStatus extends FeishuGatewayStatus {
@@ -105,11 +117,52 @@ export interface FeishuInstanceStatus extends FeishuGatewayStatus {
 }
 
 export interface FeishuMultiInstanceConfig {
+  activeEngineKey?: FeishuEngineKeyType;
+  instances: FeishuInstanceConfig[];
+  profiles?: Partial<Record<FeishuEngineKeyType, FeishuProfileConfig>>;
+  conflicts?: FeishuAppConflict[];
+}
+
+export interface FeishuProfileConfig {
+  engineKey: FeishuEngineKeyType;
   instances: FeishuInstanceConfig[];
 }
 
+export interface FeishuAppConflict {
+  appId: string;
+  engineKeys: FeishuEngineKeyType[];
+  instanceIds: string[];
+}
+
 export interface FeishuMultiInstanceStatus {
+  activeEngineKey?: FeishuEngineKeyType;
   instances: FeishuInstanceStatus[];
+  openClawLocal?: FeishuOpenClawLocalStatus;
+  profiles?: Partial<Record<FeishuEngineKeyType, FeishuProfileStatus>>;
+  conflicts?: FeishuAppConflict[];
+}
+
+export interface FeishuProfileStatus {
+  engineKey: FeishuEngineKeyType;
+  configured: boolean;
+  enabled: boolean;
+  running: boolean;
+  instanceCount: number;
+}
+
+export interface FeishuOpenClawLocalStatus {
+  managementMode: FeishuManagementModeType;
+  configured: boolean;
+  running: boolean;
+  imported: boolean;
+  managed: boolean;
+  canImport: boolean;
+  configPath: string | null;
+  channelKey: string | null;
+  domain: string | null;
+  appIdPreview: string | null;
+  secretNeedsInput: boolean;
+  message: string | null;
 }
 
 // ==================== Telegram Types ====================
@@ -391,6 +444,7 @@ export interface IMGatewayConfig {
 export interface IMSettings {
   systemPrompt?: string;
   skillsEnabled: boolean;
+  feishuManagementMode?: FeishuManagementModeType;
   /** Per-platform agent binding. Key = platform name, value = agent ID. Absent or 'main' = default. */
   platformAgentBindings?: Record<string, string>;
 }
@@ -475,6 +529,9 @@ export type IMConnectivityCheckCode =
   | 'dingtalk_bot_membership_hint'
   | 'nim_p2p_only_hint'
   | 'openclaw_gateway_not_running'
+  | 'unsupported_agent_engine'
+  | 'hermes_single_instance'
+  | 'hermes_config_sync'
   | 'qq_guild_mention_hint';
 
 export interface IMConnectivityCheck {
@@ -614,7 +671,10 @@ export const DEFAULT_QQ_MULTI_INSTANCE_CONFIG: QQMultiInstanceConfig = {
 };
 
 export const DEFAULT_FEISHU_MULTI_INSTANCE_CONFIG: FeishuMultiInstanceConfig = {
+  activeEngineKey: FeishuEngineKey.OpenClaw,
   instances: [],
+  profiles: {},
+  conflicts: [],
 };
 
 export const DEFAULT_WECOM_CONFIG: WecomOpenClawConfig = {
@@ -661,6 +721,7 @@ export const DEFAULT_WEIXIN_CONFIG: WeixinOpenClawConfig = {
 export const DEFAULT_IM_SETTINGS: IMSettings = {
   systemPrompt: '',
   skillsEnabled: true,
+  feishuManagementMode: FeishuManagementMode.LocalOpenClaw,
 };
 
 export const DEFAULT_IM_CONFIG: IMGatewayConfig = {
@@ -683,6 +744,20 @@ export const DEFAULT_IM_STATUS: IMGatewayStatus = {
   },
   feishu: {
     instances: [],
+    openClawLocal: {
+      managementMode: FeishuManagementMode.LocalOpenClaw,
+      configured: false,
+      running: false,
+      imported: false,
+      managed: false,
+      canImport: false,
+      configPath: null,
+      channelKey: null,
+      domain: null,
+      appIdPreview: null,
+      secretNeedsInput: false,
+      message: null,
+    },
   },
   telegram: {
     connected: false,

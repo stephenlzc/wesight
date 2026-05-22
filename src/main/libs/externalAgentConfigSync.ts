@@ -11,9 +11,32 @@ import {
   type ExternalAgentConfigSource as ExternalAgentConfigSourceType,
 } from '../../shared/cowork/constants';
 import type { SqliteStore } from '../sqliteStore';
-import { type CliAppType, getExternalAgentEnvironmentSnapshot } from './ccSwitchIntegration';
 import { resolveCurrentApiConfig, resolveRawApiConfig } from './claudeSettings';
 import type { CoworkApiConfig } from './coworkConfigStore';
+import {
+  DEFAULT_DEEPSEEK_TUI_MODEL,
+  mergeDeepSeekTuiConfigForWesightModel,
+  parseDeepSeekTuiConfigText,
+  serializeDeepSeekTuiConfig,
+  summarizeDeepSeekTuiSettingsConfig,
+} from './deepSeekTuiConfig';
+import { type CliAppType, getExternalAgentEnvironmentSnapshot } from './externalAgentEnvironment';
+import {
+  DEFAULT_HERMES_MODEL,
+  parseHermesConfigText,
+  parseHermesDotenvText,
+  summarizeHermesSettingsConfig,
+} from './hermesConfig';
+import {
+  DEFAULT_OPENCODE_MODEL,
+  mergeOpenCodeConfigForWesightModel,
+  summarizeOpenCodeSettingsConfig,
+} from './openCodeConfig';
+import {
+  DEFAULT_QWEN_CODE_MODEL,
+  mergeQwenCodeConfigForWesightModel,
+  summarizeQwenCodeSettingsConfig,
+} from './qwenCodeConfig';
 
 type ModelProviderConfig = {
   enabled: boolean;
@@ -79,6 +102,10 @@ const CUSTOM_PROVIDER_KEYS = [
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5';
 const DEFAULT_CODEX_MODEL = 'gpt-5.4';
+const DEFAULT_HERMES_LOCAL_MODEL = DEFAULT_HERMES_MODEL;
+const DEFAULT_OPENCODE_LOCAL_MODEL = DEFAULT_OPENCODE_MODEL;
+const DEFAULT_QWEN_CODE_LOCAL_MODEL = DEFAULT_QWEN_CODE_MODEL;
+const DEFAULT_DEEPSEEK_TUI_LOCAL_MODEL = DEFAULT_DEEPSEEK_TUI_MODEL;
 const CC_SWITCH_CLAUDE_COMMON_CONFIG_KEY = 'common_config_claude';
 const CLAUDE_MODEL_ENV_KEYS = [
   'ANTHROPIC_AUTH_TOKEN',
@@ -225,14 +252,44 @@ const getCliConfigPaths = (appType: CliAppType): { primaryConfigPath: string; se
   }
   const configDir = appType === 'claude'
     ? path.join(homeDir(), '.claude')
-    : path.join(homeDir(), '.codex');
+    : appType === 'codex'
+      ? path.join(homeDir(), '.codex')
+      : appType === 'hermes'
+        ? path.join(homeDir(), '.hermes')
+      : appType === 'openclaw'
+        ? path.join(homeDir(), '.openclaw')
+      : appType === 'opencode'
+        ? path.join(homeDir(), '.config', 'opencode')
+        : appType === 'qwen'
+          ? path.join(homeDir(), '.qwen')
+          : path.join(homeDir(), '.deepseek');
   return {
     primaryConfigPath: appType === 'claude'
       ? path.join(configDir, 'settings.json')
-      : path.join(configDir, 'config.toml'),
+      : appType === 'codex'
+        ? path.join(configDir, 'config.toml')
+        : appType === 'hermes'
+          ? path.join(configDir, 'config.yaml')
+        : appType === 'openclaw'
+          ? path.join(configDir, 'openclaw.json')
+        : appType === 'opencode'
+          ? path.join(configDir, 'opencode.json')
+          : appType === 'qwen'
+            ? path.join(configDir, 'settings.json')
+            : path.join(configDir, 'config.toml'),
     secondaryConfigPaths: appType === 'claude'
       ? [path.join(homeDir(), '.claude.json')]
-      : [path.join(configDir, 'auth.json')],
+      : appType === 'codex'
+        ? [path.join(configDir, 'auth.json')]
+        : appType === 'hermes'
+          ? [path.join(configDir, '.env')]
+        : appType === 'openclaw'
+          ? [path.join(configDir, '.env')]
+        : appType === 'opencode'
+          ? [path.join(homeDir(), '.local', 'share', 'opencode', 'auth.json')]
+          : appType === 'qwen'
+            ? [path.join(configDir, 'oauth_creds.json')]
+            : [path.join(configDir, 'sessions')],
   };
 };
 
@@ -607,6 +664,43 @@ const syncCodexFromWesightModel = (): void => {
   });
 };
 
+export const syncOpenCodeGlobalConfigFromWesightModel = (): void => {
+  const resolved = resolveRawApiConfig();
+  const config = requireApiConfig(resolved);
+  const paths = getCliConfigPaths('opencode');
+  const existing = readJsonObject(paths.primaryConfigPath) ?? {};
+  writeJsonObject(
+    paths.primaryConfigPath,
+    mergeOpenCodeConfigForWesightModel(existing, config, resolved.providerMetadata?.providerName),
+  );
+};
+
+export const syncQwenCodeGlobalConfigFromWesightModel = (): void => {
+  const resolved = resolveRawApiConfig();
+  const config = requireApiConfig(resolved);
+  const paths = getCliConfigPaths('qwen');
+  const existing = readJsonObject(paths.primaryConfigPath) ?? {};
+  writeJsonObject(
+    paths.primaryConfigPath,
+    mergeQwenCodeConfigForWesightModel(existing, config, resolved.providerMetadata?.providerName),
+  );
+};
+
+export const syncDeepSeekTuiGlobalConfigFromWesightModel = (): void => {
+  const resolved = resolveRawApiConfig();
+  const config = requireApiConfig(resolved);
+  const paths = getCliConfigPaths('deepseek_tui');
+  const existing = fs.existsSync(paths.primaryConfigPath)
+    ? parseDeepSeekTuiConfigText(fs.readFileSync(paths.primaryConfigPath, 'utf8'))
+    : {};
+  atomicWrite(
+    paths.primaryConfigPath,
+    serializeDeepSeekTuiConfig(
+      mergeDeepSeekTuiConfigForWesightModel(existing, config, resolved.providerMetadata?.providerName),
+    ),
+  );
+};
+
 export const applyExternalAgentConfigForEngine = (
   engine: CoworkAgentEngineType,
   source: ExternalAgentConfigSourceType,
@@ -620,6 +714,16 @@ export const applyExternalAgentConfigForEngine = (
   }
   if (engine === CoworkAgentEngine.Codex) {
     syncCodexFromWesightModel();
+    return;
+  }
+  if (engine === CoworkAgentEngine.OpenCode) {
+    return;
+  }
+  if (engine === CoworkAgentEngine.QwenCode) {
+    return;
+  }
+  if (engine === CoworkAgentEngine.DeepSeekTui) {
+    return;
   }
 };
 
@@ -629,13 +733,31 @@ const buildProviderConfig = (
 ): ModelProviderConfig => {
   const displayName = appType === 'claude'
     ? 'Claude Code 本机配置'
-    : 'Codex 本机配置';
-  const modelId = input.model || (appType === 'claude' ? DEFAULT_CLAUDE_MODEL : DEFAULT_CODEX_MODEL);
+    : appType === 'codex'
+      ? 'Codex 本机配置'
+      : appType === 'hermes'
+        ? 'Hermes Agent 本机配置'
+      : appType === 'opencode'
+        ? 'OpenCode 本机配置'
+        : appType === 'qwen'
+          ? 'Qwen Code 本机配置'
+          : 'DeepSeek-TUI 本机配置';
+  const modelId = input.model || (appType === 'claude'
+    ? DEFAULT_CLAUDE_MODEL
+    : appType === 'codex'
+      ? DEFAULT_CODEX_MODEL
+      : appType === 'hermes'
+        ? DEFAULT_HERMES_LOCAL_MODEL
+      : appType === 'opencode'
+        ? DEFAULT_OPENCODE_LOCAL_MODEL
+        : appType === 'qwen'
+          ? DEFAULT_QWEN_CODE_LOCAL_MODEL
+          : DEFAULT_DEEPSEEK_TUI_LOCAL_MODEL);
   return {
     enabled: true,
     apiKey: input.apiKey,
     baseUrl: input.baseUrl,
-    apiFormat: appType === 'claude' ? 'anthropic' : 'openai',
+    apiFormat: appType === 'claude' || modelId.startsWith('anthropic/') ? 'anthropic' : 'openai',
     displayName,
     models: [
       {
@@ -686,6 +808,97 @@ const readCodexLocalConfig = (): { apiKey: string; baseUrl: string; model: strin
   return { apiKey, baseUrl, model };
 };
 
+const readHermesLocalConfig = (): { apiKey: string; baseUrl: string; model: string } => {
+  const paths = getCliConfigPaths('hermes');
+  const config = fs.existsSync(paths.primaryConfigPath)
+    ? parseHermesConfigText(fs.readFileSync(paths.primaryConfigPath, 'utf8'))
+    : {};
+  const envPath = paths.secondaryConfigPaths[0] || path.join(path.dirname(paths.primaryConfigPath), '.env');
+  const env = fs.existsSync(envPath)
+    ? parseHermesDotenvText(fs.readFileSync(envPath, 'utf8'))
+    : {};
+  const summary = summarizeHermesSettingsConfig({
+    config,
+    env,
+  });
+  if (!summary.apiKey) {
+    throw new Error('本机 Hermes Agent 配置缺少可导入的 API Key。可继续使用“本机 CLI 配置”模式。');
+  }
+  if (!summary.baseUrl) {
+    throw new Error('本机 Hermes Agent 配置缺少可导入的 Base URL。');
+  }
+  return {
+    apiKey: summary.apiKey,
+    baseUrl: summary.baseUrl,
+    model: summary.model || DEFAULT_HERMES_LOCAL_MODEL,
+  };
+};
+
+const readOpenCodeLocalConfig = (): { apiKey: string; baseUrl: string; model: string } => {
+  const paths = getCliConfigPaths('opencode');
+  const config = readJsonObject(paths.primaryConfigPath) ?? {};
+  const summary = summarizeOpenCodeSettingsConfig({
+    config,
+    model: typeof config.model === 'string' ? config.model : DEFAULT_OPENCODE_LOCAL_MODEL,
+  });
+  if (!summary.apiKey) {
+    throw new Error('本机 OpenCode 配置缺少可导入的 API Key。可继续使用“本机 CLI 配置”模式。');
+  }
+  if (!summary.baseUrl) {
+    throw new Error('本机 OpenCode 配置缺少可导入的 Base URL。');
+  }
+  return {
+    apiKey: summary.apiKey,
+    baseUrl: summary.baseUrl,
+    model: summary.model || DEFAULT_OPENCODE_LOCAL_MODEL,
+  };
+};
+
+const readQwenCodeLocalConfig = (): { apiKey: string; baseUrl: string; model: string } => {
+  const paths = getCliConfigPaths('qwen');
+  const config = readJsonObject(paths.primaryConfigPath) ?? {};
+  const model = getNestedRecord(config, 'model');
+  const summary = summarizeQwenCodeSettingsConfig({
+    authType: getNestedRecord(getNestedRecord(config, 'security'), 'auth').selectedType,
+    config,
+    model: getString(model.name) || DEFAULT_QWEN_CODE_LOCAL_MODEL,
+  });
+  if (!summary.apiKey) {
+    throw new Error('本机 Qwen Code 配置缺少可导入的 API Key。可继续使用“本机 CLI 配置”模式。');
+  }
+  if (!summary.baseUrl) {
+    throw new Error('本机 Qwen Code 配置缺少可导入的 Base URL。');
+  }
+  return {
+    apiKey: summary.apiKey,
+    baseUrl: summary.baseUrl,
+    model: summary.model || DEFAULT_QWEN_CODE_LOCAL_MODEL,
+  };
+};
+
+const readDeepSeekTuiLocalConfig = (): { apiKey: string; baseUrl: string; model: string } => {
+  const paths = getCliConfigPaths('deepseek_tui');
+  const config = fs.existsSync(paths.primaryConfigPath)
+    ? parseDeepSeekTuiConfigText(fs.readFileSync(paths.primaryConfigPath, 'utf8'))
+    : {};
+  const summary = summarizeDeepSeekTuiSettingsConfig({
+    provider: config.provider ?? 'deepseek',
+    config,
+    model: config.default_text_model ?? DEFAULT_DEEPSEEK_TUI_LOCAL_MODEL,
+  });
+  if (!summary.apiKey) {
+    throw new Error('本机 DeepSeek-TUI 配置缺少可导入的 API Key。可继续使用“本机 CLI 配置”模式。');
+  }
+  if (!summary.baseUrl) {
+    throw new Error('本机 DeepSeek-TUI 配置缺少可导入的 Base URL。');
+  }
+  return {
+    apiKey: summary.apiKey,
+    baseUrl: summary.baseUrl,
+    model: summary.model || DEFAULT_DEEPSEEK_TUI_LOCAL_MODEL,
+  };
+};
+
 const valuesMatch = (left: string | undefined, right: string | undefined): boolean => {
   return (left ?? '').trim() === (right ?? '').trim();
 };
@@ -719,7 +932,15 @@ export const importLocalAgentConfigToModelSettings = (
 ): ExternalAgentModelImportResult => {
   const localConfig = appType === 'claude'
     ? readClaudeLocalConfig()
-    : readCodexLocalConfig();
+    : appType === 'codex'
+      ? readCodexLocalConfig()
+      : appType === 'hermes'
+        ? readHermesLocalConfig()
+      : appType === 'opencode'
+        ? readOpenCodeLocalConfig()
+        : appType === 'qwen'
+          ? readQwenCodeLocalConfig()
+          : readDeepSeekTuiLocalConfig();
   const providerConfig = buildProviderConfig(appType, localConfig);
   const appConfig = store.get<AppConfigForModelImport>('app_config') ?? {};
   const providers = { ...(appConfig.providers ?? {}) };

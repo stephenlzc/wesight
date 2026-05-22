@@ -1,5 +1,11 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { CoworkAgentEngine, ExternalAgentConfigSource } from '@shared/cowork/constants';
+import {
+  CoworkAgentEngine,
+  DeepSeekTuiPermissionMode,
+  ExternalAgentConfigSource,
+  OpenCodePermissionMode,
+  QwenCodePermissionMode,
+} from '@shared/cowork/constants';
 
 import type {
   CoworkConfig,
@@ -49,8 +55,16 @@ const initialState: CoworkState = {
     systemPrompt: '',
     executionMode: 'local',
     agentEngine: CoworkAgentEngine.YdCowork,
+    openclawConfigSource: ExternalAgentConfigSource.LocalCli,
     claudeCodeConfigSource: ExternalAgentConfigSource.WesightModel,
     codexConfigSource: ExternalAgentConfigSource.WesightModel,
+    hermesConfigSource: ExternalAgentConfigSource.WesightModel,
+    opencodeConfigSource: ExternalAgentConfigSource.WesightModel,
+    opencodePermissionMode: OpenCodePermissionMode.Auto,
+    qwenCodeConfigSource: ExternalAgentConfigSource.WesightModel,
+    qwenCodePermissionMode: QwenCodePermissionMode.Auto,
+    deepseekTuiConfigSource: ExternalAgentConfigSource.WesightModel,
+    deepseekTuiPermissionMode: DeepSeekTuiPermissionMode.Auto,
     memoryEnabled: true,
     memoryImplicitUpdateEnabled: true,
     memoryLlmJudgeEnabled: false,

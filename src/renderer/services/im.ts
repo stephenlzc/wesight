@@ -3,38 +3,41 @@
  * IPC wrapper for IM gateway operations
  */
 
-import { store } from '../store';
-import { PlatformRegistry } from '@shared/platform';
+import type { FeishuEngineKeyType, FeishuManagementModeType } from '@shared/im/constants';
 import type { Platform } from '@shared/platform';
+import { PlatformRegistry } from '@shared/platform';
+
+import { store } from '../store';
 import {
-  setConfig,
-  setStatus,
-  setLoading,
-  setError,
-  addQQInstance,
-  removeQQInstance,
-  setQQInstanceConfig,
-  addFeishuInstance,
-  removeFeishuInstance,
-  setFeishuInstanceConfig,
   addDingTalkInstance,
+  addFeishuInstance,
+  addQQInstance,
   removeDingTalkInstance,
+  removeFeishuInstance,
+  removeQQInstance,
+  setConfig,
   setDingTalkInstanceConfig,
+  setError,
+  setFeishuInstanceConfig,
+  setLoading,
+  setQQInstanceConfig,
+  setStatus,
 } from '../store/slices/imSlice';
 import type {
-  IMGatewayConfig,
-  IMGatewayStatus,
-  IMConfigResult,
-  IMStatusResult,
-  IMGatewayResult,
-  IMConnectivityTestResult,
-  IMConnectivityTestResponse,
-  QQOpenClawConfig,
-  QQInstanceConfig,
-  FeishuOpenClawConfig,
-  FeishuInstanceConfig,
-  DingTalkOpenClawConfig,
   DingTalkInstanceConfig,
+  DingTalkOpenClawConfig,
+  FeishuInstanceConfig,
+  FeishuOpenClawConfig,
+  FeishuOpenClawLocalStatus,
+  IMConfigResult,
+  IMConnectivityTestResponse,
+  IMConnectivityTestResult,
+  IMGatewayConfig,
+  IMGatewayResult,
+  IMGatewayStatus,
+  IMStatusResult,
+  QQInstanceConfig,
+  QQOpenClawConfig,
 } from '../types/im';
 
 class IMService {
@@ -451,9 +454,9 @@ class IMService {
 
   // ==================== Feishu Multi-Instance Operations ====================
 
-  async addFeishuInstance(name: string): Promise<FeishuInstanceConfig | null> {
+  async addFeishuInstance(name: string, engineKey?: FeishuEngineKeyType): Promise<FeishuInstanceConfig | null> {
     try {
-      const result = await window.electron.im.addFeishuInstance(name);
+      const result = await window.electron.im.addFeishuInstance(name, engineKey);
       if (result.success && result.instance) {
         store.dispatch(addFeishuInstance(result.instance));
         return result.instance;
@@ -466,11 +469,11 @@ class IMService {
     }
   }
 
-  async deleteFeishuInstance(instanceId: string): Promise<boolean> {
+  async deleteFeishuInstance(instanceId: string, engineKey?: FeishuEngineKeyType): Promise<boolean> {
     try {
-      const result = await window.electron.im.deleteFeishuInstance(instanceId);
+      const result = await window.electron.im.deleteFeishuInstance(instanceId, engineKey);
       if (result.success) {
-        store.dispatch(removeFeishuInstance(instanceId));
+        store.dispatch(removeFeishuInstance(engineKey ? { instanceId, engineKey } : instanceId));
         return true;
       }
       console.error('[IM Service] Failed to delete Feishu instance:', result.error);
@@ -481,11 +484,11 @@ class IMService {
     }
   }
 
-  async persistFeishuInstanceConfig(instanceId: string, config: Partial<FeishuOpenClawConfig>): Promise<boolean> {
+  async persistFeishuInstanceConfig(instanceId: string, config: Partial<FeishuOpenClawConfig>, engineKey?: FeishuEngineKeyType): Promise<boolean> {
     try {
-      const result = await window.electron.im.setFeishuInstanceConfig(instanceId, config, { syncGateway: false });
+      const result = await window.electron.im.setFeishuInstanceConfig(instanceId, config, { syncGateway: false, engineKey });
       if (result.success) {
-        store.dispatch(setFeishuInstanceConfig({ instanceId, config }));
+        store.dispatch(setFeishuInstanceConfig({ instanceId, config, engineKey }));
         return true;
       }
       console.error('[IM Service] Failed to persist Feishu instance config:', result.error);
@@ -496,10 +499,10 @@ class IMService {
     }
   }
 
-  async updateFeishuInstanceConfig(instanceId: string, config: Partial<FeishuOpenClawConfig>): Promise<boolean> {
+  async updateFeishuInstanceConfig(instanceId: string, config: Partial<FeishuOpenClawConfig>, engineKey?: FeishuEngineKeyType): Promise<boolean> {
     try {
       store.dispatch(setLoading(true));
-      const result = await window.electron.im.setFeishuInstanceConfig(instanceId, config, { syncGateway: true });
+      const result = await window.electron.im.setFeishuInstanceConfig(instanceId, config, { syncGateway: true, engineKey });
       if (result.success) {
         await this.loadConfig();
         await this.loadStatus();
@@ -509,6 +512,61 @@ class IMService {
       return false;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update Feishu instance config';
+      store.dispatch(setError(message));
+      return false;
+    } finally {
+      store.dispatch(setLoading(false));
+    }
+  }
+
+  async detectOpenClawLocalFeishu(): Promise<FeishuOpenClawLocalStatus | null> {
+    try {
+      const result = await window.electron.im.detectOpenClawLocalFeishu();
+      if (result.success && result.result) {
+        return result.result;
+      }
+      if (result.error) store.dispatch(setError(result.error));
+      return null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to detect local OpenClaw Feishu config';
+      store.dispatch(setError(message));
+      return null;
+    }
+  }
+
+  async importOpenClawLocalFeishu(): Promise<FeishuInstanceConfig | null> {
+    try {
+      store.dispatch(setLoading(true));
+      const result = await window.electron.im.importOpenClawLocalFeishu();
+      if (result.success && result.instance) {
+        await this.loadConfig();
+        await this.loadStatus();
+        return result.instance;
+      }
+      store.dispatch(setError(result.error || 'Failed to import local OpenClaw Feishu config'));
+      return null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to import local OpenClaw Feishu config';
+      store.dispatch(setError(message));
+      return null;
+    } finally {
+      store.dispatch(setLoading(false));
+    }
+  }
+
+  async setFeishuManagementMode(mode: FeishuManagementModeType): Promise<boolean> {
+    try {
+      store.dispatch(setLoading(true));
+      const result = await window.electron.im.setFeishuManagementMode(mode);
+      if (result.success) {
+        await this.loadConfig();
+        await this.loadStatus();
+        return true;
+      }
+      store.dispatch(setError(result.error || 'Failed to update Feishu management mode'));
+      return false;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update Feishu management mode';
       store.dispatch(setError(message));
       return false;
     } finally {

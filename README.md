@@ -5,7 +5,7 @@
 </p>
 
 <h3 align="center">
-  Desktop AI Agent Workspace for Claude Code, Codex, OpenClaw, Hermes Agent, and Custom LLMs
+  Desktop AI Agent Workspace for Claude Code, Codex, OpenCode, Qwen Code, DeepSeek-TUI, OpenClaw, Hermes Agent, and Custom LLMs
 </h3>
 
 <p align="center">
@@ -26,7 +26,7 @@ WeSight is an open-source desktop workspace that brings coding agents, local run
 
 ## ⚡️ Project Vision
 
-WeSight is built for people who want the power of terminal-native agents with a calmer desktop workflow. It can install or reuse Claude Code and Codex, run managed OpenClaw and Hermes runtimes, map unified model settings into each engine, and present agent work as a visual chat with tool panels, permissions, and long-running task state.
+WeSight is built for people who want the power of terminal-native agents with a calmer desktop workflow. It can install or reuse Claude Code, Codex, Hermes Agent, OpenCode, Qwen Code, and DeepSeek-TUI, run the managed OpenClaw runtime, map unified model settings into each engine, and present agent work as a visual chat with tool panels, permissions, and long-running task state.
 
 ## 📖 Quick Links
 
@@ -48,11 +48,11 @@ Early public releases currently ship macOS Apple Silicon builds first. Release a
 
 ## Highlights
 
-- **Multiple agent engines** - Use Claude Code, Codex, OpenClaw, Hermes Agent, or the built-in Claude Agent SDK runner from the same chat workspace.
-- **One-click engine setup** - WeSight can install and prepare supported local CLIs/runtimes for you. Claude Code and Codex CLI setup prefers npm on macOS; OpenClaw and Hermes Agent use WeSight-managed runtime builders.
-- **Use existing local CLI accounts** - If Claude Code or Codex is already installed and logged in, WeSight can reuse the local CLI configuration instead of forcing a new model setup.
+- **Multiple agent engines** - Use Claude Code, Codex, OpenCode, Qwen Code, DeepSeek-TUI, OpenClaw, Hermes Agent, or the built-in Claude Agent SDK runner from the same chat workspace.
+- **One-click engine setup** - WeSight can install and prepare supported local CLIs/runtimes for you. Claude Code, Codex, OpenCode, Qwen Code, and DeepSeek-TUI CLI setup prefers npm on macOS; Hermes Agent uses `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`; OpenClaw uses WeSight-managed runtime builders.
+- **Use existing local CLI accounts** - If Claude Code, Codex, Hermes Agent, OpenCode, Qwen Code, or DeepSeek-TUI is already installed and logged in, WeSight can reuse the local CLI configuration instead of forcing a new model setup.
 - **Unified model settings** - Configure OpenAI-compatible providers, Anthropic, DeepSeek, Qwen, Gemini, Moonshot, Ollama, OpenRouter, GitHub Copilot, and custom providers from one settings page.
-- **Graphical chat for CLI agents** - Claude Code and Codex feel like desktop chat apps: stream output, inspect tool calls, review command results, and continue the same session visually.
+- **Graphical chat for CLI agents** - Claude Code, Codex, OpenCode, Qwen Code, and DeepSeek-TUI feel like desktop chat apps: stream output, inspect tool calls, review command results, and continue the same session visually.
 - **Engine switching in context** - Pick an engine when creating a task, then switch from the chat header when the task needs a different runtime.
 - **Permission-aware execution** - File access, shell commands, and sensitive operations surface as reviewable events so you stay in control.
 - **Slash command panels** - Type `/` in chat to open command suggestions and agent context panels for model, status, help, config, skills, memory, and more.
@@ -68,8 +68,11 @@ Early public releases currently ship macOS Apple Silicon builds first. Release a
 | Built-in Claude Agent SDK | General local cowork sessions and skill execution    | Included in WeSight                                      |
 | Claude Code               | Claude Code workflows in a graphical chat surface    | macOS one-click CLI install or existing local CLI config |
 | Codex                     | Codex CLI workflows in a graphical chat surface      | macOS one-click CLI install or existing local CLI config |
+| OpenCode                  | OpenCode CLI workflows with model/provider routing   | macOS one-click CLI install or existing local CLI config |
+| Qwen Code                 | Qwen Code CLI workflows and DashScope-friendly setup | macOS one-click CLI install or existing local CLI config |
+| DeepSeek-TUI              | DeepSeek-TUI HTTP/SSE runtime and tool streaming     | macOS one-click CLI install or existing local CLI config |
 | OpenClaw                  | Sandbox-style agent runtime and gateway integrations | WeSight-managed pinned runtime                           |
-| Hermes Agent              | Local Hermes Agent runtime experiments               | WeSight-managed pinned runtime                           |
+| Hermes Agent              | Local Hermes Agent runtime experiments               | Official install.sh, `hermes setup`, or existing CLI config |
 
 ## Model Configuration
 
@@ -77,8 +80,8 @@ WeSight has a unified model settings layer for user-facing configuration.
 
 - Add multiple providers and models.
 - Enable or disable providers without editing terminal config files.
-- Map WeSight model settings into Claude Code or Codex when using WeSight-managed configuration.
-- Use local CLI configuration for Claude Code or Codex when you want to keep the account/provider setup already present on your machine.
+- Map WeSight model settings into Claude Code, Codex, Hermes Agent, OpenCode, Qwen Code, or DeepSeek-TUI when using WeSight-managed configuration.
+- Use local CLI configuration for Claude Code, Codex, Hermes Agent, OpenCode, Qwen Code, or DeepSeek-TUI when you want to keep the account/provider setup already present on your machine.
 - Configure custom OpenAI-compatible endpoints for local, private, or third-party model services.
 
 This lets beginners avoid CLI configuration while still giving advanced users control over their local agent environment.
@@ -101,13 +104,13 @@ npm run electron:dev
 
 The Vite dev server runs at `http://localhost:5175`.
 
-### Development With Managed Runtimes
+### Development With Agent Runtimes
 
 ```bash
 # Build or reuse the pinned OpenClaw runtime, then start WeSight
 npm run electron:dev:openclaw
 
-# Build or reuse the pinned Hermes Agent runtime, then start WeSight
+# Start WeSight; Hermes Agent is detected from the user's local CLI and can be installed from Settings
 npm run electron:dev:hermes
 ```
 
@@ -150,12 +153,11 @@ npm run dist:win
 npm run dist:linux
 ```
 
-Runtime builders are pinned in `package.json`:
+Managed runtime versions are pinned in `package.json`:
 
 - `openclaw.version`
-- `hermes.version`
 
-Windows packages can bundle a portable Python runtime for Python-based skills. OpenClaw and Hermes runtime folders are generated under `vendor/` and ignored by Git.
+Windows packages can bundle a portable Python runtime for Python-based skills. OpenClaw runtime folders are generated under `vendor/` and ignored by Git. Hermes Agent is installed or reused from the user's normal local CLI environment.
 
 ## Release Workflow
 
@@ -189,8 +191,8 @@ WeSight uses Electron process isolation. The renderer never directly accesses No
 - Window lifecycle and tray behavior
 - SQLite persistence
 - Agent engine routing
-- Claude Code and Codex external CLI adapters
-- OpenClaw and Hermes runtime managers
+- Claude Code, Codex, OpenCode, Qwen Code, and DeepSeek-TUI external engine adapters
+- OpenClaw runtime and Hermes local CLI/gateway managers
 - Skill loading and service management
 - Scheduled task engine
 - IM gateway and notification integrations
@@ -213,8 +215,8 @@ src/main/
   coworkStore.ts                  Session and message storage
   libs/agentEngine/               Engine adapters and router
   libs/openclawEngineManager.ts   OpenClaw runtime lifecycle
-  libs/hermesEngineManager.ts     Hermes runtime lifecycle
-  libs/externalAgent*.ts          Claude Code and Codex CLI setup/config helpers
+  libs/hermesEngineManager.ts     Hermes local CLI and gateway lifecycle
+  libs/externalAgent*.ts          Claude Code, Codex, Hermes Agent, OpenCode, Qwen Code, and DeepSeek-TUI CLI setup/config helpers
   im/                             IM gateway integrations
 
 src/renderer/

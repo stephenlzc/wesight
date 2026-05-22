@@ -10,6 +10,8 @@ import {
   type CliCoworkAgentEngine,
   CoworkAgentEngine,
   ExternalAgentConfigSource,
+  OpenCodePermissionMode,
+  QwenCodePermissionMode,
 } from '../../../shared/cowork/constants';
 import type {
   CoworkMessage,
@@ -17,6 +19,7 @@ import type {
   CoworkStore,
 } from '../../coworkStore';
 import { t } from '../../i18n';
+import { resolveRawApiConfig } from '../claudeSettings';
 import { getEnhancedEnvWithTmpdir } from '../coworkUtil';
 import {
   applyLocalClaudeCodeEnvForPrintMode,
@@ -26,6 +29,10 @@ import type {
   ExternalAgentProvider,
   ExternalAgentProviderAppType,
 } from '../externalAgentProviderStore';
+import { normalizeOpenCodeCliEvent } from '../openCodeCliEvent';
+import { buildOpenCodeRuntimeConfigContent } from '../openCodeConfig';
+import { normalizeQwenCodeCliEvent } from '../qwenCodeCliEvent';
+import { buildQwenCodeRuntimeEnv, qwenAuthTypeForCoworkConfig } from '../qwenCodeConfig';
 import type {
   CoworkContinueOptions,
   CoworkRuntime,
@@ -43,20 +50,41 @@ const CLAUDE_NO_CONTENT_NOTICE_MS = 8_000;
 const CLAUDE_NO_CONTENT_TIMEOUT_MS = 120_000;
 const CONTENT_TRUNCATED_HINT = '\n...[truncated to prevent memory pressure]';
 
+const CodexCliEventType = {
+  ThreadStarted: 'thread.started',
+  Error: 'error',
+  ItemStarted: 'item.started',
+  ItemCompleted: 'item.completed',
+  AgentMessageDelta: 'item.agent_message.delta',
+  ResponseItem: 'response_item',
+  EventMessage: 'event_msg',
+  TurnFailed: 'turn.failed',
+} as const;
+
+const CodexCliItemType = {
+  AgentMessage: 'agent_message',
+  CommandExecution: 'command_execution',
+  FileChange: 'file_change',
+  ImageGenerationCall: 'image_generation_call',
+  ImageGenerationEnd: 'image_generation_end',
+} as const;
+
 type ActiveCliSession = {
   child: ChildProcessWithoutNullStreams;
   sessionId: string;
   cliSessionId: string | null;
+  initialMessageCount: number;
   assistantMessageId: string | null;
   assistantContent: string;
   stderrTail: string;
   sawEvent: boolean;
-  sawClaudeNonInitEvent: boolean;
+  sawClaudeVisibleOutput: boolean;
   startupTimer: ReturnType<typeof setTimeout> | null;
   noContentNoticeTimer: ReturnType<typeof setTimeout> | null;
   noContentTimeoutTimer: ReturnType<typeof setTimeout> | null;
   imagePaths: string[];
   localClaudeConfig: LocalClaudeCodeEnvLoadResult | null;
+  codexGeneratedImageIds: Set<string>;
 };
 
 type ExternalCliRuntimeAdapterDeps = {
@@ -87,6 +115,16 @@ const firstString = (...values: unknown[]): string | null => {
   for (const value of values) {
     if (typeof value === 'string' && value.trim()) {
       return value;
+    }
+  }
+  return null;
+};
+
+const firstNumber = (...values: unknown[]): number | null => {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return numeric;
     }
   }
   return null;
@@ -218,8 +256,21 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     if (this.engine === CoworkAgentEngine.Codex && this.getConfigSource() === ExternalAgentConfigSource.LocalCli) {
       this.applyCodexProviderEnvForExecMode(env, selectedProvider);
     }
-    const command = this.engine === CoworkAgentEngine.ClaudeCode ? 'claude' : 'codex';
-    const args = this.buildCommandArgs(cwd, effectivePrompt, imagePaths, selectedProvider);
+    if (this.engine === CoworkAgentEngine.OpenCode && this.getConfigSource() === ExternalAgentConfigSource.WesightModel) {
+      this.applyOpenCodeRuntimeConfig(env);
+    }
+    if (this.engine === CoworkAgentEngine.QwenCode && this.getConfigSource() === ExternalAgentConfigSource.WesightModel) {
+      this.applyQwenCodeRuntimeConfig(env);
+    }
+    const command = this.getCommandName();
+    const args = this.buildCommandArgs(
+      cwd,
+      effectivePrompt,
+      imagePaths,
+      selectedProvider,
+      currentSession?.title ?? session.title,
+      currentSession?.claudeSessionId ?? null,
+    );
     const child = spawn(command, args, {
       cwd,
       env,
@@ -231,16 +282,18 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       child,
       sessionId,
       cliSessionId: currentSession?.claudeSessionId ?? null,
+      initialMessageCount: currentSession?.messages.length ?? 0,
       assistantMessageId: null,
       assistantContent: '',
       stderrTail: '',
       sawEvent: false,
-      sawClaudeNonInitEvent: false,
+      sawClaudeVisibleOutput: false,
       startupTimer: null,
       noContentNoticeTimer: null,
       noContentTimeoutTimer: null,
       imagePaths,
       localClaudeConfig,
+      codexGeneratedImageIds: new Set(),
     };
     active.startupTimer = setTimeout(() => {
       if (active.sawEvent) return;
@@ -278,7 +331,7 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
         this.handleError(sessionId, `${this.getEngineDisplayName()} failed to start: ${error.message}`);
         resolve();
       });
-      child.on('close', (code, signal) => {
+      child.on('close', async (code, signal) => {
         if (spawnFailed) {
           return;
         }
@@ -303,9 +356,29 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
             resolve();
             return;
           }
+          if (this.engine === CoworkAgentEngine.Codex) {
+            this.addCodexGeneratedImagesFromDirectory(active);
+          }
+          if (this.engine === CoworkAgentEngine.ClaudeCode && !this.hasVisibleOutput(active)) {
+            this.replaceAssistant(active, t('externalCliClaudeNoVisibleOutput'), true);
+          }
+          if (this.engine === CoworkAgentEngine.Codex && !this.hasVisibleOutput(active)) {
+            this.replaceAssistant(active, t('externalCliCodexNoVisibleOutput'), true);
+          }
           this.store.updateSession(sessionId, { status: 'completed', claudeSessionId: active.cliSessionId });
           this.applyTurnMemoryUpdates(sessionId);
           this.emit('complete', sessionId, active.cliSessionId);
+          resolve();
+          return;
+        }
+
+        if (this.shouldRetryCodexWithoutResume(active, code)) {
+          console.warn('[ExternalCliRuntimeAdapter] Codex resume failed because the local rollout was missing; retrying with a fresh thread.');
+          this.store.updateSession(sessionId, {
+            status: 'running',
+            claudeSessionId: null,
+          });
+          await this.runTurn(sessionId, prompt, options, false);
           resolve();
           return;
         }
@@ -320,11 +393,26 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     });
   }
 
+  private shouldRetryCodexWithoutResume(active: ActiveCliSession, code: number | null): boolean {
+    if (this.engine !== CoworkAgentEngine.Codex) return false;
+    if (code === 0) return false;
+    if (!active.cliSessionId) return false;
+    if (active.assistantMessageId) return false;
+    const stderr = active.stderrTail.toLowerCase();
+    return stderr.includes('thread/resume')
+      && (
+        stderr.includes('no rollout found')
+        || stderr.includes('thread/resume failed')
+      );
+  }
+
   private buildCommandArgs(
     cwd: string,
     prompt: string,
     imagePaths: string[],
     selectedProvider: ExternalAgentProvider | null,
+    sessionTitle: string,
+    cliSessionId: string | null,
   ): string[] {
     if (this.engine === CoworkAgentEngine.ClaudeCode) {
       const args = [
@@ -338,6 +426,87 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       ];
       args.push(prompt);
       return args;
+    }
+
+    if (this.engine === CoworkAgentEngine.OpenCode) {
+      const args = [
+        'run',
+        '--format',
+        'json',
+        '--dir',
+        cwd,
+      ];
+      if (this.store.getConfig().opencodePermissionMode === OpenCodePermissionMode.Auto) {
+        args.push('--dangerously-skip-permissions');
+      }
+      if (sessionTitle.trim()) {
+        args.push('--title', sessionTitle.trim());
+      }
+      if (cliSessionId) {
+        args.push('--session', cliSessionId);
+      }
+      const model = selectedProvider?.summary.model?.trim();
+      if (model) {
+        args.push('--model', model);
+      }
+      for (const imagePath of imagePaths) {
+        args.push('--file', imagePath);
+      }
+      args.push(prompt);
+      return args;
+    }
+
+    if (this.engine === CoworkAgentEngine.QwenCode) {
+      const promptWithFiles = imagePaths.length > 0
+        ? `${prompt}\n\n${imagePaths.map((imagePath) => `@${imagePath}`).join('\n')}`
+        : prompt;
+      const args = [
+        '--bare',
+        '--output-format',
+        'stream-json',
+        '--include-partial-messages',
+      ];
+      if (this.store.getConfig().qwenCodePermissionMode === QwenCodePermissionMode.Auto) {
+        args.push('--yolo');
+      } else {
+        args.push('--approval-mode', 'plan');
+      }
+      if (cliSessionId) {
+        args.push('--resume', cliSessionId);
+      }
+      if (this.getConfigSource() === ExternalAgentConfigSource.WesightModel) {
+        const resolved = resolveRawApiConfig();
+        if (resolved.config) {
+          args.push('--auth-type', qwenAuthTypeForCoworkConfig(resolved.config));
+          args.push('--model', resolved.config.model);
+        }
+      } else {
+        const model = selectedProvider?.summary.model?.trim();
+        if (model) {
+          args.push('--model', model);
+        }
+      }
+      args.push('-p', promptWithFiles);
+      return args;
+    }
+
+    if (cliSessionId) {
+      const resumeArgs = [
+        'exec',
+        'resume',
+        '--json',
+        '--skip-git-repo-check',
+        '-c',
+        'approval_policy="never"',
+        '-c',
+        'sandbox_mode="workspace-write"',
+      ];
+      resumeArgs.push(...this.buildCodexProviderOverrideArgs(selectedProvider));
+      for (const imagePath of imagePaths) {
+        resumeArgs.push('--image', imagePath);
+      }
+      resumeArgs.push(cliSessionId, prompt);
+      return resumeArgs;
     }
 
     const args = [
@@ -371,6 +540,12 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     if (this.engine === CoworkAgentEngine.Codex) {
       return config.codexConfigSource;
     }
+    if (this.engine === CoworkAgentEngine.OpenCode) {
+      return config.opencodeConfigSource;
+    }
+    if (this.engine === CoworkAgentEngine.QwenCode) {
+      return config.qwenCodeConfigSource;
+    }
     return ExternalAgentConfigSource.WesightModel;
   }
 
@@ -384,7 +559,35 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     if (this.engine === CoworkAgentEngine.Codex) {
       return this.getCurrentProvider?.('codex') ?? null;
     }
+    if (this.engine === CoworkAgentEngine.OpenCode) {
+      return this.getCurrentProvider?.('opencode') ?? null;
+    }
+    if (this.engine === CoworkAgentEngine.QwenCode) {
+      return this.getCurrentProvider?.('qwen') ?? null;
+    }
     return null;
+  }
+
+  private applyOpenCodeRuntimeConfig(env: Record<string, string | undefined>): void {
+    const resolved = resolveRawApiConfig();
+    if (!resolved.config) return;
+    env.OPENCODE_CONFIG_CONTENT = buildOpenCodeRuntimeConfigContent(
+      resolved.config,
+      resolved.providerMetadata?.providerName,
+    );
+  }
+
+  private applyQwenCodeRuntimeConfig(env: Record<string, string | undefined>): void {
+    const resolved = resolveRawApiConfig();
+    if (!resolved.config) return;
+    Object.assign(env, buildQwenCodeRuntimeEnv(resolved.config));
+  }
+
+  private getCommandName(): string {
+    if (this.engine === CoworkAgentEngine.ClaudeCode) return 'claude';
+    if (this.engine === CoworkAgentEngine.Codex) return 'codex';
+    if (this.engine === CoworkAgentEngine.OpenCode) return 'opencode';
+    return 'qwen';
   }
 
   private applyCodexProviderEnvForExecMode(
@@ -506,7 +709,7 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
   private scheduleClaudeNoContentDiagnostics(active: ActiveCliSession): void {
     active.noContentNoticeTimer = setTimeout(() => {
       if (!this.activeSessions.has(active.sessionId)) return;
-      if (active.sawClaudeNonInitEvent || active.assistantMessageId) return;
+      if (active.sawClaudeVisibleOutput || active.assistantMessageId) return;
       this.addSystemMessage(active.sessionId, t('externalCliClaudeWaitingForOutput', {
         provider: this.describeLocalClaudeConfig(active.localClaudeConfig),
       }));
@@ -514,7 +717,7 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
 
     active.noContentTimeoutTimer = setTimeout(() => {
       if (!this.activeSessions.has(active.sessionId)) return;
-      if (active.sawClaudeNonInitEvent || active.assistantMessageId) return;
+      if (active.sawClaudeVisibleOutput || active.assistantMessageId) return;
       active.stderrTail = this.appendStderrTail(active.stderrTail, t('externalCliClaudeNoOutputTimeout', {
         seconds: Math.round(CLAUDE_NO_CONTENT_TIMEOUT_MS / 1000),
         provider: this.describeLocalClaudeConfig(active.localClaudeConfig),
@@ -523,9 +726,9 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     }, CLAUDE_NO_CONTENT_TIMEOUT_MS);
   }
 
-  private markClaudeNonInitEvent(active: ActiveCliSession): void {
-    if (active.sawClaudeNonInitEvent) return;
-    active.sawClaudeNonInitEvent = true;
+  private markClaudeVisibleOutput(active: ActiveCliSession): void {
+    if (active.sawClaudeVisibleOutput) return;
+    active.sawClaudeVisibleOutput = true;
     if (active.noContentNoticeTimer) {
       clearTimeout(active.noContentNoticeTimer);
       active.noContentNoticeTimer = null;
@@ -592,59 +795,115 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     if (!trimmed) return;
     try {
       const event = JSON.parse(trimmed);
+      this.emitUsageMetricFromEvent(active, event);
       if (this.engine === CoworkAgentEngine.Codex) {
         this.handleCodexEvent(active, event);
+      } else if (this.engine === CoworkAgentEngine.OpenCode) {
+        this.handleOpenCodeEvent(active, event);
+      } else if (this.engine === CoworkAgentEngine.QwenCode) {
+        this.handleQwenCodeEvent(active, event);
       } else {
         this.handleClaudeCliEvent(active, event);
       }
     } catch {
       if (this.engine === CoworkAgentEngine.ClaudeCode) {
-        this.markClaudeNonInitEvent(active);
+        this.markClaudeVisibleOutput(active);
       }
       this.appendAssistant(active, line);
     }
   }
 
+  private emitUsageMetricFromEvent(active: ActiveCliSession, event: unknown): void {
+    if (!isRecord(event)) return;
+    const usageCandidates = [
+      event.usage,
+      isRecord(event.result) ? event.result.usage : null,
+      isRecord(event.response) ? event.response.usage : null,
+      isRecord(event.payload) ? event.payload.usage : null,
+      isRecord(event.message) ? event.message.usage : null,
+    ];
+    const usage = usageCandidates.find(isRecord);
+    if (!usage) return;
+    const inputTokens = firstNumber(usage.input_tokens, usage.prompt_tokens, usage.inputTokens, usage.promptTokens);
+    const outputTokens = firstNumber(usage.output_tokens, usage.completion_tokens, usage.outputTokens, usage.completionTokens);
+    const cacheReadTokens = firstNumber(usage.cache_read_input_tokens, usage.cacheReadInputTokens, usage.cache_read_tokens);
+    const cacheWriteTokens = firstNumber(usage.cache_creation_input_tokens, usage.cacheCreationInputTokens, usage.cache_write_tokens);
+    if (inputTokens === null && outputTokens === null && cacheReadTokens === null && cacheWriteTokens === null) {
+      return;
+    }
+    this.emit('runtimeMetric', active.sessionId, {
+      type: 'usage',
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      contextTokens: firstNumber(usage.context_tokens, usage.contextTokens, usage.input_tokens, usage.prompt_tokens),
+      tokensEstimated: false,
+    });
+  }
+
   private handleCodexEvent(active: ActiveCliSession, event: unknown): void {
     if (!isRecord(event)) return;
     const type = String(event.type ?? '');
-    if (type === 'thread.started' && typeof event.thread_id === 'string') {
+    if (type === CodexCliEventType.ThreadStarted && typeof event.thread_id === 'string') {
       active.cliSessionId = event.thread_id;
       this.store.updateSession(active.sessionId, { claudeSessionId: event.thread_id });
       return;
     }
-    if (type === 'error') {
+    if (type === CodexCliEventType.Error) {
       this.handleError(active.sessionId, firstString(event.message, event.error) ?? 'Codex CLI returned an error.');
       return;
     }
-    if (type === 'item.started' && isRecord(event.item)) {
+    if (type === CodexCliEventType.ItemStarted && isRecord(event.item)) {
       this.handleCodexItem(active, event.item, false);
       return;
     }
-    if (type === 'item.completed' && isRecord(event.item)) {
+    if (type === CodexCliEventType.ItemCompleted && isRecord(event.item)) {
       this.handleCodexItem(active, event.item, true);
       return;
     }
-    if (type === 'item.agent_message.delta') {
+    if (type === CodexCliEventType.ResponseItem && isRecord(event.payload)) {
+      this.handleCodexItem(active, event.payload, true);
+      return;
+    }
+    if (type === CodexCliEventType.EventMessage && isRecord(event.payload)) {
+      this.handleCodexEventMessage(active, event.payload);
+      return;
+    }
+    if (type === CodexCliEventType.AgentMessageDelta) {
       const delta = firstString(event.delta, event.text, isRecord(event.params) ? event.params.delta : null);
       if (delta) this.appendAssistant(active, delta);
       return;
     }
-    if (type === 'turn.failed') {
+    if (type === CodexCliEventType.TurnFailed) {
       this.handleError(active.sessionId, firstString(event.message, event.error) ?? 'Codex turn failed.');
     }
   }
 
+  private handleCodexEventMessage(active: ActiveCliSession, payload: Record<string, unknown>): void {
+    const payloadType = String(payload.type ?? '');
+    if (payloadType !== CodexCliItemType.ImageGenerationEnd) return;
+    const imageId = firstString(payload.call_id, payload.id);
+    this.handleCodexImageGenerationItem(active, {
+      type: CodexCliItemType.ImageGenerationCall,
+      id: imageId,
+    });
+  }
+
   private handleCodexItem(active: ActiveCliSession, item: Record<string, unknown>, completed: boolean): void {
     const itemType = String(item.type ?? '');
-    if (itemType === 'agent_message') {
+    if (itemType === CodexCliItemType.AgentMessage) {
       const text = firstString(item.text, item.message, item.content);
       if (text) {
         this.replaceAssistant(active, text, completed);
       }
       return;
     }
-    if (!completed && itemType === 'command_execution') {
+    if (itemType === CodexCliItemType.ImageGenerationCall) {
+      this.handleCodexImageGenerationItem(active, item);
+      return;
+    }
+    if (!completed && itemType === CodexCliItemType.CommandExecution) {
       const command = firstString(item.command) ?? 'command';
       this.addToolMessage(active.sessionId, {
         type: 'tool_use',
@@ -656,7 +915,7 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       });
       return;
     }
-    if (completed && itemType === 'command_execution') {
+    if (completed && itemType === CodexCliItemType.CommandExecution) {
       const output = firstString(item.output, item.aggregated_output, item.text)
         ?? stringifyPayload(item);
       this.addToolMessage(active.sessionId, {
@@ -670,7 +929,7 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       });
       return;
     }
-    if (completed && itemType === 'file_change') {
+    if (completed && itemType === CodexCliItemType.FileChange) {
       const text = firstString(item.text, item.summary) ?? stringifyPayload(item);
       this.addToolMessage(active.sessionId, {
         type: 'tool_use',
@@ -683,6 +942,204 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     }
   }
 
+  private handleCodexImageGenerationItem(active: ActiveCliSession, item: Record<string, unknown>): void {
+    const imageId = firstString(item.id, item.call_id);
+    if (imageId && active.codexGeneratedImageIds.has(imageId)) return;
+    const imagePath = this.resolveCodexGeneratedImagePath(active, item, imageId);
+    if (!imagePath) return;
+    if (imageId) {
+      active.codexGeneratedImageIds.add(imageId);
+    }
+    const message = this.store.addMessage(active.sessionId, {
+      type: 'assistant',
+      content: t('externalCliCodexGeneratedImage'),
+      metadata: {
+        isStreaming: false,
+        isFinal: true,
+        generatedImages: [
+          {
+            path: imagePath,
+            name: path.basename(imagePath),
+            mimeType: 'image/png',
+            source: 'codex',
+          },
+        ],
+      },
+    });
+    this.emit('message', active.sessionId, message);
+  }
+
+  private addCodexGeneratedImagesFromDirectory(active: ActiveCliSession): void {
+    if (!active.cliSessionId) return;
+    const imageDir = path.join(os.homedir(), '.codex', 'generated_images', active.cliSessionId);
+    if (!fs.existsSync(imageDir)) return;
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(imageDir);
+    } catch (error) {
+      console.warn('[ExternalCliRuntimeAdapter] failed to read Codex generated image directory:', error);
+      return;
+    }
+    const imagePaths = entries
+      .filter((entry) => /\.(png|jpe?g|webp|gif)$/i.test(entry))
+      .map((entry) => path.join(imageDir, entry))
+      .filter((imagePath) => {
+        try {
+          return fs.statSync(imagePath).isFile();
+        } catch {
+          return false;
+        }
+      })
+      .sort((left, right) => {
+        try {
+          return fs.statSync(left).mtimeMs - fs.statSync(right).mtimeMs;
+        } catch {
+          return left.localeCompare(right);
+        }
+      });
+    for (const imagePath of imagePaths) {
+      const imageId = path.basename(imagePath, path.extname(imagePath));
+      if (active.codexGeneratedImageIds.has(imageId)) continue;
+      this.handleCodexImageGenerationItem(active, {
+        type: CodexCliItemType.ImageGenerationCall,
+        id: imageId,
+      });
+    }
+  }
+
+  private resolveCodexGeneratedImagePath(
+    active: ActiveCliSession,
+    item: Record<string, unknown>,
+    imageId: string | null,
+  ): string | null {
+    const defaultPath = imageId
+      ? path.join(
+        os.homedir(),
+        '.codex',
+        'generated_images',
+        active.cliSessionId || active.sessionId,
+        `${imageId}.png`,
+      )
+      : null;
+    if (defaultPath && fs.existsSync(defaultPath)) {
+      return defaultPath;
+    }
+
+    const result = firstString(item.result, item.image, item.base64, item.data);
+    if (!result || !imageId) return null;
+    const targetPath = defaultPath ?? path.join(os.tmpdir(), 'wesight-codex-images', active.sessionId, `${imageId}.png`);
+    try {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      const base64Data = result.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '').replace(/\s/g, '');
+      fs.writeFileSync(targetPath, Buffer.from(base64Data, 'base64'));
+      return targetPath;
+    } catch (error) {
+      console.warn('[ExternalCliRuntimeAdapter] failed to persist Codex generated image:', error);
+      return null;
+    }
+  }
+
+  private handleOpenCodeEvent(active: ActiveCliSession, event: unknown): void {
+    const normalized = normalizeOpenCodeCliEvent(event);
+    if (normalized.sessionId) {
+      active.cliSessionId = normalized.sessionId;
+      this.store.updateSession(active.sessionId, { claudeSessionId: normalized.sessionId });
+    }
+    switch (normalized.kind) {
+      case 'assistant_text':
+        this.appendAssistant(active, normalized.text);
+        break;
+      case 'tool_use':
+        this.addToolMessage(active.sessionId, {
+          type: 'tool_use',
+          content: `Using tool: ${normalized.toolName}`,
+          metadata: {
+            toolName: normalized.toolName,
+            toolInput: normalized.input,
+          },
+        });
+        break;
+      case 'tool_result':
+        this.addToolMessage(active.sessionId, {
+          type: 'tool_result',
+          content: normalized.output,
+          metadata: {
+            toolName: normalized.toolName,
+            toolResult: normalized.output,
+            isError: normalized.isError,
+          },
+        });
+        break;
+      case 'step_start':
+        this.emit('runtimeMetric', active.sessionId, {
+          type: 'step',
+          label: normalized.message,
+        });
+        this.addSystemMessage(active.sessionId, normalized.message);
+        break;
+      case 'step_finish':
+        if (normalized.message) {
+          this.addToolMessage(active.sessionId, {
+            type: 'tool_result',
+            content: normalized.message,
+            metadata: {
+              toolName: 'OpenCode',
+              toolResult: normalized.message,
+            },
+          });
+        }
+        break;
+      case 'error':
+        this.handleError(active.sessionId, normalized.message);
+        break;
+      case 'none':
+        break;
+    }
+  }
+
+  private handleQwenCodeEvent(active: ActiveCliSession, event: unknown): void {
+    const normalized = normalizeQwenCodeCliEvent(event);
+    if (normalized.sessionId) {
+      active.cliSessionId = normalized.sessionId;
+      this.store.updateSession(active.sessionId, { claudeSessionId: normalized.sessionId });
+    }
+    switch (normalized.kind) {
+      case 'assistant_text':
+        if (normalized.replace) {
+          this.replaceAssistant(active, normalized.text, true);
+        } else {
+          this.appendAssistant(active, normalized.text);
+        }
+        break;
+      case 'tool_use':
+        this.addToolMessage(active.sessionId, {
+          type: 'tool_use',
+          content: `Using tool: ${normalized.toolName}`,
+          metadata: {
+            toolName: normalized.toolName,
+            toolInput: normalized.input,
+          },
+        });
+        break;
+      case 'tool_result':
+        this.addToolMessage(active.sessionId, {
+          type: 'tool_result',
+          content: normalized.output,
+          metadata: {
+            toolName: normalized.toolName,
+            toolResult: normalized.output,
+            isError: normalized.isError,
+          },
+        });
+        break;
+      case 'error':
+        this.handleError(active.sessionId, normalized.message);
+        break;
+      case 'none':
+        break;
+    }
+  }
+
   private handleClaudeCliEvent(active: ActiveCliSession, event: unknown): void {
     if (!isRecord(event)) return;
     const type = String(event.type ?? '');
@@ -691,19 +1148,23 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       this.store.updateSession(active.sessionId, { claudeSessionId: event.session_id });
       return;
     }
-    this.markClaudeNonInitEvent(active);
     if (type === 'stream_event' && isRecord(event.event)) {
-      this.handleClaudeStreamEvent(active, event.event);
+      if (this.handleClaudeStreamEvent(active, event.event)) {
+        this.markClaudeVisibleOutput(active);
+      }
       return;
     }
     if (type === 'assistant' && isRecord(event.message)) {
-      this.handleClaudeMessage(active, event.message);
+      if (this.handleClaudeMessage(active, event.message)) {
+        this.markClaudeVisibleOutput(active);
+      }
       return;
     }
     if (type === 'result') {
       const result = firstString(event.result);
       if (result) {
         this.replaceAssistant(active, result, true);
+        this.markClaudeVisibleOutput(active);
       }
       if (String(event.subtype ?? 'success') !== 'success') {
         this.handleError(active.sessionId, firstString(event.error) ?? 'Claude Code CLI run failed.');
@@ -711,29 +1172,38 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     }
   }
 
-  private handleClaudeStreamEvent(active: ActiveCliSession, event: Record<string, unknown>): void {
+  private handleClaudeStreamEvent(active: ActiveCliSession, event: Record<string, unknown>): boolean {
     const type = String(event.type ?? '');
-    if (type !== 'content_block_delta' || !isRecord(event.delta)) return;
+    if (type !== 'content_block_delta' || !isRecord(event.delta)) return false;
     const delta = event.delta;
     const text = firstString(delta.text, delta.thinking);
     if (text) {
       this.appendAssistant(active, text);
+      return true;
     }
+    return false;
   }
 
-  private handleClaudeMessage(active: ActiveCliSession, message: Record<string, unknown>): void {
+  private handleClaudeMessage(active: ActiveCliSession, message: Record<string, unknown>): boolean {
     const content = message.content;
     if (!Array.isArray(content)) {
       const text = firstString(content);
-      if (text) this.replaceAssistant(active, text, true);
-      return;
+      if (text) {
+        this.replaceAssistant(active, text, true);
+        return true;
+      }
+      return false;
     }
+    let hasVisibleOutput = false;
     for (const block of content) {
       if (!isRecord(block)) continue;
       const blockType = String(block.type ?? '');
       if (blockType === 'text') {
         const text = firstString(block.text);
-        if (text) this.replaceAssistant(active, text, true);
+        if (text) {
+          this.replaceAssistant(active, text, true);
+          hasVisibleOutput = true;
+        }
       } else if (blockType === 'tool_use') {
         const toolName = firstString(block.name) ?? 'Tool';
         const toolInput = isRecord(block.input) ? block.input : {};
@@ -746,8 +1216,10 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
             toolUseId: firstString(block.id),
           },
         });
+        hasVisibleOutput = true;
       }
     }
+    return hasVisibleOutput;
   }
 
   private appendAssistant(active: ActiveCliSession, delta: string): void {
@@ -834,7 +1306,18 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     });
   }
 
+  private hasVisibleOutput(active: ActiveCliSession): boolean {
+    const session = this.store.getSession(active.sessionId);
+    if (!session) return Boolean(active.assistantMessageId);
+    return session.messages
+      .slice(active.initialMessageCount)
+      .some((message) => message.type === 'assistant' || message.type === 'system' || message.type === 'tool_use' || message.type === 'tool_result');
+  }
+
   private getEngineDisplayName(): string {
-    return this.engine === CoworkAgentEngine.ClaudeCode ? 'Claude Code CLI' : 'Codex CLI';
+    if (this.engine === CoworkAgentEngine.ClaudeCode) return 'Claude Code CLI';
+    if (this.engine === CoworkAgentEngine.Codex) return 'Codex CLI';
+    if (this.engine === CoworkAgentEngine.OpenCode) return 'OpenCode CLI';
+    return 'Qwen Code CLI';
   }
 }

@@ -4,26 +4,28 @@
  */
 
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { FeishuEngineKey, type FeishuEngineKeyType } from '@shared/im/constants';
+
 import type {
-  IMGatewayConfig,
-  IMGatewayStatus,
-  DingTalkOpenClawConfig,
   DingTalkInstanceConfig,
   DingTalkMultiInstanceConfig,
-  FeishuOpenClawConfig,
+  DingTalkOpenClawConfig,
+  DiscordOpenClawConfig,
   FeishuInstanceConfig,
   FeishuMultiInstanceConfig,
-  TelegramOpenClawConfig,
-  QQOpenClawConfig,
+  FeishuOpenClawConfig,
+  IMGatewayConfig,
+  IMGatewayStatus,
+  IMSettings,
+  NeteaseBeeChanConfig,
+  NimConfig,
+  PopoOpenClawConfig,
   QQInstanceConfig,
   QQMultiInstanceConfig,
-  DiscordOpenClawConfig,
-  NimConfig,
-  NeteaseBeeChanConfig,
+  QQOpenClawConfig,
+  TelegramOpenClawConfig,
   WecomOpenClawConfig,
-  PopoOpenClawConfig,
   WeixinOpenClawConfig,
-  IMSettings,
 } from '../../types/im';
 import {
   DEFAULT_IM_CONFIG,
@@ -42,6 +44,29 @@ const initialState: IMState = {
   status: DEFAULT_IM_STATUS,
   isLoading: false,
   error: null,
+};
+
+const getActiveFeishuProfileKey = (state: IMState, engineKey?: FeishuEngineKeyType): FeishuEngineKeyType => (
+  engineKey || state.config.feishu.activeEngineKey || FeishuEngineKey.OpenClaw
+);
+
+const ensureFeishuProfile = (state: IMState, engineKey: FeishuEngineKeyType) => {
+  if (!state.config.feishu.profiles) {
+    state.config.feishu.profiles = {};
+  }
+  if (!state.config.feishu.profiles[engineKey]) {
+    state.config.feishu.profiles[engineKey] = {
+      engineKey,
+      instances: [],
+    };
+  }
+  return state.config.feishu.profiles[engineKey]!;
+};
+
+const refreshActiveFeishuInstances = (state: IMState) => {
+  const activeEngineKey = getActiveFeishuProfileKey(state);
+  const profile = state.config.feishu.profiles?.[activeEngineKey];
+  state.config.feishu.instances = profile?.instances ?? state.config.feishu.instances;
 };
 
 const imSlice = createSlice({
@@ -86,22 +111,33 @@ const imSlice = createSlice({
       }
     },
     setFeishuInstances: (state, action: PayloadAction<FeishuInstanceConfig[]>) => {
-      state.config.feishu = { instances: action.payload };
+      const engineKey = getActiveFeishuProfileKey(state);
+      const profile = ensureFeishuProfile(state, engineKey);
+      profile.instances = action.payload;
+      state.config.feishu.instances = action.payload;
     },
     setFeishuMultiInstanceConfig: (state, action: PayloadAction<FeishuMultiInstanceConfig>) => {
       state.config.feishu = action.payload;
     },
-    setFeishuInstanceConfig: (state, action: PayloadAction<{ instanceId: string; config: Partial<FeishuOpenClawConfig> }>) => {
-      const inst = state.config.feishu.instances.find(i => i.instanceId === action.payload.instanceId);
+    setFeishuInstanceConfig: (state, action: PayloadAction<{ instanceId: string; config: Partial<FeishuOpenClawConfig>; engineKey?: FeishuEngineKeyType }>) => {
+      const engineKey = getActiveFeishuProfileKey(state, action.payload.engineKey);
+      const profile = ensureFeishuProfile(state, engineKey);
+      const inst = profile.instances.find(i => i.instanceId === action.payload.instanceId);
       if (inst) Object.assign(inst, action.payload.config);
+      refreshActiveFeishuInstances(state);
     },
     addFeishuInstance: (state, action: PayloadAction<FeishuInstanceConfig>) => {
-      state.config.feishu.instances.push(action.payload);
+      const engineKey = getActiveFeishuProfileKey(state, action.payload.engineKey);
+      const profile = ensureFeishuProfile(state, engineKey);
+      profile.instances.push(action.payload);
+      refreshActiveFeishuInstances(state);
     },
-    removeFeishuInstance: (state, action: PayloadAction<string>) => {
-      state.config.feishu.instances = state.config.feishu.instances.filter(
-        i => i.instanceId !== action.payload
-      );
+    removeFeishuInstance: (state, action: PayloadAction<string | { instanceId: string; engineKey?: FeishuEngineKeyType }>) => {
+      const instanceId = typeof action.payload === 'string' ? action.payload : action.payload.instanceId;
+      const engineKey = getActiveFeishuProfileKey(state, typeof action.payload === 'string' ? undefined : action.payload.engineKey);
+      const profile = ensureFeishuProfile(state, engineKey);
+      profile.instances = profile.instances.filter(i => i.instanceId !== instanceId);
+      refreshActiveFeishuInstances(state);
     },
     setTelegramOpenClawConfig: (state, action: PayloadAction<Partial<TelegramOpenClawConfig>>) => {
       state.config.telegram = {

@@ -1,4 +1,4 @@
-import { getUpdateCheckUrl, getManualUpdateCheckUrl, getFallbackDownloadUrl } from './endpoints';
+import { getFallbackDownloadUrl,getManualUpdateCheckUrl, getUpdateCheckUrl } from './endpoints';
 
 export const UPDATE_POLL_INTERVAL_MS = 12 * 60 * 60 * 1000;
 export const UPDATE_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
@@ -27,6 +27,19 @@ type UpdateApiResponse = {
       windowsX64?: PlatformDownload;
     };
   };
+};
+
+type GitHubReleaseAsset = {
+  name?: string;
+  browser_download_url?: string;
+};
+
+type GitHubReleaseResponse = {
+  tag_name?: string;
+  name?: string;
+  body?: string;
+  published_at?: string;
+  assets?: GitHubReleaseAsset[];
 };
 
 export type ChangeLogEntry = { title: string; content: string[] };
@@ -90,6 +103,59 @@ const getPlatformDownloadUrl = (value: UpdateValue | undefined): string => {
   return getFallbackDownloadUrl();
 };
 
+const getGitHubDownloadUrl = (release: GitHubReleaseResponse): string => {
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  const { platform, arch } = window.electron;
+  const matches = (asset: GitHubReleaseAsset, patterns: RegExp[]) => {
+    const name = asset.name || '';
+    return Boolean(asset.browser_download_url) && patterns.every((pattern) => pattern.test(name));
+  };
+
+  let asset: GitHubReleaseAsset | undefined;
+  if (platform === 'darwin') {
+    asset = assets.find((item) => (
+      arch === 'arm64'
+        ? matches(item, [/\.dmg$/i, /arm64|aarch64/i])
+        : matches(item, [/\.dmg$/i]) && !/(arm64|aarch64)/i.test(item.name || '')
+    ));
+  } else if (platform === 'win32') {
+    asset = assets.find((item) => matches(item, [/\.exe$/i]));
+  } else {
+    asset = assets.find((item) => matches(item, [/appimage|\.deb|\.rpm|\.tar\.gz$/i]));
+  }
+
+  return asset?.browser_download_url?.trim() || getFallbackDownloadUrl();
+};
+
+const parseGitHubReleaseUpdate = (
+  payload: GitHubReleaseResponse,
+  currentVersion: string,
+): AppUpdateInfo | null => {
+  const latestVersion = payload.tag_name?.trim().replace(/^v/i, '') || '';
+  if (!latestVersion || !isNewerVersion(latestVersion, currentVersion)) {
+    console.log(`[AppUpdate] no update available, latestVersion=${latestVersion || 'N/A'}, currentVersion=${currentVersion}`);
+    return null;
+  }
+
+  const bodyLines = (payload.body || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^#+\s*/.test(line))
+    .slice(0, 12);
+  const title = payload.name?.trim() || payload.tag_name?.trim() || latestVersion;
+  const date = payload.published_at?.slice(0, 10) || '';
+  const entry = { title, content: bodyLines };
+
+  const result: AppUpdateInfo = {
+    latestVersion,
+    date,
+    changeLog: { zh: entry, en: entry },
+    url: getGitHubDownloadUrl(payload),
+  };
+  console.log(`[AppUpdate] update available: ${currentVersion} -> ${latestVersion}, downloadUrl=${result.url}`);
+  return result;
+};
+
 export const checkForAppUpdate = async (currentVersion: string, manual?: boolean): Promise<AppUpdateInfo | null> => {
   const url = manual ? getManualUpdateCheckUrl() : getUpdateCheckUrl();
   console.log(`[AppUpdate] checking update, currentVersion=${currentVersion}, url=${url}`);
@@ -105,6 +171,11 @@ export const checkForAppUpdate = async (currentVersion: string, manual?: boolean
   if (!response.ok || typeof response.data !== 'object' || response.data === null) {
     console.log(`[AppUpdate] request failed: status=${response.status}, statusText=${response.statusText}`);
     return null;
+  }
+
+  const maybeGitHubRelease = response.data as GitHubReleaseResponse;
+  if (typeof maybeGitHubRelease.tag_name === 'string') {
+    return parseGitHubReleaseUpdate(maybeGitHubRelease, currentVersion);
   }
 
   const payload = response.data as UpdateApiResponse;

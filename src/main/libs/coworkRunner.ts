@@ -1,21 +1,23 @@
-import { EventEmitter } from 'events';
+import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { spawn, spawnSync } from 'child_process';
 import { app } from 'electron';
+import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import type { CoworkStore, CoworkMessage, CoworkExecutionMode } from '../coworkStore';
-import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
-import { loadClaudeSdk } from './claudeSdk';
-import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
-import { coworkLog, getCoworkLogPath } from './coworkLogger';
-import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
-import { isDeleteCommand, isDangerousCommand } from './commandSafety';
-import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkMemoryExtractor';
-import { setCoworkProxySessionId } from './coworkOpenAICompatProxy';
-import { SCHEDULED_TASK_SWITCH_MESSAGE } from '../../scheduledTask/enginePrompt';
 import { z } from 'zod';
+
+import { SCHEDULED_TASK_SWITCH_MESSAGE } from '../../scheduledTask/enginePrompt';
+import type { CoworkExecutionMode,CoworkMessage, CoworkStore } from '../coworkStore';
+import type { CoworkRuntimeMetric } from './agentEngine/types';
+import { loadClaudeSdk } from './claudeSdk';
+import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
+import { isDangerousCommand,isDeleteCommand } from './commandSafety';
+import { coworkLog, getCoworkLogPath } from './coworkLogger';
+import { type CoworkMemoryGuardLevel,isQuestionLikeMemoryText } from './coworkMemoryExtractor';
+import { setCoworkProxySessionId } from './coworkOpenAICompatProxy';
+import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
+import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
 
 const ATTACHMENT_LINE_RE = /^\s*(?:[-*]\s*)?(输入文件|input\s*file)\s*[:：]\s*(.+?)\s*$/i;
 const INFERRED_FILE_REFERENCE_RE = /([^\s"'`，。！？：:；;（）()\[\]{}<>《》【】]+?\.[A-Za-z][A-Za-z0-9]{0,7})/g;
@@ -52,7 +54,7 @@ const TOOL_INPUT_PREVIEW_MAX_CHARS = 4000;
 const TOOL_INPUT_PREVIEW_MAX_DEPTH = 5;
 const TOOL_INPUT_PREVIEW_MAX_KEYS = 60;
 const TOOL_INPUT_PREVIEW_MAX_ITEMS = 30;
-const TASK_WORKSPACE_CONTAINER_DIR = '.lobsterai-tasks';
+const TASK_WORKSPACE_CONTAINER_DIR = '.wesight-tasks';
 const PERMISSION_RESPONSE_TIMEOUT_MS = 60_000;
 const DELETE_TOOL_NAMES = new Set(['delete', 'remove', 'unlink', 'rmdir']);
 const SAFETY_APPROVAL_ALLOW_OPTION = '允许本次操作';
@@ -167,6 +169,7 @@ export interface CoworkRunnerEvents {
   message: (sessionId: string, message: CoworkMessage) => void;
   messageUpdate: (sessionId: string, messageId: string, content: string) => void;
   permissionRequest: (sessionId: string, request: PermissionRequest) => void;
+  runtimeMetric: (sessionId: string, metric: CoworkRuntimeMetric) => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
 }
@@ -2574,12 +2577,25 @@ export class CoworkRunner extends EventEmitter {
       // Log token usage for observability
       const usage = (payload.usage ?? (payload.result && typeof payload.result === 'object' ? (payload.result as Record<string, unknown>).usage : undefined)) as Record<string, unknown> | undefined;
       if (usage) {
+        const usageNumber = (value: unknown): number | null => {
+          const numeric = Number(value);
+          return Number.isFinite(numeric) ? numeric : null;
+        };
         coworkLog('INFO', 'tokenUsage', 'Turn token usage', {
           sessionId,
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
           cacheReadInputTokens: usage.cache_read_input_tokens,
           cacheCreationInputTokens: usage.cache_creation_input_tokens,
+        });
+        this.emit('runtimeMetric', sessionId, {
+          type: 'usage',
+          inputTokens: usageNumber(usage.input_tokens),
+          outputTokens: usageNumber(usage.output_tokens),
+          cacheReadTokens: usageNumber(usage.cache_read_input_tokens),
+          cacheWriteTokens: usageNumber(usage.cache_creation_input_tokens),
+          contextTokens: usageNumber(usage.input_tokens),
+          tokensEstimated: false,
         });
       }
 

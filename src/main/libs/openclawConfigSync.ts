@@ -1,18 +1,20 @@
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import type { CoworkConfig, CoworkExecutionMode, Agent } from '../coworkStore';
-import type { TelegramOpenClawConfig, DiscordOpenClawConfig, IMSettings } from '../im/types';
-import type { DingTalkOpenClawConfig, DingTalkInstanceConfig, FeishuInstanceConfig, QQInstanceConfig, WecomOpenClawConfig, PopoOpenClawConfig, NimConfig, WeixinOpenClawConfig, NeteaseBeeChanConfig } from '../im/types';
-import { PlatformRegistry } from '../../shared/platform';
-import { ProviderName, OpenClawProviderId, OpenClawApi as OpenClawApiConst } from '../../shared/providers';
-import { resolveRawApiConfig, resolveAllProviderApiKeys, resolveAllEnabledProviderConfigs, getAllServerModelMetadata } from './claudeSettings';
-import { getCoworkOpenAICompatProxyBaseURL } from './coworkOpenAICompatProxy';
-import type { OpenClawEngineManager } from './openclawEngineManager';
-import { parseChannelSessionKey } from './openclawChannelSessionSync';
-import type { McpToolManifestEntry } from './mcpServerManager';
-import { hasBundledOpenClawExtension } from './openclawLocalExtensions';
+
 import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
+import { ExternalAgentConfigSource } from '../../shared/cowork/constants';
+import { PlatformRegistry } from '../../shared/platform';
+import { OpenClawApi as OpenClawApiConst,OpenClawProviderId, ProviderName } from '../../shared/providers';
+import type { Agent,CoworkConfig, CoworkExecutionMode } from '../coworkStore';
+import type { DiscordOpenClawConfig, IMSettings,TelegramOpenClawConfig } from '../im/types';
+import type { DingTalkInstanceConfig, DingTalkOpenClawConfig, FeishuInstanceConfig, NeteaseBeeChanConfig,NimConfig, PopoOpenClawConfig, QQInstanceConfig, WecomOpenClawConfig, WeixinOpenClawConfig } from '../im/types';
+import { getAllServerModelMetadata,resolveAllEnabledProviderConfigs, resolveAllProviderApiKeys, resolveRawApiConfig } from './claudeSettings';
+import { getCoworkOpenAICompatProxyBaseURL } from './coworkOpenAICompatProxy';
+import type { McpToolManifestEntry } from './mcpServerManager';
+import { parseChannelSessionKey } from './openclawChannelSessionSync';
+import type { OpenClawEngineManager } from './openclawEngineManager';
+import { hasBundledOpenClawExtension } from './openclawLocalExtensions';
 import { getOpenClawTokenProxyPort } from './openclawTokenProxy';
 
 export type McpBridgeConfig = {
@@ -149,7 +151,18 @@ const DISABLED_MANAGED_SKILL_NAMES = Object.entries(MANAGED_SKILL_ENTRY_OVERRIDE
  */
 const providerApiKeyEnvVar = (providerName: string): string => {
   const envName = providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  return `LOBSTER_APIKEY_${envName}`;
+  return `WESIGHT_APIKEY_${envName}`;
+};
+
+const API_KEY_PLACEHOLDER_PATTERN = /\$\{((?:WESIGHT|LOBSTER)_APIKEY_[A-Z0-9_]+)\}/g;
+const MANAGED_AGENTS_MARKER = '<!-- WeSight managed: do not edit below this line -->';
+const LEGACY_MANAGED_AGENTS_MARKERS = [
+  '<!-- LobsterAI managed: do not edit below this line -->',
+] as const;
+const ALL_MANAGED_AGENTS_MARKERS = [MANAGED_AGENTS_MARKER, ...LEGACY_MANAGED_AGENTS_MARKERS] as const;
+
+const stripManagedAgentsMarkers = (value: string): string => {
+  return ALL_MANAGED_AGENTS_MARKERS.reduce((next, marker) => next.replaceAll(marker, ''), value);
 };
 
 const MANAGED_WEB_SEARCH_POLICY_PROMPT = [
@@ -160,10 +173,10 @@ const MANAGED_WEB_SEARCH_POLICY_PROMPT = [
   'When you need live web information:',
   '- If you already have a specific URL, use `web_fetch`.',
   '- If you need search discovery, dynamic pages, or interactive browsing, use the built-in `browser` tool.',
-  '- Only use the LobsterAI `web-search` skill when local command execution is available. Native channel sessions may deny `exec`, so prefer `browser` or `web_fetch` there.',
+  '- Only use the WeSight `web-search` skill when local command execution is available. Native channel sessions may deny `exec`, so prefer `browser` or `web_fetch` there.',
   '- Exception: the `imap-smtp-email` skill must always use `exec` to run its scripts, even in native channel sessions. Do not skip it because of exec restrictions.',
   '',
-  'Do not claim you searched the web unless you actually used `browser`, `web_fetch`, or the LobsterAI `web-search` skill.',
+  'Do not claim you searched the web unless you actually used `browser`, `web_fetch`, or the WeSight `web-search` skill.',
 ].join('\n');
 
 const MANAGED_EXEC_SAFETY_PROMPT = [
@@ -233,11 +246,6 @@ const FALLBACK_OPENCLAW_AGENTS_TEMPLATE = [
   '- Do not run destructive commands without asking.',
   '- When in doubt, ask.',
   '',
-  '## Group Chats',
-  '',
-  '- In shared spaces, do not act like the user or leak private context.',
-  '- If you have nothing useful to add, stay quiet.',
-  '',
   '## Tools',
   '',
   '- Skills provide tools. Read each skill before using it.',
@@ -248,6 +256,10 @@ const FALLBACK_OPENCLAW_AGENTS_TEMPLATE = [
   '- Use `HEARTBEAT.md` for proactive background checks and reminders.',
   '- Prefer cron for exact schedules and heartbeat for periodic checks.',
 ].join('\n');
+
+const LEGACY_SHARED_CHAT_SECTION_RE = new RegExp(
+  `\\n## ${['Group', 'Chats'].join(' ')}\\n[\\s\\S]*?(?=\\n## Tools|\\n## Heartbeats|$)`,
+);
 
 const normalizeOpenClawAgentsTemplate = (content: string): string => {
   return content.replace(
@@ -271,7 +283,7 @@ const normalizeOpenClawAgentsTemplate = (content: string): string => {
       '',
       'Do not create these files unless the user asks to remember something.',
     ].join('\n'),
-  );
+  ).replace(LEGACY_SHARED_CHAT_SECTION_RE, '\n');
 };
 
 const stripTemplateFrontMatter = (content: string): string => {
@@ -444,8 +456,8 @@ type ProviderDescriptor = {
 };
 
 const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
-  [ProviderName.LobsteraiServer]: {
-    providerId: OpenClawProviderId.LobsteraiServer,
+  [ProviderName.WesightServer]: {
+    providerId: OpenClawProviderId.WesightServer,
     resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
     normalizeBaseUrl: (url) => {
       const proxyPort = getOpenClawTokenProxyPort();
@@ -555,7 +567,7 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
   },
 
   [ProviderName.Copilot]: {
-    providerId: OpenClawProviderId.LobsteraiCopilot,
+    providerId: OpenClawProviderId.WesightCopilot,
     resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
     resolveRuntimeBaseUrl: () => {
@@ -567,7 +579,7 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
 };
 
 const DEFAULT_DESCRIPTOR: ProviderDescriptor = {
-  providerId: OpenClawProviderId.Lobster,
+  providerId: OpenClawProviderId.Wesight,
   resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
   normalizeBaseUrl: stripChatCompletionsSuffix,
 };
@@ -587,7 +599,7 @@ const resolveDescriptor = (
   }
   return {
     ...DEFAULT_DESCRIPTOR,
-    providerId: providerName || OpenClawProviderId.Lobster,
+    providerId: providerName || OpenClawProviderId.Wesight,
   };
 };
 
@@ -684,6 +696,7 @@ export type OpenClawConfigSyncResult = {
   ok: boolean;
   changed: boolean;
   configPath: string;
+  skipped?: boolean;
   error?: string;
   agentsMdWarning?: string;
 };
@@ -696,6 +709,8 @@ type OpenClawConfigSyncDeps = {
   getDiscordOpenClawConfig?: () => DiscordOpenClawConfig | null;
   getDingTalkInstances: () => DingTalkInstanceConfig[];
   getFeishuInstances: () => FeishuInstanceConfig[];
+  isFeishuManagedByOpenClaw?: () => boolean;
+  shouldWriteFeishuChannel?: () => boolean;
   getQQInstances: () => QQInstanceConfig[];
   getWecomConfig: () => WecomOpenClawConfig | null;
   getPopoConfig: () => PopoOpenClawConfig | null;
@@ -716,6 +731,8 @@ export class OpenClawConfigSync {
   private readonly getDiscordOpenClawConfig?: () => DiscordOpenClawConfig | null;
   private readonly getDingTalkInstances: () => DingTalkInstanceConfig[];
   private readonly getFeishuInstances: () => FeishuInstanceConfig[];
+  private readonly isFeishuManagedByOpenClaw: () => boolean;
+  private readonly shouldWriteFeishuChannel: () => boolean;
   private readonly getQQInstances: () => QQInstanceConfig[];
   private readonly getWecomConfig: () => WecomOpenClawConfig | null;
   private readonly getPopoConfig: () => PopoOpenClawConfig | null;
@@ -735,6 +752,8 @@ export class OpenClawConfigSync {
     this.getDiscordOpenClawConfig = deps.getDiscordOpenClawConfig;
     this.getDingTalkInstances = deps.getDingTalkInstances;
     this.getFeishuInstances = deps.getFeishuInstances;
+    this.isFeishuManagedByOpenClaw = deps.isFeishuManagedByOpenClaw ?? (() => true);
+    this.shouldWriteFeishuChannel = deps.shouldWriteFeishuChannel ?? this.isFeishuManagedByOpenClaw;
     this.getQQInstances = deps.getQQInstances;
     this.getWecomConfig = deps.getWecomConfig;
     this.getPopoConfig = deps.getPopoConfig;
@@ -747,9 +766,139 @@ export class OpenClawConfigSync {
     this.getAgents = deps.getAgents;
   }
 
+  private buildFeishuChannelConfig(feishuInstances: FeishuInstanceConfig[]): Record<string, unknown> {
+    const enabledFeishuInstances = feishuInstances.filter(i => i.enabled && i.appId);
+    if (enabledFeishuInstances.length === 0) {
+      return {
+        enabled: false,
+        accounts: {},
+      };
+    }
+
+    const buildFeishuAccountConfig = (inst: (typeof enabledFeishuInstances)[0], secretEnvVar: string): Record<string, unknown> => ({
+      enabled: true,
+      name: inst.instanceName,
+      appId: inst.appId,
+      appSecret: `\${${secretEnvVar}}`,
+      domain: inst.domain || 'feishu',
+      dmPolicy: inst.dmPolicy || 'open',
+      allowFrom: (() => {
+        const ids = inst.allowFrom?.length ? [...inst.allowFrom] : [];
+        if (inst.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
+        return ids;
+      })(),
+      groupPolicy: inst.groupPolicy || 'allowlist',
+      groupAllowFrom: (() => {
+        const ids = inst.groupAllowFrom?.length ? [...inst.groupAllowFrom] : [];
+        if (inst.groupPolicy === 'open' && !ids.includes('*')) ids.push('*');
+        return ids;
+      })(),
+      groups: inst.groups && Object.keys(inst.groups).length > 0
+        ? inst.groups
+        : { '*': { requireMention: true } },
+      historyLimit: inst.historyLimit || 50,
+      replyMode: inst.replyMode || 'auto',
+      mediaMaxMb: inst.mediaMaxMb || 30,
+    });
+
+    const accounts: Record<string, unknown> = {};
+    for (let idx = 0; idx < enabledFeishuInstances.length; idx++) {
+      const inst = enabledFeishuInstances[idx];
+      const secretVar = idx === 0 ? 'LOBSTER_FEISHU_APP_SECRET' : `LOBSTER_FEISHU_APP_SECRET_${idx}`;
+      accounts[inst.instanceId.slice(0, 8)] = buildFeishuAccountConfig(inst, secretVar);
+    }
+
+    return { accounts };
+  }
+
+  private syncLocalCliFeishuChannelOnly(configPath: string): OpenClawConfigSyncResult {
+    let existingConfig: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        existingConfig = parsed as Record<string, unknown>;
+      }
+    } catch {
+      existingConfig = {};
+    }
+
+    const existingChannels = existingConfig.channels && typeof existingConfig.channels === 'object' && !Array.isArray(existingConfig.channels)
+      ? existingConfig.channels as Record<string, unknown>
+      : {};
+    const feishuInstances = this.isFeishuManagedByOpenClaw()
+      ? this.getFeishuInstances()
+      : [];
+    const nextConfig = {
+      ...existingConfig,
+      channels: {
+        ...existingChannels,
+        feishu: this.buildFeishuChannelConfig(feishuInstances),
+      },
+    };
+    const currentContent = (() => {
+      try {
+        return fs.readFileSync(configPath, 'utf8');
+      } catch {
+        return '';
+      }
+    })();
+    const nextContent = `${JSON.stringify(nextConfig, null, 2)}\n`;
+    const changed = currentContent !== nextContent;
+    if (!changed) {
+      return {
+        ok: true,
+        changed: false,
+        configPath,
+      };
+    }
+    try {
+      ensureDir(path.dirname(configPath));
+      const tmpPath = `${configPath}.tmp-${Date.now()}`;
+      fs.writeFileSync(tmpPath, nextContent, 'utf8');
+      fs.renameSync(tmpPath, configPath);
+      return {
+        ok: true,
+        changed: true,
+        configPath,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        changed: false,
+        configPath,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private collectFeishuSecretEnvVars(env: Record<string, string>): void {
+    const feishuInstances = this.isFeishuManagedByOpenClaw()
+      ? this.getFeishuInstances()
+      : [];
+    const enabledFeishu = feishuInstances.filter(i => i.enabled && i.appSecret);
+    for (let idx = 0; idx < enabledFeishu.length; idx++) {
+      if (idx === 0) {
+        env.LOBSTER_FEISHU_APP_SECRET = enabledFeishu[idx].appSecret;
+      } else {
+        env[`LOBSTER_FEISHU_APP_SECRET_${idx}`] = enabledFeishu[idx].appSecret;
+      }
+    }
+  }
+
   sync(reason: string): OpenClawConfigSyncResult {
     const configPath = this.engineManager.getConfigPath();
     const coworkConfig = this.getCoworkConfig();
+    if (coworkConfig.openclawConfigSource === ExternalAgentConfigSource.LocalCli) {
+      if (this.shouldWriteFeishuChannel()) {
+        return this.syncLocalCliFeishuChannelOnly(configPath);
+      }
+      return {
+        ok: true,
+        changed: false,
+        configPath,
+        skipped: true,
+      };
+    }
     const apiResolution = resolveRawApiConfig();
 
     if (!apiResolution.config) {
@@ -827,7 +976,7 @@ export class OpenClawConfigSync {
     }
 
     const proxyPort = getOpenClawTokenProxyPort();
-    if (proxyPort && !allProvidersMap[ProviderName.LobsteraiServer]) {
+    if (proxyPort && !allProvidersMap[ProviderName.WesightServer]) {
       const serverModels = getAllServerModelMetadata();
       const firstServerModelId = serverModels[0]?.modelId || modelId;
       const firstServerSel = buildProviderSelection({
@@ -835,22 +984,22 @@ export class OpenClawConfigSync {
         baseURL: `http://127.0.0.1:${proxyPort}/v1`,
         modelId: firstServerModelId,
         apiType: 'openai',
-        providerName: ProviderName.LobsteraiServer,
+        providerName: ProviderName.WesightServer,
         supportsImage: serverModels[0]?.supportsImage,
       });
-      const lobsteraiProviderConfig = { ...firstServerSel.providerConfig, models: [] as typeof firstServerSel.providerConfig.models };
+      const wesightProviderConfig = { ...firstServerSel.providerConfig, models: [] as typeof firstServerSel.providerConfig.models };
       for (const sm of serverModels) {
-        lobsteraiProviderConfig.models.push({
+        wesightProviderConfig.models.push({
           id: sm.modelId,
           name: sm.modelId,
           api: OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
           input: sm.supportsImage ? ['text', 'image'] : ['text'],
         });
       }
-      if (lobsteraiProviderConfig.models.length === 0) {
-        lobsteraiProviderConfig.models.push(firstServerSel.providerConfig.models[0]);
+      if (wesightProviderConfig.models.length === 0) {
+        wesightProviderConfig.models.push(firstServerSel.providerConfig.models[0]);
       }
-      allProvidersMap[OpenClawProviderId.LobsteraiServer] = lobsteraiProviderConfig;
+      allProvidersMap[OpenClawProviderId.WesightServer] = wesightProviderConfig;
     }
 
     const sandboxMode = mapExecutionModeToSandboxMode(coworkConfig.executionMode || 'local', this.isEnterprise());
@@ -873,9 +1022,9 @@ export class OpenClawConfigSync {
     // DingTalk runs through OpenClaw plugin but still needs the gateway HTTP endpoint (chatCompletions)
     const hasDingTalkOpenClaw = dingTalkInstances.some(i => i.enabled && i.clientId);
 
-    const feishuInstances = this.getFeishuInstances();
-    // Feishu now runs fully through OpenClaw plugin, handled separately below like Telegram
-    const hasFeishu = false; // Legacy in-line feishu channel disabled; OpenClaw plugin used instead
+    const feishuInstances = this.isFeishuManagedByOpenClaw()
+      ? this.getFeishuInstances()
+      : [];
 
     const qqInstances = this.getQQInstances();
 
@@ -889,7 +1038,7 @@ export class OpenClawConfigSync {
 
     const weixinConfig = this.getWeixinConfig();
 
-    const hasAnyChannel = hasDingTalkOpenClaw;
+    const hasAnyChannel = hasDingTalkOpenClaw || feishuInstances.some(i => i.enabled && i.appId);
 
     const managedConfig: Record<string, unknown> = {
       gateway: {
@@ -936,6 +1085,11 @@ export class OpenClawConfigSync {
       },
       browser: {
         enabled: true,
+      },
+      discovery: {
+        mdns: {
+          mode: 'off',
+        },
       },
       skills: {
         entries: {
@@ -1115,44 +1269,11 @@ export class OpenClawConfigSync {
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), discord: discordChannel };
     }
 
-    // Sync Feishu OpenClaw channel config (via feishu-openclaw-plugin) — multi-instance via accounts
-    const enabledFeishuInstances = feishuInstances.filter(i => i.enabled && i.appId);
-    if (enabledFeishuInstances.length > 0) {
-      const buildFeishuAccountConfig = (inst: (typeof enabledFeishuInstances)[0], secretEnvVar: string): Record<string, unknown> => ({
-        enabled: true,
-        name: inst.instanceName,
-        appId: inst.appId,
-        appSecret: `\${${secretEnvVar}}`,
-        domain: inst.domain || 'feishu',
-        dmPolicy: inst.dmPolicy || 'open',
-        allowFrom: (() => {
-          const ids = inst.allowFrom?.length ? [...inst.allowFrom] : [];
-          if (inst.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
-          return ids;
-        })(),
-        groupPolicy: inst.groupPolicy || 'allowlist',
-        groupAllowFrom: (() => {
-          const ids = inst.groupAllowFrom?.length ? [...inst.groupAllowFrom] : [];
-          if (inst.groupPolicy === 'open' && !ids.includes('*')) ids.push('*');
-          return ids;
-        })(),
-        groups: inst.groups && Object.keys(inst.groups).length > 0
-          ? inst.groups
-          : { '*': { requireMention: true } },
-        historyLimit: inst.historyLimit || 50,
-        replyMode: inst.replyMode || 'auto',
-        mediaMaxMb: inst.mediaMaxMb || 30,
-      });
-
-      // All instances go into `accounts` dict
-      const accounts: Record<string, unknown> = {};
-      for (let idx = 0; idx < enabledFeishuInstances.length; idx++) {
-        const inst = enabledFeishuInstances[idx];
-        const secretVar = idx === 0 ? 'LOBSTER_FEISHU_APP_SECRET' : `LOBSTER_FEISHU_APP_SECRET_${idx}`;
-        accounts[inst.instanceId.slice(0, 8)] = buildFeishuAccountConfig(inst, secretVar);
-      }
-
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), feishu: { accounts } };
+    if (this.shouldWriteFeishuChannel()) {
+      managedConfig.channels = {
+        ...(managedConfig.channels as Record<string, unknown> || {}),
+        feishu: this.buildFeishuChannelConfig(feishuInstances),
+      };
     }
 
     // Sync DingTalk OpenClaw channel config (via dingtalk-connector plugin) — multi-instance via accounts
@@ -1369,7 +1490,58 @@ export class OpenClawConfigSync {
       }
     }
 
-    const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;
+    let existingConfigForMerge: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        existingConfigForMerge = parsed as Record<string, unknown>;
+      }
+    } catch {
+      existingConfigForMerge = {};
+    }
+
+    const existingChannels = existingConfigForMerge.channels && typeof existingConfigForMerge.channels === 'object' && !Array.isArray(existingConfigForMerge.channels)
+      ? existingConfigForMerge.channels as Record<string, unknown>
+      : {};
+    const nextChannels = managedConfig.channels && typeof managedConfig.channels === 'object' && !Array.isArray(managedConfig.channels)
+      ? managedConfig.channels as Record<string, unknown>
+      : {};
+    managedConfig.channels = {
+      ...existingChannels,
+      ...nextChannels,
+      ...(!this.shouldWriteFeishuChannel() && Object.prototype.hasOwnProperty.call(existingChannels, 'feishu')
+        ? { feishu: existingChannels.feishu }
+        : {}),
+    };
+
+    const existingPlugins = existingConfigForMerge.plugins && typeof existingConfigForMerge.plugins === 'object' && !Array.isArray(existingConfigForMerge.plugins)
+      ? existingConfigForMerge.plugins as Record<string, unknown>
+      : {};
+    const nextPlugins = managedConfig.plugins && typeof managedConfig.plugins === 'object' && !Array.isArray(managedConfig.plugins)
+      ? managedConfig.plugins as Record<string, unknown>
+      : {};
+    const existingPluginEntries = existingPlugins.entries && typeof existingPlugins.entries === 'object' && !Array.isArray(existingPlugins.entries)
+      ? existingPlugins.entries as Record<string, unknown>
+      : {};
+    const nextPluginEntries = nextPlugins.entries && typeof nextPlugins.entries === 'object' && !Array.isArray(nextPlugins.entries)
+      ? nextPlugins.entries as Record<string, unknown>
+      : {};
+    managedConfig.plugins = {
+      ...existingPlugins,
+      ...nextPlugins,
+      entries: {
+        ...existingPluginEntries,
+        ...nextPluginEntries,
+        ...(Object.prototype.hasOwnProperty.call(existingPluginEntries, 'feishu')
+          ? { feishu: existingPluginEntries.feishu }
+          : {}),
+      },
+    };
+
+    const nextContent = `${JSON.stringify({
+      ...existingConfigForMerge,
+      ...managedConfig,
+    }, null, 2)}\n`;
     console.log('[OpenClawConfigSync] sync() managedConfig key fields:', {
       providers: (managedConfig.models as Record<string, unknown>)?.providers,
       primaryModel: ((managedConfig.agents as Record<string, unknown>)?.defaults as Record<string, unknown>)?.model,
@@ -1428,13 +1600,43 @@ export class OpenClawConfigSync {
    * placeholders for these values so that no plaintext secrets are stored on disk.
    */
   collectSecretEnvVars(): Record<string, string> {
+    if (this.getCoworkConfig().openclawConfigSource === ExternalAgentConfigSource.LocalCli) {
+      const env: Record<string, string> = {};
+      if (this.shouldWriteFeishuChannel()) {
+        this.collectFeishuSecretEnvVars(env);
+      }
+      return env;
+    }
     const env: Record<string, string> = {};
 
     // Provider API Keys — one per configured provider so switching models
     // never changes env vars and avoids gateway process restarts.
     const allApiKeys = resolveAllProviderApiKeys();
     for (const [envSuffix, apiKey] of Object.entries(allApiKeys)) {
+      env[`WESIGHT_APIKEY_${envSuffix}`] = apiKey;
       env[`LOBSTER_APIKEY_${envSuffix}`] = apiKey;
+    }
+    for (const provider of resolveAllEnabledProviderConfigs()) {
+      const envSuffix = provider.providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      const envName = `WESIGHT_APIKEY_${envSuffix}`;
+      if (!env[envName]) {
+        env[envName] = provider.apiKey?.trim() || 'sk-wesight-local';
+      }
+      const legacyEnvName = `LOBSTER_APIKEY_${envSuffix}`;
+      if (!env[legacyEnvName]) {
+        env[legacyEnvName] = env[envName];
+      }
+    }
+    try {
+      const persistedConfig = fs.readFileSync(this.engineManager.getConfigPath(), 'utf8');
+      for (const match of persistedConfig.matchAll(API_KEY_PLACEHOLDER_PATTERN)) {
+        const envName = match[1];
+        if (envName && !env[envName]) {
+          env[envName] = 'sk-wesight-local';
+        }
+      }
+    } catch {
+      // The config may not exist yet during first-run preparation.
     }
     // Legacy fallback: keep LOBSTER_PROVIDER_API_KEY set to a stable value so stale
     // openclaw.json files with the old placeholder don't crash the gateway.
@@ -1464,15 +1666,7 @@ export class OpenClawConfigSync {
     }
 
     // Feishu — per-instance secrets (must match sync() indexing: enabled instances only)
-    const feishuInstances = this.getFeishuInstances();
-    const enabledFeishu = feishuInstances.filter(i => i.enabled && i.appSecret);
-    for (let idx = 0; idx < enabledFeishu.length; idx++) {
-      if (idx === 0) {
-        env.LOBSTER_FEISHU_APP_SECRET = enabledFeishu[idx].appSecret;
-      } else {
-        env[`LOBSTER_FEISHU_APP_SECRET_${idx}`] = enabledFeishu[idx].appSecret;
-      }
-    }
+    this.collectFeishuSecretEnvVars(env);
 
     // DingTalk — per-instance secrets (must match sync() indexing: enabled instances only)
     const dingTalkInstances = this.getDingTalkInstances();
@@ -1622,7 +1816,7 @@ export class OpenClawConfigSync {
         }
       }
 
-      if (!shouldMigrateManagedModelRefs || !(/^agent:[^:]+:lobsterai:/.test(sessionKey))) {
+      if (!shouldMigrateManagedModelRefs || !(/^agent:[^:]+:(?:wesight|lobsterai):/.test(sessionKey))) {
         continue;
       }
 
@@ -1664,13 +1858,8 @@ export class OpenClawConfigSync {
   }
 
   /**
-   * Resolve the LobsterAI SKILLs installation directory for OpenClaw's
+   * Resolve the WeSight SKILLs installation directory for OpenClaw's
    * `skills.load.extraDirs` configuration.
-   *
-   * Cross-platform paths (via Electron app.getPath('userData')):
-   *   macOS:   ~/Library/Application Support/LobsterAI/SKILLs
-   *   Windows: %APPDATA%/LobsterAI/SKILLs
-   *   Linux:   ~/.config/LobsterAI/SKILLs
    */
   private resolveSkillsExtraDirs(): string[] {
     const userDataSkillsDir = path.join(app.getPath('userData'), 'SKILLs');
@@ -1688,8 +1877,8 @@ export class OpenClawConfigSync {
   }
 
   /**
-   * Build per-skill `enabled` overrides from the LobsterAI SkillManager state,
-   * so that skills disabled in the LobsterAI UI are also hidden from OpenClaw.
+   * Build per-skill `enabled` overrides from the WeSight SkillManager state,
+   * so that skills disabled in the WeSight UI are also hidden from OpenClaw.
    */
   private buildSkillEntries(): Record<string, { enabled: boolean }> {
     const skills = this.getSkillsList?.() ?? [];
@@ -1703,12 +1892,9 @@ export class OpenClawConfigSync {
   /**
    * Sync AGENTS.md to the OpenClaw workspace directory.
    * Embeds the skills routing prompt and system prompt so that OpenClaw's
-   * native channel connectors (DingTalk, Feishu, etc.) can discover and
-   * invoke LobsterAI skills.
+   * native runtime can discover and invoke WeSight skills.
    */
   private syncAgentsMd(workspaceDir: string, coworkConfig: CoworkConfig): string | undefined {
-    const MARKER = '<!-- LobsterAI managed: do not edit below this line -->';
-
     try {
       ensureDir(workspaceDir);
       const agentsMdPath = path.join(workspaceDir, 'AGENTS.md');
@@ -1716,22 +1902,25 @@ export class OpenClawConfigSync {
       // Build the managed section
       const sections: string[] = [];
 
-      // Add system prompt if configured — strip MARKER to prevent content corruption
-      const systemPrompt = (coworkConfig.systemPrompt || '').trim().replaceAll(MARKER, '');
+      // Add system prompt if configured; strip managed markers to prevent content corruption.
+      const systemPrompt = stripManagedAgentsMarkers((coworkConfig.systemPrompt || '').trim());
       if (systemPrompt) {
         sections.push(`## System Prompt\n\n${systemPrompt}`);
       }
+      const systemPromptIncludesWebSearchPolicy = /\bweb_search\b/.test(systemPrompt);
 
       // Skills are now loaded by OpenClaw natively via skills.load.extraDirs
       // in openclaw.json, so we no longer embed the skills routing prompt here.
 
-      sections.push(MANAGED_WEB_SEARCH_POLICY_PROMPT);
+      if (!systemPromptIncludesWebSearchPolicy) {
+        sections.push(MANAGED_WEB_SEARCH_POLICY_PROMPT);
+      }
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
       sections.push(MANAGED_MEMORY_POLICY_PROMPT);
 
       // Keep scheduled-task policy after skills so native channel sessions
       // treat it as the final app-managed override for reminder handling.
-      const scheduledTaskPrompt = buildScheduledTaskEnginePrompt('openclaw').replaceAll(MARKER, '');
+      const scheduledTaskPrompt = stripManagedAgentsMarkers(buildScheduledTaskEnginePrompt('openclaw'));
       if (scheduledTaskPrompt) {
         sections.push(scheduledTaskPrompt);
       }
@@ -1744,8 +1933,11 @@ export class OpenClawConfigSync {
         // File doesn't exist yet.
       }
 
-      // Extract user content (everything before the marker)
-      const markerIdx = existingContent.indexOf(MARKER);
+      // Extract user content, preserving everything before the first managed marker.
+      const markerIdx = ALL_MANAGED_AGENTS_MARKERS
+        .map((marker) => existingContent.indexOf(marker))
+        .filter((idx) => idx >= 0)
+        .sort((a, b) => a - b)[0] ?? -1;
       const userContent = markerIdx >= 0
         ? existingContent.slice(0, markerIdx).trimEnd()
         : existingContent.trimEnd();
@@ -1769,7 +1961,7 @@ export class OpenClawConfigSync {
         return;
       }
 
-      const managedContent = `${MARKER}\n\n${sections.join('\n\n')}`;
+      const managedContent = `${MANAGED_AGENTS_MARKER}\n\n${sections.join('\n\n')}`;
       const nextContent = preservedUserContent
         ? `${preservedUserContent}\n\n${managedContent}\n`
         : `${managedContent}\n`;
@@ -1848,7 +2040,10 @@ export class OpenClawConfigSync {
     // Handle per-instance bindings for multi-instance platforms
     const multiInstanceChannels: Record<string, { channel: string; getInstances: () => Array<{ instanceId: string; enabled: boolean }> }> = {
       dingtalk: { channel: 'dingtalk', getInstances: () => this.getDingTalkInstances() },
-      feishu: { channel: 'feishu', getInstances: () => this.getFeishuInstances() },
+      feishu: {
+        channel: 'feishu',
+        getInstances: () => this.isFeishuManagedByOpenClaw() ? this.getFeishuInstances() : [],
+      },
       qq: { channel: 'qqbot', getInstances: () => this.getQQInstances() },
     };
 
@@ -1997,6 +2192,11 @@ export class OpenClawConfigSync {
     const minimalConfig: Record<string, unknown> = {
       gateway: {
         mode: 'local',
+      },
+      discovery: {
+        mdns: {
+          mode: 'off',
+        },
       },
       // Don't enable plugins in minimal config — plugin loading via jiti happens
       // synchronously BEFORE the HTTP server binds, and can block gateway startup

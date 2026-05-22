@@ -1,9 +1,24 @@
 import fs from 'fs';
 import path from 'path';
 
+import {
+  CoworkAgentEngine,
+  ExternalAgentConfigSource,
+} from '../../shared/cowork/constants';
 import type { CoworkConfig } from '../coworkStore';
+import type { FeishuInstanceConfig } from '../im/types';
 import { resolveRawApiConfig } from './claudeSettings';
-import type { CoworkApiConfig } from './coworkConfigStore';
+import {
+  buildHermesEnvForWesightModel,
+  buildHermesFeishuEnvForInstances,
+  HERMES_WESIGHT_FEISHU_ENV_BLOCK,
+  HERMES_WESIGHT_MODEL_ENV_BLOCK,
+  mergeHermesConfigForWesightModel,
+  mergeHermesManagedDotenvBlock,
+  parseHermesConfigText,
+  parseHermesDotenvText,
+  serializeHermesConfig,
+} from './hermesConfig';
 import type { HermesEngineManager, HermesEngineStatus } from './hermesEngineManager';
 
 export interface HermesConfigSyncResult {
@@ -16,6 +31,7 @@ export interface HermesConfigSyncResult {
 type HermesConfigSyncDeps = {
   engineManager: HermesEngineManager;
   getCoworkConfig: () => CoworkConfig;
+  getFeishuInstances?: () => FeishuInstanceConfig[];
 };
 
 const atomicWrite = (filePath: string, content: string, mode?: number): void => {
@@ -39,113 +55,82 @@ const writeIfChanged = (filePath: string, content: string, mode?: number): boole
   return true;
 };
 
-const yamlString = (value: string): string => JSON.stringify(value);
-
-const normalizeBaseUrl = (baseURL: string): string => baseURL.trim().replace(/\/+$/, '');
-
-const buildProviderName = (config: CoworkApiConfig): 'custom' | 'anthropic' => {
-  return config.apiType === 'openai' ? 'custom' : 'anthropic';
-};
-
-const buildHermesConfigYaml = (
-  apiConfig: CoworkApiConfig | null,
-  coworkConfig: CoworkConfig,
-): string => {
-  const workspace = (coworkConfig.workingDirectory || '').trim();
-  const provider = apiConfig ? buildProviderName(apiConfig) : 'custom';
-  const model = apiConfig?.model.trim() || 'default-model';
-  const baseUrl = apiConfig ? normalizeBaseUrl(apiConfig.baseURL) : '';
-  const lines = [
-    '# Managed by WeSight. Do not edit while WeSight is running.',
-    'model:',
-    `  provider: ${yamlString(provider)}`,
-    `  default: ${yamlString(model)}`,
-    ...(baseUrl ? [`  base_url: ${yamlString(baseUrl)}`] : []),
-    'terminal:',
-    '  backend: "local"',
-    ...(workspace ? [`  cwd: ${yamlString(path.resolve(workspace))}`] : []),
-    '  timeout: 3600',
-    '  lifetime_seconds: 3600',
-    'display:',
-    '  compact: true',
-    '  tool_progress: all',
-    'compression:',
-    '  enabled: true',
-    'api_server:',
-    '  enabled: true',
-    '  host: "127.0.0.1"',
-    '',
-  ];
-  return `${lines.join('\n')}`;
-};
-
-const buildHermesEnv = (
-  apiConfig: CoworkApiConfig | null,
-): Record<string, string> => {
-  if (!apiConfig) {
-    return {
-      HERMES_SKIP_SETUP: '1',
-      HERMES_NO_SETUP: '1',
-    };
-  }
-
-  const provider = buildProviderName(apiConfig);
-  const baseUrl = normalizeBaseUrl(apiConfig.baseURL);
-  const common = {
-    HERMES_SKIP_SETUP: '1',
-    HERMES_NO_SETUP: '1',
-    HERMES_INFERENCE_PROVIDER: provider,
-    HERMES_INFERENCE_MODEL: apiConfig.model,
-    HERMES_INFERENCE_BASE_URL: baseUrl,
-    HERMES_INFERENCE_API_KEY: apiConfig.apiKey,
-    HERMES_MODEL: apiConfig.model,
-  };
-
-  if (apiConfig.apiType === 'openai') {
-    return {
-      ...common,
-      OPENAI_API_KEY: apiConfig.apiKey,
-      OPENAI_BASE_URL: baseUrl,
-    };
-  }
-
-  return {
-    ...common,
-    ANTHROPIC_API_KEY: apiConfig.apiKey,
-    ANTHROPIC_AUTH_TOKEN: apiConfig.apiKey,
-    ANTHROPIC_BASE_URL: baseUrl,
-  };
-};
-
-const buildDotenv = (env: Record<string, string>): string => {
-  return Object.entries(env)
-    .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-    .join('\n') + '\n';
-};
-
 export class HermesConfigSync {
   private readonly engineManager: HermesEngineManager;
   private readonly getCoworkConfig: () => CoworkConfig;
+  private readonly getFeishuInstances: () => FeishuInstanceConfig[];
 
   constructor(deps: HermesConfigSyncDeps) {
     this.engineManager = deps.engineManager;
     this.getCoworkConfig = deps.getCoworkConfig;
+    this.getFeishuInstances = deps.getFeishuInstances ?? (() => []);
   }
 
   sync(_reason: string): HermesConfigSyncResult {
     try {
-      const apiResolution = resolveRawApiConfig();
-      const apiConfig = apiResolution.config;
       const coworkConfig = this.getCoworkConfig();
-      const yaml = buildHermesConfigYaml(apiConfig, coworkConfig);
-      const env = buildHermesEnv(apiConfig);
+      const existingEnvText = readText(this.engineManager.getEnvPath());
+      let nextEnvText = existingEnvText;
+      let changedConfig = false;
+
+      if (coworkConfig.hermesConfigSource === ExternalAgentConfigSource.LocalCli) {
+        const feishuResult = this.buildFeishuEnv(coworkConfig);
+        if (feishuResult.error) {
+          throw new Error(feishuResult.error);
+        }
+        nextEnvText = mergeHermesManagedDotenvBlock(
+          nextEnvText,
+          HERMES_WESIGHT_FEISHU_ENV_BLOCK,
+          feishuResult.env,
+        );
+        const envChanged = writeIfChanged(this.engineManager.getEnvPath(), nextEnvText, 0o600);
+        const env = parseHermesDotenvText(nextEnvText);
+        this.engineManager.setSecretEnvVars(env);
+        return {
+          success: true,
+          changed: envChanged,
+        };
+      }
+
+      const apiResolution = resolveRawApiConfig();
+      if (!apiResolution.config) {
+        if (coworkConfig.agentEngine === CoworkAgentEngine.Hermes) {
+          throw new Error(apiResolution.error || 'No WeSight model is configured.');
+        }
+      }
+
+      if (apiResolution.config) {
+        const workspace = (coworkConfig.workingDirectory || '').trim();
+        const existingConfig = parseHermesConfigText(readText(this.engineManager.getConfigPath()));
+        const nextConfig = mergeHermesConfigForWesightModel(existingConfig, apiResolution.config, {
+          providerName: apiResolution.providerMetadata?.providerName,
+          workingDirectory: workspace ? path.resolve(workspace) : undefined,
+        });
+        const yaml = serializeHermesConfig(nextConfig);
+        changedConfig = writeIfChanged(this.engineManager.getConfigPath(), yaml);
+        nextEnvText = mergeHermesManagedDotenvBlock(
+          nextEnvText,
+          HERMES_WESIGHT_MODEL_ENV_BLOCK,
+          buildHermesEnvForWesightModel(apiResolution.config),
+        );
+      }
+
+      const feishuResult = this.buildFeishuEnv(coworkConfig);
+      if (feishuResult.error) {
+        throw new Error(feishuResult.error);
+      }
+      nextEnvText = mergeHermesManagedDotenvBlock(
+        nextEnvText,
+        HERMES_WESIGHT_FEISHU_ENV_BLOCK,
+        feishuResult.env,
+      );
+      const envChanged = writeIfChanged(this.engineManager.getEnvPath(), nextEnvText, 0o600);
+      const env = parseHermesDotenvText(nextEnvText);
       this.engineManager.setSecretEnvVars(env);
 
-      const changedConfig = writeIfChanged(this.engineManager.getConfigPath(), yaml);
-      const changedEnv = writeIfChanged(this.engineManager.getEnvPath(), buildDotenv(env), 0o600);
       return {
         success: true,
-        changed: changedConfig || changedEnv,
+        changed: changedConfig || envChanged,
       };
     } catch (error) {
       return {
@@ -155,5 +140,12 @@ export class HermesConfigSync {
         error: error instanceof Error ? error.message : 'Failed to sync Hermes Agent config.',
       };
     }
+  }
+
+  private buildFeishuEnv(coworkConfig: CoworkConfig): { env: Record<string, string>; error?: string } {
+    if (coworkConfig.agentEngine !== CoworkAgentEngine.Hermes) {
+      return { env: {} };
+    }
+    return buildHermesFeishuEnvForInstances(this.getFeishuInstances());
   }
 }

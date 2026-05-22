@@ -1,4 +1,16 @@
-import type { CoworkAgentEngine, ExternalAgentConfigSource } from '@shared/cowork/constants';
+import type {
+  CoworkAgentEngine,
+  DeepSeekTuiPermissionMode,
+  ExternalAgentConfigSource,
+  OpenCodePermissionMode,
+  QwenCodePermissionMode,
+} from '@shared/cowork/constants';
+import type {
+  RuntimeCallRecord,
+  RuntimeMetricsFilters,
+  RuntimeMetricsSummary,
+} from '@shared/cowork/runtimeMetrics';
+import type { FeishuEngineKeyType, FeishuManagementModeType } from '@shared/im/constants';
 import type { PetConfig, PetPosition } from '@shared/pet/constants';
 
 interface ApiResponse {
@@ -57,8 +69,16 @@ interface CoworkConfig {
   systemPrompt: string;
   executionMode: 'auto' | 'local' | 'sandbox';
   agentEngine: CoworkAgentEngine;
+  openclawConfigSource: ExternalAgentConfigSource;
   claudeCodeConfigSource: ExternalAgentConfigSource;
   codexConfigSource: ExternalAgentConfigSource;
+  hermesConfigSource: ExternalAgentConfigSource;
+  opencodeConfigSource: ExternalAgentConfigSource;
+  opencodePermissionMode: OpenCodePermissionMode;
+  qwenCodeConfigSource: ExternalAgentConfigSource;
+  qwenCodePermissionMode: QwenCodePermissionMode;
+  deepseekTuiConfigSource: ExternalAgentConfigSource;
+  deepseekTuiPermissionMode: DeepSeekTuiPermissionMode;
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
@@ -71,8 +91,16 @@ type CoworkConfigUpdate = Partial<Pick<
   | 'workingDirectory'
   | 'executionMode'
   | 'agentEngine'
+  | 'openclawConfigSource'
   | 'claudeCodeConfigSource'
   | 'codexConfigSource'
+  | 'hermesConfigSource'
+  | 'opencodeConfigSource'
+  | 'opencodePermissionMode'
+  | 'qwenCodeConfigSource'
+  | 'qwenCodePermissionMode'
+  | 'deepseekTuiConfigSource'
+  | 'deepseekTuiPermissionMode'
   | 'memoryEnabled'
   | 'memoryImplicitUpdateEnabled'
   | 'memoryLlmJudgeEnabled'
@@ -80,7 +108,7 @@ type CoworkConfigUpdate = Partial<Pick<
   | 'memoryUserMemoriesMaxItems'
 >>;
 
-type CliAppType = 'claude' | 'codex';
+type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'qwen' | 'deepseek_tui';
 
 interface CliAppConfigSnapshot {
   appType: CliAppType;
@@ -94,7 +122,7 @@ interface CliAppConfigSnapshot {
 }
 
 interface CliCommandStatus {
-  engine: Extract<CoworkAgentEngine, 'claude_code' | 'codex'>;
+  engine: Extract<CoworkAgentEngine, 'claude_code' | 'codex' | 'hermes' | 'opencode' | 'qwen_code' | 'deepseek_tui'>;
   appType: CliAppType;
   command: string;
   found: boolean;
@@ -261,6 +289,14 @@ interface OpenClawEngineStatus {
   progressPercent?: number;
   message?: string;
   canRetry: boolean;
+  gatewayMode?: 'attached' | 'managed' | null;
+  binaryPath?: string | null;
+  configPath?: string | null;
+  gatewayUrl?: string | null;
+  gatewayPort?: number | null;
+  currentModel?: string | null;
+  feishuConfigured?: boolean;
+  feishuRunning?: boolean;
 }
 
 type HermesEngineStatus = OpenClawEngineStatus;
@@ -522,6 +558,9 @@ interface IElectronAPI {
     getConfig: () => Promise<{ success: boolean; config?: CoworkConfig; error?: string }>;
     setConfig: (config: CoworkConfigUpdate) => Promise<{ success: boolean; error?: string }>;
     listAgentEngines: () => Promise<CoworkAgentEngineListResult>;
+    getRuntimeMetricsSummary: (filters: RuntimeMetricsFilters) => Promise<{ success: boolean; summary?: RuntimeMetricsSummary; error?: string }>;
+    listRuntimeCalls: (filters: RuntimeMetricsFilters) => Promise<{ success: boolean; total?: number; calls?: RuntimeCallRecord[]; error?: string }>;
+    getRuntimeCallDetail: (callId: string) => Promise<{ success: boolean; call?: RuntimeCallRecord | null; error?: string }>;
     installAgentCli: (appType: ExternalAgentProviderAppType) => Promise<ExternalAgentCliInstallResult>;
     listAgentProviders: (appType: ExternalAgentProviderAppType) => Promise<ExternalAgentProviderListResult>;
     saveAgentProvider: (input: ExternalAgentProviderInput) => Promise<ExternalAgentProviderListResult>;
@@ -529,6 +568,10 @@ interface IElectronAPI {
     setCurrentAgentProvider: (input: { appType: ExternalAgentProviderAppType; id: string }) => Promise<ExternalAgentProviderListResult>;
     importLiveAgentProvider: (appType: ExternalAgentProviderAppType) => Promise<ExternalAgentProviderListResult>;
     importLocalAgentConfigToModelSettings: (appType: ExternalAgentProviderAppType) => Promise<ExternalAgentModelImportResult>;
+    syncOpenClawGlobalConfig: () => Promise<{ success: boolean; changed?: boolean; status?: OpenClawEngineStatus; error?: string }>;
+    syncOpenCodeGlobalConfig: () => Promise<ExternalAgentProviderListResult>;
+    syncQwenCodeGlobalConfig: () => Promise<ExternalAgentProviderListResult>;
+    syncDeepSeekTuiGlobalConfig: () => Promise<ExternalAgentProviderListResult>;
     onAgentCliInstallProgress: (callback: (progress: ExternalAgentCliInstallProgress) => void) => () => void;
     listMemoryEntries: (input: {
       query?: string;
@@ -560,6 +603,7 @@ interface IElectronAPI {
     selectFiles: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<{ success: boolean; paths: string[] }>;
     saveInlineFile: (options: { dataBase64: string; fileName?: string; mimeType?: string; cwd?: string }) => Promise<{ success: boolean; path: string | null; error?: string }>;
     readFileAsDataUrl: (filePath: string) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
+    saveLocalImageToDirectory: (options: { sourcePath: string; fileName?: string }) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
   };
   shell: {
     openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
@@ -621,9 +665,26 @@ interface IElectronAPI {
     addQQInstance: (name: string) => Promise<{ success: boolean; instance?: QQInstanceConfig; error?: string }>;
     deleteQQInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
     setQQInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
-    addFeishuInstance: (name: string) => Promise<{ success: boolean; instance?: FeishuInstanceConfig; error?: string }>;
-    deleteFeishuInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
-    setFeishuInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
+    addFeishuInstance: (name: string, engineKey?: FeishuEngineKeyType) => Promise<{ success: boolean; instance?: FeishuInstanceConfig; error?: string }>;
+    deleteFeishuInstance: (instanceId: string, engineKey?: FeishuEngineKeyType) => Promise<{ success: boolean; error?: string }>;
+    setFeishuInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean; engineKey?: FeishuEngineKeyType }) => Promise<{ success: boolean; error?: string }>;
+    detectOpenClawLocalFeishu: () => Promise<{
+      success: boolean;
+      result?: FeishuOpenClawLocalStatus;
+      error?: string;
+    }>;
+    importOpenClawLocalFeishu: () => Promise<{
+      success: boolean;
+      instance?: FeishuInstanceConfig;
+      result?: FeishuOpenClawLocalStatus;
+      error?: string;
+    }>;
+    setFeishuManagementMode: (mode: FeishuManagementModeType) => Promise<{
+      success: boolean;
+      mode?: FeishuManagementModeType;
+      status?: FeishuOpenClawLocalStatus;
+      error?: string;
+    }>;
     addDingTalkInstance: (name: string) => Promise<{ success: boolean; instance?: DingTalkInstanceConfig; error?: string }>;
     deleteDingTalkInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
     setDingTalkInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
@@ -668,6 +729,7 @@ interface IElectronAPI {
   auth: {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;
     exchange: (code: string) => Promise<{ success: boolean; user?: any; quota?: any; error?: string }>;
+    getPendingCallback: () => Promise<string | null>;
     getUser: () => Promise<{ success: boolean; user?: any; quota?: any }>;
     getQuota: () => Promise<{ success: boolean; quota?: any }>;
     logout: () => Promise<{ success: boolean }>;
@@ -695,6 +757,7 @@ interface IElectronAPI {
   auth: {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;
     exchange: (code: string) => Promise<{ success: boolean; user?: { userId: string; phone: string; nickname: string; avatarUrl: string }; quota?: { planName: string; subscriptionStatus: string; creditsLimit: number; creditsUsed: number; creditsRemaining: number }; error?: string }>;
+    getPendingCallback: () => Promise<string | null>;
     getUser: () => Promise<{ success: boolean; user?: { userId: string; phone: string; nickname: string; avatarUrl: string }; quota?: { planName: string; subscriptionStatus: string; creditsLimit: number; creditsUsed: number; creditsRemaining: number } }>;
     getQuota: () => Promise<{ success: boolean; quota?: { planName: string; subscriptionStatus: string; creditsLimit: number; creditsUsed: number; creditsRemaining: number } }>;
     logout: () => Promise<{ success: boolean }>;
@@ -828,6 +891,10 @@ interface FeishuOpenClawConfig {
 interface FeishuInstanceConfig extends FeishuOpenClawConfig {
   instanceId: string;
   instanceName: string;
+  engineKey?: FeishuEngineKeyType;
+  importSource?: 'openclaw_local';
+  secretStatus?: 'resolved' | 'needs_input';
+  sourceChannelKey?: string;
 }
 
 interface FeishuInstanceStatus extends FeishuGatewayStatus {
@@ -836,11 +903,52 @@ interface FeishuInstanceStatus extends FeishuGatewayStatus {
 }
 
 interface FeishuMultiInstanceConfig {
+  activeEngineKey?: FeishuEngineKeyType;
+  instances: FeishuInstanceConfig[];
+  profiles?: Partial<Record<FeishuEngineKeyType, FeishuProfileConfig>>;
+  conflicts?: FeishuAppConflict[];
+}
+
+interface FeishuProfileConfig {
+  engineKey: FeishuEngineKeyType;
   instances: FeishuInstanceConfig[];
 }
 
+interface FeishuAppConflict {
+  appId: string;
+  engineKeys: FeishuEngineKeyType[];
+  instanceIds: string[];
+}
+
 interface FeishuMultiInstanceStatus {
+  activeEngineKey?: FeishuEngineKeyType;
   instances: FeishuInstanceStatus[];
+  openClawLocal?: FeishuOpenClawLocalStatus;
+  profiles?: Partial<Record<FeishuEngineKeyType, FeishuProfileStatus>>;
+  conflicts?: FeishuAppConflict[];
+}
+
+interface FeishuProfileStatus {
+  engineKey: FeishuEngineKeyType;
+  configured: boolean;
+  enabled: boolean;
+  running: boolean;
+  instanceCount: number;
+}
+
+interface FeishuOpenClawLocalStatus {
+  managementMode: FeishuManagementModeType;
+  configured: boolean;
+  running: boolean;
+  imported: boolean;
+  managed: boolean;
+  canImport: boolean;
+  configPath: string | null;
+  channelKey: string | null;
+  domain: string | null;
+  appIdPreview: string | null;
+  secretNeedsInput: boolean;
+  message: string | null;
 }
 
 interface TelegramOpenClawGroupConfig {
@@ -1004,6 +1112,7 @@ interface WeixinOpenClawConfig {
 interface IMSettings {
   systemPrompt?: string;
   skillsEnabled: boolean;
+  feishuManagementMode?: FeishuManagementModeType;
 }
 
 interface IMGatewayStatus {

@@ -38,7 +38,7 @@ export const ProviderName = {
   OpenRouter: 'openrouter',
   Ollama: 'ollama',
   Custom: 'custom',
-  LobsteraiServer: 'wesight-server',
+  WesightServer: 'wesight-server',
   Copilot: 'github-copilot',
 } as const;
 export type ProviderName = typeof ProviderName[keyof typeof ProviderName];
@@ -46,7 +46,7 @@ export type ProviderName = typeof ProviderName[keyof typeof ProviderName];
 // ─── OpenClaw Provider ID ───────────────────────────────────────────────
 // OpenClaw gateway provider identifiers. May differ from ProviderName.
 export const OpenClawProviderId = {
-  LobsteraiServer: 'wesight-server',
+  WesightServer: 'wesight-server',
   Moonshot: 'moonshot',
   Google: 'google',
   Anthropic: 'anthropic',
@@ -61,9 +61,9 @@ export const OpenClawProviderId = {
   Xiaomi: 'xiaomi',
   OpenRouter: 'openrouter',
   Copilot: 'github-copilot',
-  LobsteraiCopilot: 'wesight-copilot',
+  WesightCopilot: 'wesight-copilot',
   Ollama: 'ollama',
-  Lobster: 'wesight',
+  Wesight: 'wesight',
 } as const;
 export type OpenClawProviderId = typeof OpenClawProviderId[keyof typeof OpenClawProviderId];
 
@@ -517,7 +517,7 @@ class ProviderRegistryImpl {
   }
 
   getOpenClawProviderId(providerName: string): string {
-    return this.idIndex.get(providerName)?.openClawProviderId ?? providerName ?? OpenClawProviderId.Lobster;
+    return this.idIndex.get(providerName)?.openClawProviderId ?? providerName ?? OpenClawProviderId.Wesight;
   }
 
   /** Provider IDs filtered by region. */

@@ -2,18 +2,21 @@
  * OpenClaw Channel Session Sync
  *
  * Discovers and maps sessions created by OpenClaw channel extensions (e.g. Telegram)
- * to local Cowork sessions so that conversations are visible in the LobsterAI UI.
+ * to local Cowork sessions so that conversations are visible in the WeSight UI.
  */
 
-import type { CoworkStore } from '../coworkStore';
-import type { IMStore } from '../im/imStore';
-import type { Platform } from '../im/types';
-import { PlatformRegistry } from '../../shared/platform';
-import { t } from '../i18n';
 import { session } from '@electron/remote';
 
+import { PlatformRegistry } from '../../shared/platform';
+import type { CoworkStore } from '../coworkStore';
+import { t } from '../i18n';
+import type { IMStore } from '../im/imStore';
+import type { Platform } from '../im/types';
 
-const LOBSTERAI_SESSION_PREFIX = 'lobsterai:';
+const MANAGED_SESSION_NAMESPACE = 'wesight';
+const LEGACY_MANAGED_SESSION_NAMESPACE = 'lobsterai';
+const WESIGHT_SESSION_PREFIX = `${MANAGED_SESSION_NAMESPACE}:`;
+const LEGACY_LOBSTERAI_SESSION_PREFIX = `${LEGACY_MANAGED_SESSION_NAMESPACE}:`;
 export const DEFAULT_MANAGED_AGENT_ID = 'main';
 
 export interface ManagedSessionKey {
@@ -27,15 +30,20 @@ export function buildManagedSessionKey(
 ): string {
   const normalizedSessionId = sessionId.trim();
   const normalizedAgentId = agentId.trim() || DEFAULT_MANAGED_AGENT_ID;
-  return `agent:${normalizedAgentId}:lobsterai:${normalizedSessionId}`;
+  return `agent:${normalizedAgentId}:${MANAGED_SESSION_NAMESPACE}:${normalizedSessionId}`;
 }
 
 export function parseManagedSessionKey(sessionKey: string | undefined | null): ManagedSessionKey | null {
   const raw = (sessionKey ?? '').trim();
   if (!raw) return null;
 
-  if (raw.startsWith(LOBSTERAI_SESSION_PREFIX)) {
-    const sessionId = raw.slice(LOBSTERAI_SESSION_PREFIX.length).trim();
+  if (raw.startsWith(WESIGHT_SESSION_PREFIX)) {
+    const sessionId = raw.slice(WESIGHT_SESSION_PREFIX.length).trim();
+    return sessionId ? { agentId: null, sessionId } : null;
+  }
+
+  if (raw.startsWith(LEGACY_LOBSTERAI_SESSION_PREFIX)) {
+    const sessionId = raw.slice(LEGACY_LOBSTERAI_SESSION_PREFIX.length).trim();
     return sessionId ? { agentId: null, sessionId } : null;
   }
 
@@ -44,7 +52,11 @@ export function parseManagedSessionKey(sessionKey: string | undefined | null): M
   }
 
   const parts = raw.split(':');
-  if (parts.length < 4 || parts[0] !== 'agent' || parts[2] !== 'lobsterai') {
+  if (
+    parts.length < 4
+    || parts[0] !== 'agent'
+    || (parts[2] !== MANAGED_SESSION_NAMESPACE && parts[2] !== LEGACY_MANAGED_SESSION_NAMESPACE)
+  ) {
     return null;
   }
 
@@ -330,9 +342,9 @@ export class OpenClawChannelSessionSync {
    * Returns the local sessionId if the sessionKey belongs to a channel, or null if not.
    */
   resolveOrCreateSession(sessionKey: string): string | null {
-    // 1. Skip LobsterAI-originated sessions
+    // 1. Skip WeSight-originated sessions
     if (isManagedSessionKey(sessionKey)) {
-      console.log('[ChannelSessionSync] skipped: LobsterAI-originated session');
+      console.log('[ChannelSessionSync] skipped: WeSight-originated session');
       return null;
     }
 

@@ -377,6 +377,55 @@ const formatToolInput = (
 const hasText = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
+type GeneratedImage = {
+  path: string;
+  name?: string;
+  mimeType?: string;
+  source?: string;
+};
+
+type ExpandedGeneratedImage = {
+  image: GeneratedImage;
+  name: string;
+  src: string;
+};
+
+type ImageDownloadStatus = {
+  type: 'success' | 'error';
+  message: string;
+};
+
+const getGeneratedImages = (metadata?: CoworkMessageMetadata): GeneratedImage[] => {
+  const images = metadata?.generatedImages;
+  if (!Array.isArray(images)) return [];
+  return images.filter((image): image is GeneratedImage => (
+    Boolean(image)
+    && typeof image === 'object'
+    && typeof (image as GeneratedImage).path === 'string'
+    && (image as GeneratedImage).path.trim().length > 0
+  ));
+};
+
+const encodeLocalFileSrc = (filePath: string): string => {
+  const raw = filePath.trim();
+  const normalized = raw.replace(/\\/g, '/');
+  const fileUrl = /^file:\/\//i.test(normalized)
+    ? normalized
+    : normalized.startsWith('/')
+      ? `file://${normalized}`
+      : `file:///${normalized}`;
+  return encodeURI(fileUrl)
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29')
+    .replace(/^file:\/\//i, 'localfile://');
+};
+
+const getGeneratedImageName = (image: GeneratedImage): string => {
+  if (image.name?.trim()) return image.name.trim();
+  const segments = image.path.replace(/\\/g, '/').split('/');
+  return segments[segments.length - 1] || 'generated-image.png';
+};
+
 const getToolResultDisplay = (message: CoworkMessage): string => {
   if (hasText(message.content)) {
     return formatStructuredText(normalizeToolResultText(message.content));
@@ -1090,7 +1139,57 @@ const AssistantMessageItem: React.FC<{
   showCopyButton = false,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
+  const [expandedImage, setExpandedImage] = useState<ExpandedGeneratedImage | null>(null);
+  const [isDownloadingImage, setIsDownloadingImage] = useState(false);
+  const [imageDownloadStatus, setImageDownloadStatus] = useState<ImageDownloadStatus | null>(null);
   const displayContent = mapDisplayText ? mapDisplayText(message.content) : message.content;
+  const generatedImages = getGeneratedImages(message.metadata);
+
+  const openGeneratedImage = useCallback((image: GeneratedImage, src: string, name: string) => {
+    setImageDownloadStatus(null);
+    setExpandedImage({ image, name, src });
+  }, []);
+
+  const closeGeneratedImage = useCallback(() => {
+    if (isDownloadingImage) return;
+    setExpandedImage(null);
+    setImageDownloadStatus(null);
+  }, [isDownloadingImage]);
+
+  const handleDownloadGeneratedImage = useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (!expandedImage || isDownloadingImage) return;
+
+    setIsDownloadingImage(true);
+    setImageDownloadStatus(null);
+    try {
+      const result = await window.electron.dialog.saveLocalImageToDirectory({
+        sourcePath: expandedImage.image.path,
+        fileName: expandedImage.name,
+      });
+      if (!result.success) {
+        setImageDownloadStatus({
+          type: 'error',
+          message: result.error || i18nService.t('imageDownloadFailed'),
+        });
+        return;
+      }
+      if (result.canceled) {
+        return;
+      }
+      setImageDownloadStatus({
+        type: 'success',
+        message: i18nService.t('imageDownloadSuccess'),
+      });
+    } catch (error) {
+      setImageDownloadStatus({
+        type: 'error',
+        message: error instanceof Error ? error.message : i18nService.t('imageDownloadFailed'),
+      });
+    } finally {
+      setIsDownloadingImage(false);
+    }
+  }, [expandedImage, isDownloadingImage]);
 
   return (
     <div
@@ -1105,7 +1204,68 @@ const AssistantMessageItem: React.FC<{
           resolveLocalFilePath={resolveLocalFilePath}
           showRevealInFolderAction
         />
+        {generatedImages.length > 0 && (
+          <div className={`${displayContent.trim() ? 'mt-3' : ''} grid gap-3 sm:grid-cols-2`}>
+            {generatedImages.map((image) => {
+              const src = encodeLocalFileSrc(image.path);
+              const imageName = getGeneratedImageName(image);
+              return (
+                <button
+                  key={`${image.path}-${imageName}`}
+                  type="button"
+                  onClick={() => openGeneratedImage(image, src, imageName)}
+                  className="group overflow-hidden rounded-lg border border-border bg-surface-raised text-left transition-colors hover:border-primary/70"
+                  aria-label={imageName}
+                >
+                  <img
+                    src={src}
+                    alt={imageName}
+                    className="block max-h-[420px] w-full object-contain bg-black/[0.03] dark:bg-white/[0.04]"
+                    loading="lazy"
+                  />
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
+      {expandedImage && (
+        <div
+          className="fixed inset-0 z-50 flex cursor-pointer items-center justify-center bg-black/70"
+          onClick={closeGeneratedImage}
+        >
+          <div
+            className="flex max-h-[92vh] max-w-[92vw] cursor-default flex-col items-center gap-3"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <img
+              src={expandedImage.src}
+              alt={expandedImage.name}
+              className="max-h-[82vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
+            />
+            <div className="flex flex-col items-center gap-2">
+              <button
+                type="button"
+                onClick={handleDownloadGeneratedImage}
+                disabled={isDownloadingImage}
+                className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-lg transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-70 dark:bg-slate-900 dark:text-white dark:hover:bg-slate-800"
+              >
+                <DocumentArrowDownIcon className="h-4 w-4" />
+                {isDownloadingImage ? i18nService.t('downloadingImage') : i18nService.t('downloadImage')}
+              </button>
+              {imageDownloadStatus && (
+                <div className={`rounded-full px-3 py-1 text-xs shadow ${
+                  imageDownloadStatus.type === 'success'
+                    ? 'bg-emerald-500/90 text-white'
+                    : 'bg-red-500/90 text-white'
+                }`}>
+                  {imageDownloadStatus.message}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {showCopyButton && (
         <div className="flex items-center gap-1.5 mt-1">
           <CopyButton

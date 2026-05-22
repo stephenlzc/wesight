@@ -1,15 +1,14 @@
-import { app } from 'electron';
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { type ChildProcessWithoutNullStreams,spawn, spawnSync } from 'child_process';
 import crypto from 'crypto';
+import { app } from 'electron';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import net from 'net';
+import os from 'os';
 import path from 'path';
 
-import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
 
-const DEFAULT_HERMES_VERSION = '2026.4.30';
 const DEFAULT_GATEWAY_PORT = 18879;
 const GATEWAY_PORT_SCAN_LIMIT = 80;
 const GATEWAY_BOOT_TIMEOUT_MS = 180_000;
@@ -43,8 +42,16 @@ interface HermesEngineManagerEvents {
   status: (status: HermesEngineStatus) => void;
 }
 
+type HermesInstallProgressPhase =
+  | 'starting'
+  | 'installing'
+  | 'verifying'
+  | 'success'
+  | 'error'
+  | 'unsupported';
+
 type RuntimeMetadata = {
-  root: string | null;
+  commandPath: string | null;
   version: string | null;
   expectedPathHint: string;
 };
@@ -55,11 +62,39 @@ const ensureDir = (dirPath: string): void => {
 
 const findPath = (candidates: string[]): string | null => {
   for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) {
+    if (!candidate) continue;
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
       return candidate;
+    } catch {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     }
   }
   return null;
+};
+
+const buildHermesSearchPath = (): string => [
+  path.join(os.homedir(), '.local', 'bin'),
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  process.env.PATH ?? '',
+].join(path.delimiter);
+
+const progressPercentForInstallPhase = (phase: HermesInstallProgressPhase): number | undefined => {
+  switch (phase) {
+    case 'starting':
+      return 8;
+    case 'installing':
+      return 40;
+    case 'verifying':
+      return 85;
+    case 'success':
+      return 100;
+    default:
+      return undefined;
+  }
 };
 
 const parseJsonFile = <T>(filePath: string): T | null => {
@@ -112,7 +147,7 @@ export class HermesEngineManager extends EventEmitter {
   private readonly gatewayPortPath: string;
   private readonly gatewayLogPath: string;
 
-  private desiredVersion: string;
+  private desiredVersion: string | null;
   private status: HermesEngineStatus;
   private gatewayProcess: ChildProcessWithoutNullStreams | null = null;
   private gatewayPort: number | null = null;
@@ -129,8 +164,8 @@ export class HermesEngineManager extends EventEmitter {
     this.baseDir = path.join(userDataPath, 'hermes');
     this.logsDir = path.join(this.baseDir, 'logs');
     this.stateDir = path.join(this.baseDir, 'state');
-    this.configPath = path.join(this.stateDir, 'config.yaml');
-    this.envPath = path.join(this.stateDir, '.env');
+    this.configPath = path.join(os.homedir(), '.hermes', 'config.yaml');
+    this.envPath = path.join(os.homedir(), '.hermes', '.env');
     this.gatewayTokenPath = path.join(this.stateDir, 'gateway-token');
     this.gatewayPortPath = path.join(this.stateDir, 'gateway-port.json');
     this.gatewayLogPath = path.join(this.logsDir, 'gateway.log');
@@ -138,23 +173,20 @@ export class HermesEngineManager extends EventEmitter {
     ensureDir(this.baseDir);
     ensureDir(this.logsDir);
     ensureDir(this.stateDir);
-    ensureDir(path.join(this.stateDir, 'sessions'));
-    ensureDir(path.join(this.stateDir, 'memories'));
-    ensureDir(path.join(this.stateDir, 'skills'));
 
     const runtime = this.resolveRuntimeMetadata();
-    this.desiredVersion = runtime.version || DEFAULT_HERMES_VERSION;
-    this.status = runtime.root
+    this.desiredVersion = runtime.version;
+    this.status = runtime.commandPath
       ? {
           phase: 'ready',
           version: this.desiredVersion,
-          message: 'Hermes Agent runtime is ready.',
+          message: `Hermes Agent CLI is ready at ${runtime.commandPath}.`,
           canRetry: false,
         }
       : {
           phase: 'not_installed',
           version: null,
-          message: `Bundled Hermes Agent runtime is missing. Expected: ${runtime.expectedPathHint}`,
+          message: `Hermes Agent CLI was not found. Expected one of: ${runtime.expectedPathHint}`,
           canRetry: true,
         };
   }
@@ -197,6 +229,46 @@ export class HermesEngineManager extends EventEmitter {
     return this.secretEnvVars;
   }
 
+  reportInstallProgress(progress: {
+    phase: HermesInstallProgressPhase;
+    message: string;
+    detail?: string;
+  }): void {
+    const message = progress.detail
+      ? `${progress.message} ${progress.detail}`
+      : progress.message;
+    if (progress.phase === 'error' || progress.phase === 'unsupported') {
+      this.setStatus({
+        phase: 'error',
+        version: this.status.version,
+        message,
+        canRetry: true,
+      });
+      return;
+    }
+
+    if (progress.phase === 'success') {
+      const runtime = this.resolveRuntimeMetadata();
+      this.desiredVersion = runtime.version || this.desiredVersion;
+      this.setStatus({
+        phase: runtime.commandPath ? 'ready' : 'not_installed',
+        version: runtime.version || this.status.version,
+        progressPercent: 100,
+        message,
+        canRetry: !runtime.commandPath,
+      });
+      return;
+    }
+
+    this.setStatus({
+      phase: 'installing',
+      version: this.status.version,
+      progressPercent: progressPercentForInstallPhase(progress.phase),
+      message,
+      canRetry: false,
+    });
+  }
+
   getConnectionInfo(): HermesGatewayConnectionInfo {
     const port = this.gatewayPort ?? this.readGatewayPort();
     const token = this.readGatewayToken();
@@ -210,22 +282,22 @@ export class HermesEngineManager extends EventEmitter {
 
   async ensureReady(): Promise<HermesEngineStatus> {
     const runtime = this.resolveRuntimeMetadata();
-    if (!runtime.root) {
+    if (!runtime.commandPath) {
       this.setStatus({
         phase: 'not_installed',
         version: null,
-        message: `Bundled Hermes Agent runtime is missing. Expected: ${runtime.expectedPathHint}`,
+        message: `Hermes Agent CLI was not found. Expected one of: ${runtime.expectedPathHint}`,
         canRetry: true,
       });
       return this.getStatus();
     }
 
-    this.desiredVersion = runtime.version || DEFAULT_HERMES_VERSION;
+    this.desiredVersion = runtime.version;
     if (this.status.phase !== 'running' && this.status.phase !== 'starting') {
       this.setStatus({
         phase: 'ready',
         version: this.desiredVersion,
-        message: 'Hermes Agent runtime is ready.',
+        message: `Hermes Agent CLI is ready at ${runtime.commandPath}.`,
         canRetry: false,
       });
     }
@@ -260,12 +332,12 @@ export class HermesEngineManager extends EventEmitter {
     }
     const runtime = this.resolveRuntimeMetadata();
     this.setStatus({
-      phase: runtime.root ? 'ready' : 'not_installed',
+      phase: runtime.commandPath ? 'ready' : 'not_installed',
       version: runtime.version,
-      message: runtime.root
-        ? 'Hermes Agent runtime is ready. Gateway is stopped.'
-        : `Bundled Hermes Agent runtime is missing. Expected: ${runtime.expectedPathHint}`,
-      canRetry: !runtime.root,
+      message: runtime.commandPath
+        ? 'Hermes Agent gateway is stopped.'
+        : `Hermes Agent CLI was not found. Expected one of: ${runtime.expectedPathHint}`,
+      canRetry: !runtime.commandPath,
     });
   }
 
@@ -274,6 +346,21 @@ export class HermesEngineManager extends EventEmitter {
     const ensured = await this.ensureReady();
     if (ensured.phase !== 'ready' && ensured.phase !== 'running') {
       return ensured;
+    }
+
+    const existingPort = this.readGatewayPort();
+    const existingToken = this.readGatewayToken();
+    if (existingPort && existingToken && await this.isGatewayHealthy(existingPort, existingToken)) {
+      this.gatewayPort = existingPort;
+      this.gatewayRestartAttempt = 0;
+      this.setStatus({
+        phase: 'running',
+        version: this.desiredVersion,
+        progressPercent: 100,
+        message: `Hermes Agent gateway is running on loopback:${existingPort}.`,
+        canRetry: false,
+      });
+      return this.getStatus();
     }
 
     if (isProcessAlive(this.gatewayProcess)) {
@@ -293,22 +380,11 @@ export class HermesEngineManager extends EventEmitter {
     }
 
     const runtime = this.resolveRuntimeMetadata();
-    if (!runtime.root) {
+    if (!runtime.commandPath) {
       this.setStatus({
         phase: 'not_installed',
         version: null,
-        message: `Bundled Hermes Agent runtime is missing. Expected: ${runtime.expectedPathHint}`,
-        canRetry: true,
-      });
-      return this.getStatus();
-    }
-
-    const hermesCommand = this.resolveHermesCommand(runtime.root);
-    if (!hermesCommand) {
-      this.setStatus({
-        phase: 'error',
-        version: runtime.version,
-        message: `Hermes Agent executable is missing in runtime: ${runtime.root}.`,
+        message: `Hermes Agent CLI was not found. Expected one of: ${runtime.expectedPathHint}`,
         canRetry: true,
       });
       return this.getStatus();
@@ -318,7 +394,7 @@ export class HermesEngineManager extends EventEmitter {
     const port = await this.resolveGatewayPort();
     this.gatewayPort = port;
     this.writeGatewayPort(port);
-    this.ensureStateFiles();
+    this.ensureGatewayStateFiles();
 
     this.setStatus({
       phase: 'starting',
@@ -330,7 +406,6 @@ export class HermesEngineManager extends EventEmitter {
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      HERMES_HOME: this.stateDir,
       HERMES_CONFIG_PATH: this.configPath,
       HERMES_DOTENV_PATH: this.envPath,
       API_SERVER_ENABLED: 'true',
@@ -341,9 +416,9 @@ export class HermesEngineManager extends EventEmitter {
       HERMES_GATEWAY_PORT: String(port),
       HERMES_LOG_LEVEL: 'INFO',
       PYTHONUNBUFFERED: '1',
+      PATH: buildHermesSearchPath(),
       ...this.secretEnvVars,
     };
-    appendPythonRuntimeToEnv(env as Record<string, string | undefined>);
     if (isSystemProxyEnabled()) {
       const proxyUrl = await resolveSystemProxyUrl('https://api.openai.com');
       if (proxyUrl) {
@@ -355,10 +430,10 @@ export class HermesEngineManager extends EventEmitter {
     }
 
     const child = spawn(
-      hermesCommand.command,
-      [...hermesCommand.prefixArgs, 'gateway'],
+      runtime.commandPath,
+      ['gateway'],
       {
-        cwd: runtime.root,
+        cwd: os.homedir(),
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: process.platform === 'win32',
@@ -399,67 +474,55 @@ export class HermesEngineManager extends EventEmitter {
   }
 
   private resolveRuntimeMetadata(): RuntimeMetadata {
-    const candidateRoots = app.isPackaged
-      ? [path.join(process.resourcesPath, 'hermes-runtime')]
-      : [
-          path.join(app.getAppPath(), 'vendor', 'hermes-runtime', 'current'),
-          path.join(process.cwd(), 'vendor', 'hermes-runtime', 'current'),
-        ];
-    const runtimeRoot = findPath(candidateRoots);
-    const expectedPathHint = app.isPackaged
-      ? path.join(process.resourcesPath, 'hermes-runtime')
-      : path.join(app.getAppPath(), 'vendor', 'hermes-runtime', 'current');
+    const candidates = [
+      this.resolveCommandFromShell('hermes'),
+      path.join(os.homedir(), '.local', 'bin', 'hermes'),
+      '/opt/homebrew/bin/hermes',
+      '/usr/local/bin/hermes',
+    ].filter((value): value is string => Boolean(value));
+    const commandPath = findPath(candidates);
+    const expectedPathHint = [
+      'PATH:hermes',
+      path.join(os.homedir(), '.local', 'bin', 'hermes'),
+      '/opt/homebrew/bin/hermes',
+      '/usr/local/bin/hermes',
+    ].join(', ');
 
-    if (!runtimeRoot) {
-      return { root: null, version: null, expectedPathHint };
+    if (!commandPath) {
+      return { commandPath: null, version: null, expectedPathHint };
     }
     return {
-      root: runtimeRoot,
-      version: this.readRuntimeVersion(runtimeRoot) || DEFAULT_HERMES_VERSION,
+      commandPath,
+      version: this.readCommandVersion(commandPath),
       expectedPathHint,
     };
   }
 
-  private readRuntimeVersion(runtimeRoot: string): string | null {
-    const buildInfo = parseJsonFile<{ version?: string }>(path.join(runtimeRoot, 'runtime-build-info.json'));
-    if (typeof buildInfo?.version === 'string' && buildInfo.version.trim()) {
-      return buildInfo.version.trim();
-    }
-    try {
-      const pyproject = fs.readFileSync(path.join(runtimeRoot, 'pyproject.toml'), 'utf8');
-      const match = pyproject.match(/^\s*version\s*=\s*["']([^"']+)["']/m);
-      return match?.[1]?.trim() || null;
-    } catch {
-      return null;
-    }
+  private resolveCommandFromShell(command: string): string | null {
+    const shell = process.env.SHELL || '/bin/zsh';
+    const result = spawnSync(shell, ['-lc', `command -v ${command}`], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        PATH: buildHermesSearchPath(),
+      },
+    });
+    if (result.status !== 0) return null;
+    return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null;
   }
 
-  private resolveHermesCommand(runtimeRoot: string): { command: string; prefixArgs: string[] } | null {
-    const moduleCandidates = [
-      path.join(runtimeRoot, 'venv', 'bin', 'python'),
-      path.join(runtimeRoot, '.venv', 'bin', 'python'),
-      path.join(runtimeRoot, 'venv', 'Scripts', 'python.exe'),
-      path.join(runtimeRoot, '.venv', 'Scripts', 'python.exe'),
-    ];
-    const python = findPath(moduleCandidates);
-    if (python) {
-      return { command: python, prefixArgs: ['-m', 'hermes_cli.main'] };
-    }
-
-    const directCandidates = [
-      path.join(runtimeRoot, 'venv', 'bin', 'hermes'),
-      path.join(runtimeRoot, '.venv', 'bin', 'hermes'),
-      path.join(runtimeRoot, 'bin', 'hermes'),
-      path.join(runtimeRoot, 'hermes'),
-      path.join(runtimeRoot, 'venv', 'Scripts', 'hermes.exe'),
-      path.join(runtimeRoot, '.venv', 'Scripts', 'hermes.exe'),
-      path.join(runtimeRoot, 'Scripts', 'hermes.exe'),
-    ];
-    const direct = findPath(directCandidates);
-    if (direct) {
-      return { command: direct, prefixArgs: [] };
-    }
-    return null;
+  private readCommandVersion(commandPath: string): string | null {
+    const result = spawnSync(commandPath, ['--version'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        PATH: buildHermesSearchPath(),
+      },
+    });
+    if (result.status !== 0) return null;
+    return (result.stdout || result.stderr || '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null;
   }
 
   private ensureGatewayToken(): string {
@@ -504,11 +567,8 @@ export class HermesEngineManager extends EventEmitter {
     fs.writeFileSync(this.gatewayPortPath, `${JSON.stringify({ port }, null, 2)}\n`, 'utf8');
   }
 
-  private ensureStateFiles(): void {
+  private ensureGatewayStateFiles(): void {
     ensureDir(path.dirname(this.configPath));
-    if (!fs.existsSync(this.configPath)) {
-      fs.writeFileSync(this.configPath, 'model:\n  provider: custom\n  default: default-model\n', 'utf8');
-    }
     if (!fs.existsSync(this.envPath)) {
       fs.writeFileSync(this.envPath, '', { encoding: 'utf8', mode: 0o600 });
     }

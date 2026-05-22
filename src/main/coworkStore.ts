@@ -9,10 +9,19 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   type CoworkAgentEngine,
   CoworkAgentEngine as CoworkAgentEngineValue,
+  DeepSeekTuiPermissionMode,
+  type DeepSeekTuiPermissionMode as DeepSeekTuiPermissionModeType,
   ExternalAgentConfigSource,
   type ExternalAgentConfigSource as ExternalAgentConfigSourceType,
   isCoworkAgentEngine,
+  isDeepSeekTuiPermissionMode,
   isExternalAgentConfigSource,
+  isOpenCodePermissionMode,
+  isQwenCodePermissionMode,
+  OpenCodePermissionMode,
+  type OpenCodePermissionMode as OpenCodePermissionModeType,
+  QwenCodePermissionMode,
+  type QwenCodePermissionMode as QwenCodePermissionModeType,
 } from '../shared/cowork/constants';
 import {
   type CoworkMemoryGuardLevel,
@@ -44,6 +53,11 @@ const DEFAULT_MEMORY_LLM_JUDGE_ENABLED = false;
 const DEFAULT_MEMORY_GUARD_LEVEL: CoworkMemoryGuardLevel = 'strict';
 const DEFAULT_MEMORY_USER_MEMORIES_MAX_ITEMS = 12;
 const DEFAULT_EXTERNAL_AGENT_CONFIG_SOURCE: ExternalAgentConfigSourceType = ExternalAgentConfigSource.WesightModel;
+const OPENCLAW_GLOBAL_CONFIG_PATH = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+const HERMES_GLOBAL_CONFIG_PATH = path.join(os.homedir(), '.hermes', 'config.yaml');
+const DEFAULT_OPENCODE_PERMISSION_MODE: OpenCodePermissionModeType = OpenCodePermissionMode.Auto;
+const DEFAULT_QWEN_CODE_PERMISSION_MODE: QwenCodePermissionModeType = QwenCodePermissionMode.Auto;
+const DEFAULT_DEEPSEEK_TUI_PERMISSION_MODE: DeepSeekTuiPermissionModeType = DeepSeekTuiPermissionMode.Auto;
 const MIN_MEMORY_USER_MEMORIES_MAX_ITEMS = 1;
 const MAX_MEMORY_USER_MEMORIES_MAX_ITEMS = 60;
 const MEMORY_NEAR_DUPLICATE_MIN_SCORE = 0.82;
@@ -366,6 +380,45 @@ function normalizeExternalAgentConfigSource(value?: string | null): ExternalAgen
   return DEFAULT_EXTERNAL_AGENT_CONFIG_SOURCE;
 }
 
+function normalizeHermesConfigSource(value?: string | null): ExternalAgentConfigSourceType {
+  if (isExternalAgentConfigSource(value)) {
+    return value;
+  }
+  return fs.existsSync(HERMES_GLOBAL_CONFIG_PATH)
+    ? ExternalAgentConfigSource.LocalCli
+    : ExternalAgentConfigSource.WesightModel;
+}
+
+function normalizeOpenClawConfigSource(value?: string | null): ExternalAgentConfigSourceType {
+  if (isExternalAgentConfigSource(value)) {
+    return value;
+  }
+  return fs.existsSync(OPENCLAW_GLOBAL_CONFIG_PATH)
+    ? ExternalAgentConfigSource.LocalCli
+    : ExternalAgentConfigSource.WesightModel;
+}
+
+function normalizeOpenCodePermissionMode(value?: string | null): OpenCodePermissionModeType {
+  if (isOpenCodePermissionMode(value)) {
+    return value;
+  }
+  return DEFAULT_OPENCODE_PERMISSION_MODE;
+}
+
+function normalizeQwenCodePermissionMode(value?: string | null): QwenCodePermissionModeType {
+  if (isQwenCodePermissionMode(value)) {
+    return value;
+  }
+  return DEFAULT_QWEN_CODE_PERMISSION_MODE;
+}
+
+function normalizeDeepSeekTuiPermissionMode(value?: string | null): DeepSeekTuiPermissionModeType {
+  if (isDeepSeekTuiPermissionMode(value)) {
+    return value;
+  }
+  return DEFAULT_DEEPSEEK_TUI_PERMISSION_MODE;
+}
+
 export interface CoworkMessageMetadata {
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -376,6 +429,7 @@ export interface CoworkMessageMetadata {
   isStreaming?: boolean;
   isFinal?: boolean;
   skillIds?: string[];
+  generatedImages?: Array<{ path: string; name?: string; mimeType?: string; source?: string }>;
   [key: string]: unknown;
 }
 
@@ -411,6 +465,28 @@ export interface CoworkSessionSummary {
   agentId: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface CoworkImportedSessionInput {
+  id: string;
+  title: string;
+  claudeSessionId: string | null;
+  status: CoworkSessionStatus;
+  cwd: string;
+  systemPrompt: string;
+  executionMode: CoworkExecutionMode;
+  activeSkillIds: string[];
+  agentId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CoworkImportedMessageInput {
+  id: string;
+  type: CoworkMessageType;
+  content: string;
+  metadata?: CoworkMessageMetadata;
+  timestamp: number;
 }
 
 export type CoworkUserMemoryStatus = 'created' | 'stale' | 'deleted';
@@ -465,8 +541,16 @@ export interface CoworkConfig {
   systemPrompt: string;
   executionMode: CoworkExecutionMode;
   agentEngine: CoworkAgentEngine;
+  openclawConfigSource: ExternalAgentConfigSourceType;
   claudeCodeConfigSource: ExternalAgentConfigSourceType;
   codexConfigSource: ExternalAgentConfigSourceType;
+  hermesConfigSource: ExternalAgentConfigSourceType;
+  opencodeConfigSource: ExternalAgentConfigSourceType;
+  opencodePermissionMode: OpenCodePermissionModeType;
+  qwenCodeConfigSource: ExternalAgentConfigSourceType;
+  qwenCodePermissionMode: QwenCodePermissionModeType;
+  deepseekTuiConfigSource: ExternalAgentConfigSourceType;
+  deepseekTuiPermissionMode: DeepSeekTuiPermissionModeType;
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
@@ -479,8 +563,16 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'workingDirectory'
   | 'executionMode'
   | 'agentEngine'
+  | 'openclawConfigSource'
   | 'claudeCodeConfigSource'
   | 'codexConfigSource'
+  | 'hermesConfigSource'
+  | 'opencodeConfigSource'
+  | 'opencodePermissionMode'
+  | 'qwenCodeConfigSource'
+  | 'qwenCodePermissionMode'
+  | 'deepseekTuiConfigSource'
+  | 'deepseekTuiPermissionMode'
   | 'memoryEnabled'
   | 'memoryImplicitUpdateEnabled'
   | 'memoryLlmJudgeEnabled'
@@ -1020,6 +1112,170 @@ export class CoworkStore {
     })();
   }
 
+  upsertImportedSession(input: CoworkImportedSessionInput): boolean {
+    interface ImportedSessionRow {
+      title: string;
+      claude_session_id: string | null;
+      status: string;
+      cwd: string;
+      system_prompt: string;
+      execution_mode: string | null;
+      active_skill_ids: string | null;
+      agent_id: string | null;
+      created_at: number;
+      updated_at: number;
+    }
+
+    const activeSkillIds = JSON.stringify(input.activeSkillIds);
+    const existing = this.getOne<ImportedSessionRow>(
+      `
+      SELECT title, claude_session_id, status, cwd, system_prompt, execution_mode, active_skill_ids, agent_id, created_at, updated_at
+      FROM cowork_sessions
+      WHERE id = ?
+    `,
+      [input.id],
+    );
+
+    if (!existing) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_sessions (id, title, claude_session_id, status, cwd, system_prompt, execution_mode, active_skill_ids, agent_id, pinned, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      `,
+        )
+        .run(
+          input.id,
+          input.title,
+          input.claudeSessionId,
+          input.status,
+          input.cwd,
+          input.systemPrompt,
+          input.executionMode,
+          activeSkillIds,
+          input.agentId,
+          input.createdAt,
+          input.updatedAt,
+        );
+      return true;
+    }
+
+    const changed = existing.title !== input.title
+      || existing.claude_session_id !== input.claudeSessionId
+      || existing.status !== input.status
+      || existing.cwd !== input.cwd
+      || existing.system_prompt !== input.systemPrompt
+      || (existing.execution_mode || 'local') !== input.executionMode
+      || (existing.active_skill_ids || '[]') !== activeSkillIds
+      || (existing.agent_id || 'main') !== input.agentId
+      || existing.created_at !== input.createdAt
+      || existing.updated_at !== input.updatedAt;
+
+    if (!changed) return false;
+
+    this.db
+      .prepare(
+        `
+      UPDATE cowork_sessions
+      SET title = ?,
+          claude_session_id = ?,
+          status = ?,
+          cwd = ?,
+          system_prompt = ?,
+          execution_mode = ?,
+          active_skill_ids = ?,
+          agent_id = ?,
+          created_at = ?,
+          updated_at = ?
+      WHERE id = ?
+    `,
+      )
+      .run(
+        input.title,
+        input.claudeSessionId,
+        input.status,
+        input.cwd,
+        input.systemPrompt,
+        input.executionMode,
+        activeSkillIds,
+        input.agentId,
+        input.createdAt,
+        input.updatedAt,
+        input.id,
+      );
+    return true;
+  }
+
+  replaceImportedSessionMessages(sessionId: string, messages: CoworkImportedMessageInput[]): boolean {
+    const normalize = (message: CoworkImportedMessageInput | CoworkMessageRow) => {
+      if ('created_at' in message) {
+        return {
+          id: message.id,
+          type: message.type,
+          content: message.content,
+          metadata: message.metadata || null,
+          timestamp: message.created_at,
+        };
+      }
+      return {
+        id: message.id,
+        type: message.type,
+        content: message.content,
+        metadata: message.metadata ? JSON.stringify(message.metadata) : null,
+        timestamp: message.timestamp,
+      };
+    };
+
+    const existing = this.getAll<CoworkMessageRow>(
+      `
+      SELECT id, type, content, metadata, created_at, sequence
+      FROM cowork_messages
+      WHERE session_id = ?
+      ORDER BY COALESCE(sequence, created_at) ASC, created_at ASC, ROWID ASC
+    `,
+      [sessionId],
+    );
+
+    const before = existing.map(normalize);
+    const after = messages.map(normalize);
+    if (JSON.stringify(before) === JSON.stringify(after)) {
+      return false;
+    }
+
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM cowork_messages WHERE session_id = ?').run(sessionId);
+
+      let sequence = 1;
+      for (const message of messages) {
+        this.db
+          .prepare(
+            `
+          INSERT INTO cowork_messages (id, session_id, type, content, metadata, created_at, sequence)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `,
+          )
+          .run(
+            message.id,
+            sessionId,
+            message.type,
+            message.content,
+            message.metadata ? JSON.stringify(message.metadata) : null,
+            message.timestamp,
+            sequence++,
+          );
+      }
+
+      const latestTimestamp = messages.reduce((max, message) => Math.max(max, message.timestamp), 0);
+      if (latestTimestamp > 0) {
+        this.db
+          .prepare('UPDATE cowork_sessions SET updated_at = ? WHERE id = ?')
+          .run(latestTimestamp, sessionId);
+      }
+    })();
+
+    return true;
+  }
+
   updateMessage(
     sessionId: string,
     messageId: string,
@@ -1058,8 +1314,16 @@ export class CoworkStore {
       'workingDirectory',
       'executionMode',
       'agentEngine',
+      'openclawConfigSource',
       'claudeCodeConfigSource',
       'codexConfigSource',
+      'hermesConfigSource',
+      'opencodeConfigSource',
+      'opencodePermissionMode',
+      'qwenCodeConfigSource',
+      'qwenCodePermissionMode',
+      'deepseekTuiConfigSource',
+      'deepseekTuiPermissionMode',
       'memoryEnabled',
       'memoryImplicitUpdateEnabled',
       'memoryLlmJudgeEnabled',
@@ -1077,8 +1341,16 @@ export class CoworkStore {
       systemPrompt: getDefaultSystemPrompt(),
       executionMode: 'local' as CoworkExecutionMode,
       agentEngine: normalizeCoworkAgentEngineValue(cfg.get('agentEngine')),
+      openclawConfigSource: normalizeOpenClawConfigSource(cfg.get('openclawConfigSource')),
       claudeCodeConfigSource: normalizeExternalAgentConfigSource(cfg.get('claudeCodeConfigSource')),
       codexConfigSource: normalizeExternalAgentConfigSource(cfg.get('codexConfigSource')),
+      hermesConfigSource: normalizeHermesConfigSource(cfg.get('hermesConfigSource')),
+      opencodeConfigSource: normalizeExternalAgentConfigSource(cfg.get('opencodeConfigSource')),
+      opencodePermissionMode: normalizeOpenCodePermissionMode(cfg.get('opencodePermissionMode')),
+      qwenCodeConfigSource: normalizeExternalAgentConfigSource(cfg.get('qwenCodeConfigSource')),
+      qwenCodePermissionMode: normalizeQwenCodePermissionMode(cfg.get('qwenCodePermissionMode')),
+      deepseekTuiConfigSource: normalizeExternalAgentConfigSource(cfg.get('deepseekTuiConfigSource')),
+      deepseekTuiPermissionMode: normalizeDeepSeekTuiPermissionMode(cfg.get('deepseekTuiPermissionMode')),
       memoryEnabled: parseBooleanConfig(cfg.get('memoryEnabled'), DEFAULT_MEMORY_ENABLED),
       memoryImplicitUpdateEnabled: parseBooleanConfig(
         cfg.get('memoryImplicitUpdateEnabled'),
@@ -1141,6 +1413,20 @@ export class CoworkStore {
         .run(normalizedAgentEngine, now);
     }
 
+    if (config.openclawConfigSource !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('openclawConfigSource', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeExternalAgentConfigSource(config.openclawConfigSource), now);
+    }
+
     if (config.claudeCodeConfigSource !== undefined) {
       this.db
         .prepare(
@@ -1167,6 +1453,104 @@ export class CoworkStore {
       `,
         )
         .run(normalizeExternalAgentConfigSource(config.codexConfigSource), now);
+    }
+
+    if (config.hermesConfigSource !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('hermesConfigSource', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeExternalAgentConfigSource(config.hermesConfigSource), now);
+    }
+
+    if (config.opencodeConfigSource !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('opencodeConfigSource', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeExternalAgentConfigSource(config.opencodeConfigSource), now);
+    }
+
+    if (config.opencodePermissionMode !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('opencodePermissionMode', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeOpenCodePermissionMode(config.opencodePermissionMode), now);
+    }
+
+    if (config.qwenCodeConfigSource !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('qwenCodeConfigSource', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeExternalAgentConfigSource(config.qwenCodeConfigSource), now);
+    }
+
+    if (config.qwenCodePermissionMode !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('qwenCodePermissionMode', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeQwenCodePermissionMode(config.qwenCodePermissionMode), now);
+    }
+
+    if (config.deepseekTuiConfigSource !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('deepseekTuiConfigSource', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeExternalAgentConfigSource(config.deepseekTuiConfigSource), now);
+    }
+
+    if (config.deepseekTuiPermissionMode !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('deepseekTuiPermissionMode', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeDeepSeekTuiPermissionMode(config.deepseekTuiPermissionMode), now);
     }
 
     if (config.memoryEnabled !== undefined) {

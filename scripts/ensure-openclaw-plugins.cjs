@@ -13,6 +13,8 @@
  * Environment variables:
  *   OPENCLAW_SKIP_PLUGINS          – Set to "1" to skip this script entirely
  *   OPENCLAW_FORCE_PLUGIN_INSTALL  – Set to "1" to force re-download all plugins
+ *   OPENCLAW_PLUGIN_NPM_TIMEOUT_MS – Timeout for required plugin npm operations
+ *   OPENCLAW_OPTIONAL_PLUGIN_NPM_TIMEOUT_MS – Timeout for optional plugin npm operations
  */
 
 const { spawnSync } = require('child_process');
@@ -25,6 +27,8 @@ const path = require('path');
 // ---------------------------------------------------------------------------
 
 const rootDir = path.resolve(__dirname, '..');
+const DEFAULT_PLUGIN_NPM_TIMEOUT_MS = Number(process.env.OPENCLAW_PLUGIN_NPM_TIMEOUT_MS || 5 * 60 * 1000);
+const OPTIONAL_PLUGIN_NPM_TIMEOUT_MS = Number(process.env.OPENCLAW_OPTIONAL_PLUGIN_NPM_TIMEOUT_MS || 45 * 1000);
 
 function log(msg) {
   console.log(`[openclaw-plugins] ${msg}`);
@@ -43,7 +47,7 @@ function runNpm(args, opts = {}) {
     stdio: opts.stdio || ['ignore', 'pipe', 'pipe'],
     cwd: opts.cwd,
     shell: isWin,
-    timeout: opts.timeout || 5 * 60 * 1000,
+    timeout: opts.timeout || DEFAULT_PLUGIN_NPM_TIMEOUT_MS,
     windowsVerbatimArguments: isWin,
   });
 
@@ -152,9 +156,12 @@ if (!fs.existsSync(runtimeExtensionsDir)) {
 ensureDir(pluginCacheBase);
 
 log(`Processing ${plugins.length} plugin(s)...`);
+let installedCount = 0;
+let skippedCount = 0;
 
 for (const plugin of plugins) {
   const { id, npm: npmSpec, version, registry, optional } = plugin;
+  const npmTimeout = optional ? OPTIONAL_PLUGIN_NPM_TIMEOUT_MS : DEFAULT_PLUGIN_NPM_TIMEOUT_MS;
   const cacheDir = path.join(pluginCacheBase, id);
   const installInfoPath = path.join(cacheDir, 'plugin-install-info.json');
   const targetDir = path.join(runtimeExtensionsDir, id);
@@ -204,7 +211,7 @@ for (const plugin of plugins) {
       }
       runNpm(
         installArgs,
-        { cwd: tmpDir, stdio: 'inherit' }
+        { cwd: tmpDir, stdio: 'inherit', timeout: npmTimeout }
       );
 
       // Step 2: Locate the installed plugin in node_modules
@@ -228,7 +235,7 @@ for (const plugin of plugins) {
       if (hasDeps) {
         runNpm(
           ['install', '--omit=dev', '--no-audit', '--no-fund', '--legacy-peer-deps'],
-          { cwd: pluginSrcDir, stdio: 'inherit' }
+          { cwd: pluginSrcDir, stdio: 'inherit', timeout: npmTimeout }
         );
       }
 
@@ -260,6 +267,7 @@ for (const plugin of plugins) {
       if (optional) {
         log(`WARNING: Failed to install optional plugin ${id}: ${err.message}`);
         log(`Skipping ${id} — it may not be available from this network.`);
+        skippedCount += 1;
         continue;
       }
       die(`Failed to install plugin ${id}: ${err.message}`);
@@ -277,6 +285,7 @@ for (const plugin of plugins) {
   if (!fs.existsSync(cacheDir)) {
     if (optional) {
       log(`Skipping ${id} — cache not available (optional plugin).`);
+      skippedCount += 1;
       continue;
     }
     die(`Plugin cache directory missing after install: ${cacheDir}`);
@@ -295,9 +304,10 @@ for (const plugin of plugins) {
   }
 
   log(`Installed ${id} -> ${path.relative(rootDir, targetDir)}`);
+  installedCount += 1;
 }
 
-log(`All ${plugins.length} plugin(s) installed successfully.`);
+log(`Plugin install completed. Installed: ${installedCount}, skipped optional: ${skippedCount}.`);
 
 // --- Post-install patch: openclaw-weixin gatewayMethods ---
 // The openclaw-weixin plugin defines loginWithQrStart/loginWithQrWait in its

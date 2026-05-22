@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
 import { CoworkIpcChannel } from '../shared/cowork/constants';
+import { DialogIpcChannel } from '../shared/dialog/constants';
+import { type FeishuEngineKeyType, type FeishuManagementModeType,ImIpcChannel } from '../shared/im/constants';
 import { DesktopPetIpcChannel, type PetConfig, type PetPosition } from '../shared/pet/constants';
 import type { Platform } from '../shared/platform';
 
@@ -251,9 +253,17 @@ contextBridge.exposeInMainWorld('electron', {
     setConfig: (config: {
       workingDirectory?: string;
       executionMode?: 'auto' | 'local' | 'sandbox';
-      agentEngine?: 'openclaw' | 'hermes' | 'yd_cowork' | 'claude_code' | 'codex';
+      agentEngine?: 'openclaw' | 'hermes' | 'yd_cowork' | 'claude_code' | 'codex' | 'opencode' | 'qwen_code' | 'deepseek_tui';
+      openclawConfigSource?: 'wesight_model' | 'local_cli';
       claudeCodeConfigSource?: 'wesight_model' | 'local_cli';
       codexConfigSource?: 'wesight_model' | 'local_cli';
+      hermesConfigSource?: 'wesight_model' | 'local_cli';
+      opencodeConfigSource?: 'wesight_model' | 'local_cli';
+      opencodePermissionMode?: 'auto' | 'conservative';
+      qwenCodeConfigSource?: 'wesight_model' | 'local_cli';
+      qwenCodePermissionMode?: 'auto' | 'conservative';
+      deepseekTuiConfigSource?: 'wesight_model' | 'local_cli';
+      deepseekTuiPermissionMode?: 'auto' | 'conservative';
       memoryEnabled?: boolean;
       memoryImplicitUpdateEnabled?: boolean;
       memoryLlmJudgeEnabled?: boolean;
@@ -263,12 +273,18 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:config:set', config),
     listAgentEngines: () =>
       ipcRenderer.invoke('cowork:agentEngines:list'),
-    installAgentCli: (appType: 'claude' | 'codex') =>
+    getRuntimeMetricsSummary: (filters: any) =>
+      ipcRenderer.invoke(CoworkIpcChannel.RuntimeMetricsSummary, filters),
+    listRuntimeCalls: (filters: any) =>
+      ipcRenderer.invoke(CoworkIpcChannel.RuntimeMetricsCalls, filters),
+    getRuntimeCallDetail: (callId: string) =>
+      ipcRenderer.invoke(CoworkIpcChannel.RuntimeMetricsDetail, { callId }),
+    installAgentCli: (appType: 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'qwen' | 'deepseek_tui') =>
       ipcRenderer.invoke(CoworkIpcChannel.AgentCliInstall, { appType }),
-    listAgentProviders: (appType: 'claude' | 'codex') =>
+    listAgentProviders: (appType: 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'qwen' | 'deepseek_tui') =>
       ipcRenderer.invoke(CoworkIpcChannel.AgentProvidersList, { appType }),
     saveAgentProvider: (input: {
-      appType: 'claude' | 'codex';
+      appType: 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'qwen' | 'deepseek_tui';
       id?: string;
       name: string;
       apiKey?: string;
@@ -279,14 +295,22 @@ contextBridge.exposeInMainWorld('electron', {
       setCurrent?: boolean;
     }) =>
       ipcRenderer.invoke(CoworkIpcChannel.AgentProvidersSave, input),
-    deleteAgentProvider: (input: { appType: 'claude' | 'codex'; id: string }) =>
+    deleteAgentProvider: (input: { appType: 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'qwen' | 'deepseek_tui'; id: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.AgentProvidersDelete, input),
-    setCurrentAgentProvider: (input: { appType: 'claude' | 'codex'; id: string }) =>
+    setCurrentAgentProvider: (input: { appType: 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'qwen' | 'deepseek_tui'; id: string }) =>
       ipcRenderer.invoke(CoworkIpcChannel.AgentProvidersSetCurrent, input),
-    importLiveAgentProvider: (appType: 'claude' | 'codex') =>
+    importLiveAgentProvider: (appType: 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'qwen' | 'deepseek_tui') =>
       ipcRenderer.invoke(CoworkIpcChannel.AgentProvidersImportLive, { appType }),
-    importLocalAgentConfigToModelSettings: (appType: 'claude' | 'codex') =>
+    importLocalAgentConfigToModelSettings: (appType: 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'qwen' | 'deepseek_tui') =>
       ipcRenderer.invoke(CoworkIpcChannel.AgentConfigImportLocalToModelSettings, { appType }),
+    syncOpenClawGlobalConfig: () =>
+      ipcRenderer.invoke(CoworkIpcChannel.AgentConfigSyncOpenClawGlobal),
+    syncOpenCodeGlobalConfig: () =>
+      ipcRenderer.invoke(CoworkIpcChannel.AgentConfigSyncOpenCodeGlobal),
+    syncQwenCodeGlobalConfig: () =>
+      ipcRenderer.invoke(CoworkIpcChannel.AgentConfigSyncQwenCodeGlobal),
+    syncDeepSeekTuiGlobalConfig: () =>
+      ipcRenderer.invoke(CoworkIpcChannel.AgentConfigSyncDeepSeekTuiGlobal),
     onAgentCliInstallProgress: (callback: (progress: any) => void) => {
       const handler = (_event: any, progress: any) => callback(progress);
       ipcRenderer.on(CoworkIpcChannel.AgentCliInstallProgress, handler);
@@ -369,6 +393,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('dialog:saveInlineFile', options),
     readFileAsDataUrl: (filePath: string) =>
       ipcRenderer.invoke('dialog:readFileAsDataUrl', filePath),
+    saveLocalImageToDirectory: (options: { sourcePath: string; fileName?: string }) =>
+      ipcRenderer.invoke(DialogIpcChannel.SaveLocalImageToDirectory, options),
   },
   shell: {
     openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
@@ -445,10 +471,14 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('im:qq:instance:config:set', instanceId, config, options),
 
     // Feishu Multi-Instance
-    addFeishuInstance: (name: string) => ipcRenderer.invoke('im:feishu:instance:add', name),
-    deleteFeishuInstance: (instanceId: string) => ipcRenderer.invoke('im:feishu:instance:delete', instanceId),
-    setFeishuInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean }) =>
+    addFeishuInstance: (name: string, engineKey?: FeishuEngineKeyType) => ipcRenderer.invoke('im:feishu:instance:add', name, engineKey),
+    deleteFeishuInstance: (instanceId: string, engineKey?: FeishuEngineKeyType) => ipcRenderer.invoke('im:feishu:instance:delete', instanceId, engineKey),
+    setFeishuInstanceConfig: (instanceId: string, config: any, options?: { syncGateway?: boolean; engineKey?: FeishuEngineKeyType }) =>
       ipcRenderer.invoke('im:feishu:instance:config:set', instanceId, config, options),
+    detectOpenClawLocalFeishu: () => ipcRenderer.invoke(ImIpcChannel.FeishuDetectOpenClawLocal),
+    importOpenClawLocalFeishu: () => ipcRenderer.invoke(ImIpcChannel.FeishuImportOpenClawLocal),
+    setFeishuManagementMode: (mode: FeishuManagementModeType) =>
+      ipcRenderer.invoke(ImIpcChannel.FeishuSetManagementMode, mode),
 
     // Event listeners
     onStatusChange: (callback: (status: any) => void) => {
@@ -523,6 +553,7 @@ contextBridge.exposeInMainWorld('electron', {
   auth: {
     login: (loginUrl?: string) => ipcRenderer.invoke('auth:login', { loginUrl }),
     exchange: (code: string) => ipcRenderer.invoke('auth:exchange', { code }),
+    getPendingCallback: () => ipcRenderer.invoke('auth:getPendingCallback'),
     getUser: () => ipcRenderer.invoke('auth:getUser'),
     getQuota: () => ipcRenderer.invoke('auth:getQuota'),
     logout: () => ipcRenderer.invoke('auth:logout'),

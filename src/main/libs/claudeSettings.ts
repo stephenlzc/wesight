@@ -1,15 +1,16 @@
-import { join } from 'path';
 import { app } from 'electron';
+import { join } from 'path';
+
+import { ProviderName, resolveCodingPlanBaseUrl } from '../../shared/providers';
 import type { SqliteStore } from '../sqliteStore';
 import type { CoworkApiConfig } from './coworkConfigStore';
+import { type AnthropicApiFormat,normalizeProviderApiFormat } from './coworkFormatTransform';
 import {
   configureCoworkOpenAICompatProxy,
-  type OpenAICompatProxyTarget,
   getCoworkOpenAICompatProxyBaseURL,
   getCoworkOpenAICompatProxyStatus,
+  type OpenAICompatProxyTarget,
 } from './coworkOpenAICompatProxy';
-import { normalizeProviderApiFormat, type AnthropicApiFormat } from './coworkFormatTransform';
-import { ProviderName, resolveCodingPlanBaseUrl } from '../../shared/providers';
 
 type ProviderModel = {
   id: string;
@@ -136,7 +137,7 @@ function providerRequiresApiKey(providerName: string): boolean {
   return providerName !== ProviderName.Ollama;
 }
 
-function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
+function tryWesightServerFallback(modelId?: string): MatchedProvider | null {
   const tokens = authTokensGetter?.();
   const serverBaseUrl = serverBaseUrlGetter?.();
   if (!tokens?.accessToken || !serverBaseUrl) return null;
@@ -144,9 +145,9 @@ function tryLobsteraiServerFallback(modelId?: string): MatchedProvider | null {
   if (!effectiveModelId) return null;
   const baseURL = `${serverBaseUrl}/api/proxy/v1`;
   const cachedMeta = serverModelMetadataCache.get(effectiveModelId);
-  console.log('[ClaudeSettings] lobsterai-server fallback activated:', { baseURL, modelId: effectiveModelId, supportsImage: cachedMeta?.supportsImage });
+  console.log('[ClaudeSettings] wesight-server fallback activated:', { baseURL, modelId: effectiveModelId, supportsImage: cachedMeta?.supportsImage });
   return {
-    providerName: ProviderName.LobsteraiServer,
+    providerName: ProviderName.WesightServer,
     providerConfig: { enabled: true, apiKey: tokens.accessToken, baseUrl: baseURL, apiFormat: 'openai', models: [{ id: effectiveModelId, supportsImage: cachedMeta?.supportsImage }] },
     modelId: effectiveModelId,
     apiFormat: 'openai',
@@ -185,7 +186,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   if (!modelId) {
     const fallback = resolveFallbackModel();
     if (!fallback) {
-      const serverFallback = tryLobsteraiServerFallback(configuredModelId);
+      const serverFallback = tryWesightServerFallback(configuredModelId);
       if (serverFallback) return { matched: serverFallback };
       return { matched: null, error: 'No available model configured in enabled providers.' };
     }
@@ -195,9 +196,9 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   let providerEntry: [string, ProviderConfig] | undefined;
   const preferredProviderName = appConfig.model?.defaultModelProvider?.trim();
 
-  // Handle lobsterai-server provider: dynamically construct from auth tokens
-  if (preferredProviderName === ProviderName.LobsteraiServer) {
-    const serverMatch = tryLobsteraiServerFallback(modelId);
+  // Handle wesight-server provider: dynamically construct from auth tokens
+  if (preferredProviderName === ProviderName.WesightServer) {
+    const serverMatch = tryWesightServerFallback(modelId);
     if (serverMatch) {
       return { matched: serverMatch };
     }
@@ -228,7 +229,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
       modelId = fallback.modelId;
       providerEntry = [fallback.providerName, fallback.providerConfig];
     } else {
-      const serverFallback = tryLobsteraiServerFallback(modelId);
+      const serverFallback = tryWesightServerFallback(modelId);
       if (serverFallback) return { matched: serverFallback };
       return { matched: null, error: `No enabled provider found for model: ${modelId}` };
     }
@@ -245,7 +246,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   }
 
   if (!baseURL) {
-    const serverFallback = tryLobsteraiServerFallback(modelId);
+    const serverFallback = tryWesightServerFallback(modelId);
     if (serverFallback) return { matched: serverFallback };
     return { matched: null, error: `Provider ${providerName} is missing base URL.` };
   }
@@ -254,7 +255,7 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
   const hasApiKey = providerConfig.apiKey?.trim();
   const hasOAuthCreds = providerName === 'qwen' && (providerConfig as any).oauthCredentials;
   if (apiFormat === 'anthropic' && providerRequiresApiKey(providerName) && !providerConfig.apiKey?.trim() && !hasApiKey && !hasOAuthCreds) {
-    const serverFallback = tryLobsteraiServerFallback(modelId);
+    const serverFallback = tryWesightServerFallback(modelId);
     if (serverFallback) return { matched: serverFallback };
     return { matched: null, error: `Provider ${providerName} requires API key for Anthropic-compatible mode.` };
   }
@@ -320,7 +321,7 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
   // placeholder so downstream components (OpenClaw gateway, compat proxy)
   // don't reject the request with "No API key found for provider".
   const effectiveApiKey = resolvedApiKey
-    || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
+    || (!providerRequiresApiKey(matched.providerName) ? 'sk-wesight-local' : '');
 
   if (matched.apiFormat === 'anthropic') {
     return {
@@ -363,7 +364,7 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
 
   return {
     config: {
-      apiKey: resolvedApiKey || 'lobsterai-openai-compat',
+      apiKey: resolvedApiKey || 'wesight-openai-compat',
       baseURL: proxyBaseURL,
       model: matched.modelId,
       apiType: 'openai',
@@ -441,7 +442,7 @@ export function resolveRawApiConfig(): ApiConfigResolution {
   // leaves the key blank we supply a placeholder so the gateway doesn't reject
   // the request with "No API key found for provider".
   const effectiveApiKey = apiKey
-    || (!providerRequiresApiKey(matched.providerName) ? 'sk-lobsterai-local' : '');
+    || (!providerRequiresApiKey(matched.providerName) ? 'sk-wesight-local' : '');
   return {
     config: {
       apiKey: effectiveApiKey,
@@ -466,7 +467,7 @@ function normalizeQwenBaseUrl(value: string | undefined): string {
 }
 
 /**
- * Map LobsterAI model IDs to OAuth endpoint model names
+ * Map WeSight model IDs to OAuth endpoint model names
  * OAuth endpoint only supports 'coder-model' and 'vision-model'
  */
 function mapQwenModelToOAuthModel(modelId: string, supportsImage?: boolean): string {
@@ -488,10 +489,10 @@ function mapQwenModelToOAuthModel(modelId: string, supportsImage?: boolean): str
 export function resolveAllProviderApiKeys(): Record<string, string> {
   const result: Record<string, string> = {};
 
-  // lobsterai-server token is now managed by the token proxy
+  // wesight-server token is now managed by the token proxy
   // (openclawTokenProxy.ts) — no longer injected as an env var.
 
-    // lobsterai-server: uses auth accessToken
+    // wesight-server: uses auth accessToken
     const tokens = authTokensGetter?.();
     const serverBaseUrl = serverBaseUrlGetter?.();
     if (tokens?.accessToken && serverBaseUrl) {
@@ -509,7 +510,7 @@ export function resolveAllProviderApiKeys(): Record<string, string> {
       const apiKey = providerConfig.apiKey?.trim();
       if (!apiKey && providerRequiresApiKey(providerName)) continue;
       const envName = providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-      result[envName] = apiKey || 'sk-lobsterai-local';
+      result[envName] = apiKey || 'sk-wesight-local';
     }
 
     return result;
@@ -545,7 +546,7 @@ export function resolveAllEnabledProviderConfigs(): ProviderRawConfig[] {
 
   for (const [providerName, providerConfig] of Object.entries(appConfig.providers)) {
     if (!providerConfig?.enabled) continue;
-    if (providerName === ProviderName.LobsteraiServer) continue;
+    if (providerName === ProviderName.WesightServer) continue;
 
     const apiKey = providerConfig.apiKey?.trim() || '';
     if (!apiKey && providerRequiresApiKey(providerName)) continue;
@@ -569,7 +570,7 @@ export function resolveAllEnabledProviderConfigs(): ProviderRawConfig[] {
     result.push({
       providerName,
       baseURL: effectiveBaseURL,
-      apiKey: apiKey || 'sk-lobsterai-local',
+      apiKey: apiKey || 'sk-wesight-local',
       apiType: effectiveApiFormat === 'anthropic' ? 'anthropic' : 'openai',
       codingPlanEnabled: !!providerConfig.codingPlanEnabled,
       models,

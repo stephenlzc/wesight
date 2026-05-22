@@ -1,12 +1,13 @@
-import http from 'http';
 import { session } from 'electron';
+import http from 'http';
+
 import {
   anthropicToOpenAI,
   buildOpenAIChatCompletionsURL,
   formatSSEEvent,
   mapStopReason,
-  openAIToAnthropic,
   type OpenAIStreamChunk,
+  openAIToAnthropic,
 } from './coworkFormatTransform';
 
 export type OpenAICompatUpstreamConfig = {
@@ -2487,9 +2488,9 @@ async function handleRequest(
   const upstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider);
   const openAIRequest = anthropicToOpenAI(parsedRequestBody);
 
-  // Inject session_id and user_message for lobsterai-server logging only.
+  // Inject session_id and user_message for wesight-server logging only.
   // Strict providers (e.g. Gemini) reject unknown payload fields.
-  if (upstreamConfig.provider === 'lobsterai-server') {
+  if (upstreamConfig.provider === 'wesight-server') {
     if (currentCoworkSessionId) {
       openAIRequest.session_id = currentCoworkSessionId;
     }

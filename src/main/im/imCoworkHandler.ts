@@ -3,27 +3,30 @@
  * Adapter that enables IM (DingTalk/Feishu/Telegram) to use CoworkRuntime for tool-enabled AI execution
  */
 
+import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
-import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+
+import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
+import { RuntimeCallSource } from '../../shared/cowork/constants';
+import type { CoworkMessage, CoworkStore } from '../coworkStore';
+import { t } from '../i18n';
 import type { CoworkRuntime, PermissionRequest } from '../libs/agentEngine/types';
-import type { CoworkStore, CoworkMessage } from '../coworkStore';
-import type { IMStore } from './imStore';
-import type { IMMessage, Platform, IMMediaAttachment, IMSessionMapping } from './types';
 import { buildIMMediaInstruction } from './imMediaInstruction';
 import { analyzeIMReply, DEFAULT_IM_EMPTY_REPLY } from './imReplyGuard';
 import {
-  isReminderSystemTurn,
   type IMScheduledTaskCreationResult,
   type IMScheduledTaskRequestDetector,
+  isReminderSystemTurn,
   type ParsedIMScheduledTaskRequest,
 } from './imScheduledTaskHandler';
-import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
-import { t } from '../i18n';
+import type { IMStore } from './imStore';
+import type { IMMediaAttachment, IMMessage, IMSessionMapping, Platform } from './types';
 
 interface MessageAccumulator {
   messages: CoworkMessage[];
+  storeMessageStartIndex: number;
   resolve?: (text: string) => void;
   reject?: (error: Error) => void;
   timeoutId?: NodeJS.Timeout;
@@ -247,13 +250,17 @@ export class IMCoworkHandler extends EventEmitter {
     };
 
     if (isActive) {
-      this.coworkRuntime.continueSession(coworkSessionId, formattedContent, { systemPrompt })
+      this.coworkRuntime.continueSession(coworkSessionId, formattedContent, {
+        systemPrompt,
+        runtimeSource: RuntimeCallSource.Im,
+      })
         .catch(onSessionStartError);
     } else {
       this.coworkRuntime.startSession(coworkSessionId, formattedContent, {
         workspaceRoot: session?.cwd,
         confirmationMode: 'text',
         systemPrompt,
+        runtimeSource: RuntimeCallSource.Im,
       }).catch(onSessionStartError);
     }
 
@@ -362,6 +369,19 @@ export class IMCoworkHandler extends EventEmitter {
     senderId?: string,
     message?: IMMessage
   ): string {
+    if (platform === 'feishu') {
+      const feishuLabel = t('channelPrefixFeishu');
+      const conversationParts = _imConversationId.split(':').filter(Boolean);
+      const shortConversationId = (conversationParts[conversationParts.length - 1] || _imConversationId).slice(-8);
+      if (message?.chatType === 'group') {
+        const groupLabel = message.groupName || shortConversationId;
+        const senderLabel = message.senderName || senderId || shortConversationId;
+        return `[${feishuLabel}] ${groupLabel}/${senderLabel}/${shortConversationId}`;
+      }
+      const peerLabel = message?.senderName || senderId || shortConversationId;
+      return `[${feishuLabel}] ${peerLabel}/${shortConversationId}`;
+    }
+
     if (platform === 'nim') {
       const nimLabel = t('channelPrefixNim');
       if (message?.chatSubType === 'qchat') {
@@ -556,8 +576,8 @@ export class IMCoworkHandler extends EventEmitter {
     console.log('[IMCoworkHandler:handleMessage] sessionId:', sessionId, 'tracked:', tracked, 'messageType:', message.type);
     if (!tracked) return;
 
-    const accumulator = this.messageAccumulators.get(sessionId) ?? this.ensureBackgroundAccumulator(sessionId);
-    console.log('[IMCoworkHandler:handleMessage] accumulator exists:', !!accumulator, 'backgroundDelivery:', !!(accumulator as any)?.backgroundDelivery);
+    const accumulator = this.messageAccumulators.get(sessionId) ?? this.ensureBackgroundAccumulator(sessionId, message);
+    console.log('[IMCoworkHandler:handleMessage] accumulator exists:', !!accumulator, 'backgroundDelivery:', !!accumulator?.backgroundDelivery);
     if (accumulator) {
       accumulator.messages.push(message);
     }
@@ -611,6 +631,7 @@ export class IMCoworkHandler extends EventEmitter {
       // Set up message accumulator
       this.messageAccumulators.set(sessionId, {
         messages: [],
+        storeMessageStartIndex: this.getStoreMessageStartIndex(sessionId),
         resolve,
         reject,
         timeoutId,
@@ -618,7 +639,7 @@ export class IMCoworkHandler extends EventEmitter {
     });
   }
 
-  private ensureBackgroundAccumulator(sessionId: string): MessageAccumulator | null {
+  private ensureBackgroundAccumulator(sessionId: string, firstMessage?: CoworkMessage): MessageAccumulator | null {
     const conversation = this.sessionConversationMap.get(sessionId);
     if (!conversation) {
       return null;
@@ -639,6 +660,7 @@ export class IMCoworkHandler extends EventEmitter {
 
     const nextAccumulator: MessageAccumulator = {
       messages: [],
+      storeMessageStartIndex: this.getStoreMessageStartIndex(sessionId, firstMessage),
       timeoutId,
       backgroundDelivery: {
         conversationId: conversation.conversationId,
@@ -647,6 +669,43 @@ export class IMCoworkHandler extends EventEmitter {
     };
     this.messageAccumulators.set(sessionId, nextAccumulator);
     return nextAccumulator;
+  }
+
+  private getStoreMessageStartIndex(sessionId: string, firstMessage?: CoworkMessage): number {
+    const session = this.coworkStore.getSession(sessionId);
+    const messages = session?.messages ?? [];
+    if (!firstMessage) {
+      return messages.length;
+    }
+
+    const firstMessageIndex = messages.findIndex((message) => message.id === firstMessage.id);
+    return firstMessageIndex >= 0 ? firstMessageIndex : messages.length;
+  }
+
+  private hasRuntimeReplyMessages(messages: CoworkMessage[]): boolean {
+    return messages.some((message) => message.type !== 'user');
+  }
+
+  private getMessagesForAccumulator(
+    sessionId: string,
+    accumulator: MessageAccumulator,
+  ): {
+    messages: CoworkMessage[];
+    storeMessageCount: number;
+    usedStoreMessages: boolean;
+  } {
+    const session = this.coworkStore.getSession(sessionId);
+    const storeMessages = session?.messages ?? [];
+    const storeTurnMessages = storeMessages.slice(accumulator.storeMessageStartIndex);
+    const usedStoreMessages =
+      this.hasRuntimeReplyMessages(storeTurnMessages) ||
+      !this.hasRuntimeReplyMessages(accumulator.messages);
+
+    return {
+      messages: usedStoreMessages ? storeTurnMessages : accumulator.messages,
+      storeMessageCount: storeMessages.length,
+      usedStoreMessages,
+    };
   }
 
   private rejectAccumulator(sessionId: string, error: Error): void {
@@ -843,12 +902,13 @@ export class IMCoworkHandler extends EventEmitter {
       return;
     }
 
-    // Use reconciled messages from the store (authoritative after reconcileWithHistory)
-    // instead of accumulator messages which may be stale streaming snapshots.
-    // Fall back to accumulator messages if the store has none (e.g. timeout path).
-    const session = this.coworkStore.getSession(sessionId);
-    const storeMessages = session?.messages ?? [];
-    const messages = storeMessages.length > 0 ? storeMessages : accumulator.messages;
+    // Use reconciled messages from the store, but only for this IM turn.
+    // Reused IM sessions keep history in the same cowork record.
+    const {
+      messages,
+      storeMessageCount,
+      usedStoreMessages,
+    } = this.getMessagesForAccumulator(sessionId, accumulator);
 
     // For cron-triggered background deliveries (scheduled task executions),
     // skip the reminder guard — the assistant text IS the scheduled reminder
@@ -857,13 +917,15 @@ export class IMCoworkHandler extends EventEmitter {
       ? this.formatReplyRaw(messages)
       : this.formatReply(sessionId, messages);
 
-    console.log(`[IMCoworkHandler] 会话完成:`, JSON.stringify({
+    console.log('[IMCoworkHandler] completed IM cowork turn', JSON.stringify({
       sessionId,
       messageCount: messages.length,
+      storeMessageCount,
+      storeMessageStartIndex: accumulator.storeMessageStartIndex,
       replyLength: replyText.length,
       reply: replyText,
       backgroundDelivery: accumulator.backgroundDelivery ?? null,
-      usedStoreMessages: storeMessages.length > 0,
+      usedStoreMessages,
     }, null, 2));
 
     this.cleanupAccumulator(sessionId);

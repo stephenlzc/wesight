@@ -9,6 +9,7 @@ import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import EngineStartupOverlay from './components/cowork/EngineStartupOverlay';
 import { McpView } from './components/mcp';
 import PrivacyDialog from './components/PrivacyDialog';
+import RuntimeDashboardView from './components/runtime/RuntimeDashboardView';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
@@ -37,7 +38,7 @@ import type { CoworkPermissionResult } from './types/cowork';
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'agents'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'runtime' | 'mcp' | 'agents'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -271,6 +272,10 @@ const App: React.FC = () => {
 
   const handleShowScheduledTasks = useCallback(() => {
     setMainView('scheduledTasks');
+  }, []);
+
+  const handleShowRuntimeDashboard = useCallback(() => {
+    setMainView('runtime');
   }, []);
 
   const handleShowMcp = useCallback(() => {
@@ -683,6 +688,7 @@ const App: React.FC = () => {
           onShowSkills={handleShowSkills}
           onShowCowork={handleShowCowork}
           onShowScheduledTasks={handleShowScheduledTasks}
+          onShowRuntimeDashboard={handleShowRuntimeDashboard}
           onShowMcp={handleShowMcp}
           onShowAgents={handleShowAgents}
           onNewChat={handleNewChat}
@@ -708,6 +714,14 @@ const App: React.FC = () => {
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
+                updateBadge={isSidebarCollapsed ? updateBadge : null}
+              />
+            ) : mainView === 'runtime' ? (
+              <RuntimeDashboardView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                onShowCowork={handleShowCowork}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
               />
             ) : mainView === 'mcp' ? (

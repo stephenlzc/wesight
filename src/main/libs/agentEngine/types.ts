@@ -1,7 +1,12 @@
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 
+import type {
+  CoworkAgentEngine,
+  RuntimeCallSource,
+} from '../../../shared/cowork/constants';
 import type { CoworkMessage } from '../../coworkStore';
-export type { CoworkAgentEngine } from '../../../shared/cowork/constants';
+
+export type { CoworkAgentEngine, RuntimeCallSource };
 
 export const ENGINE_SWITCHED_CODE = 'ENGINE_SWITCHED';
 
@@ -12,10 +17,26 @@ export interface PermissionRequest {
   toolUseId?: string | null;
 }
 
+export type CoworkRuntimeMetric =
+  | {
+      type: 'usage';
+      inputTokens?: number | null;
+      outputTokens?: number | null;
+      cacheReadTokens?: number | null;
+      cacheWriteTokens?: number | null;
+      contextTokens?: number | null;
+      tokensEstimated?: boolean;
+    }
+  | {
+      type: 'step';
+      label?: string;
+    };
+
 export interface CoworkRuntimeEvents {
   message: (sessionId: string, message: CoworkMessage) => void;
   messageUpdate: (sessionId: string, messageId: string, content: string) => void;
   permissionRequest: (sessionId: string, request: PermissionRequest) => void;
+  runtimeMetric: (sessionId: string, metric: CoworkRuntimeMetric) => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
   sessionStopped: (sessionId: string) => void;
@@ -36,12 +57,14 @@ export type CoworkStartOptions = {
   confirmationMode?: 'modal' | 'text';
   imageAttachments?: CoworkImageAttachment[];
   agentId?: string;
+  runtimeSource?: RuntimeCallSource;
 };
 
 export type CoworkContinueOptions = {
   systemPrompt?: string;
   skillIds?: string[];
   imageAttachments?: CoworkImageAttachment[];
+  runtimeSource?: RuntimeCallSource;
 };
 
 export interface CoworkRuntime {

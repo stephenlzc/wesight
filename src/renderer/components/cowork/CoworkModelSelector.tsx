@@ -25,6 +25,12 @@ interface CoworkModelSelectorProps {
 
 const resolveLocalCliAppType = (config: RootState['cowork']['config']): ExternalAgentProviderAppType | null => {
   if (
+    config.agentEngine === CoworkAgentEngine.OpenClaw
+    && config.openclawConfigSource === ExternalAgentConfigSource.LocalCli
+  ) {
+    return 'openclaw';
+  }
+  if (
     config.agentEngine === CoworkAgentEngine.ClaudeCode
     && config.claudeCodeConfigSource === ExternalAgentConfigSource.LocalCli
   ) {
@@ -35,6 +41,30 @@ const resolveLocalCliAppType = (config: RootState['cowork']['config']): External
     && config.codexConfigSource === ExternalAgentConfigSource.LocalCli
   ) {
     return 'codex';
+  }
+  if (
+    config.agentEngine === CoworkAgentEngine.Hermes
+    && config.hermesConfigSource === ExternalAgentConfigSource.LocalCli
+  ) {
+    return 'hermes';
+  }
+  if (
+    config.agentEngine === CoworkAgentEngine.OpenCode
+    && config.opencodeConfigSource === ExternalAgentConfigSource.LocalCli
+  ) {
+    return 'opencode';
+  }
+  if (
+    config.agentEngine === CoworkAgentEngine.QwenCode
+    && config.qwenCodeConfigSource === ExternalAgentConfigSource.LocalCli
+  ) {
+    return 'qwen';
+  }
+  if (
+    config.agentEngine === CoworkAgentEngine.DeepSeekTui
+    && config.deepseekTuiConfigSource === ExternalAgentConfigSource.LocalCli
+  ) {
+    return 'deepseek_tui';
   }
   return null;
 };

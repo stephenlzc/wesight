@@ -1,42 +1,53 @@
 /**
  * IM Gateway Manager
- * Unified manager for DingTalk, Feishu, NIM gateways
- * and Telegram, Discord, QQ, WeCom, Weixin, POPO, NeteaseBee via OpenClaw
+ * Unified manager for IM gateways.
+ * Most IM platforms run through OpenClaw; Feishu follows the global agent engine.
  */
 
+import Database from 'better-sqlite3';
 import { EventEmitter } from 'events';
-import * as path from 'path';
+
+import { classifyErrorKey } from '../../common/coworkErrorClassify';
+import { CoworkAgentEngine } from '../../shared/cowork/constants';
+import {
+  FeishuEngineKey,
+  type FeishuEngineKeyType,
+  FeishuImportSource,
+  FeishuManagementMode,
+  type FeishuManagementModeType,
+} from '../../shared/im/constants';
+import type { CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
-import { NimGateway } from './nimGateway';
+import type { CoworkRuntime } from '../libs/agentEngine/types';
+import { getExternalAgentEnvironmentSnapshot } from '../libs/externalAgentEnvironment';
+import type { OpenClawLocalFeishuDetection } from '../libs/openclawSystemRuntime';
+import { fetchJsonWithTimeout } from './http';
 import { IMChatHandler } from './imChatHandler';
 import { IMCoworkHandler } from './imCoworkHandler';
-import { IMStore } from './imStore';
+import {
+  buildDingTalkSendParamsFromRoute,
+  buildDingTalkSessionKeyCandidates,
+  type OpenClawDeliveryRoute,
+  resolveManagedSessionDeliveryRoute,
+  resolveOpenClawDeliveryRouteForSessionKeys,
+} from './imDeliveryRoute';
 import type {
   IMScheduledTaskCreationResult,
   ParsedIMScheduledTaskRequest,
 } from './imScheduledTaskHandler';
 import { createIMScheduledTaskRequestDetector } from './imScheduledTaskHandler';
+import { IMStore } from './imStore';
+import { NativeFeishuGateway } from './nativeFeishuGateway';
+import { NimGateway } from './nimGateway';
 import {
-  buildDingTalkSessionKeyCandidates,
-  buildDingTalkSendParamsFromRoute,
-  type OpenClawDeliveryRoute,
-  resolveManagedSessionDeliveryRoute,
-  resolveOpenClawDeliveryRouteForSessionKeys,
-} from './imDeliveryRoute';
-import { fetchJsonWithTimeout } from './http';
-import {
-  IMGatewayConfig,
-  IMGatewayStatus,
-  Platform,
-  IMMessage,
   IMConnectivityCheck,
   IMConnectivityTestResult,
   IMConnectivityVerdict,
+  IMGatewayConfig,
+  IMGatewayStatus,
+  IMMessage,
+  Platform,
 } from './types';
-import Database from 'better-sqlite3';
-import type { CoworkRuntime } from '../libs/agentEngine/types';
-import type { CoworkStore } from '../coworkStore';
-import { classifyErrorKey } from '../../common/coworkErrorClassify';
 const CONNECTIVITY_TIMEOUT_MS = 10_000;
 const INBOUND_ACTIVITY_WARN_AFTER_MS = 2 * 60 * 1000;
 
@@ -47,6 +58,17 @@ type GatewayClientLike = {
     opts?: { expectFinal?: boolean },
   ) => Promise<T>;
 };
+
+type FeishuAgentEngine =
+  | typeof CoworkAgentEngine.OpenClaw
+  | typeof CoworkAgentEngine.Hermes
+  | typeof CoworkAgentEngine.ClaudeCode
+  | typeof CoworkAgentEngine.Codex;
+
+const isNativeFeishuCliEngine = (engine: FeishuAgentEngine | null): boolean => (
+  engine === CoworkAgentEngine.ClaudeCode
+  || engine === CoworkAgentEngine.Codex
+);
 
 interface OpenClawSessionsListResult {
   sessions?: unknown[];
@@ -70,8 +92,14 @@ export interface IMGatewayManagerOptions {
   coworkStore?: CoworkStore;
   ensureCoworkReady?: () => Promise<void>;
   isOpenClawEngine?: () => boolean;
+  getFeishuAgentEngine?: () => FeishuAgentEngine | null;
+  getFeishuManagementMode?: () => FeishuManagementModeType;
+  detectOpenClawLocalFeishu?: () => OpenClawLocalFeishuDetection;
   syncOpenClawConfig?: () => Promise<void>;
+  syncHermesConfig?: () => Promise<void>;
   ensureOpenClawGatewayConnected?: () => Promise<void>;
+  hasLocalOpenClawFeishuEnabled?: () => boolean;
+  ensureHermesGatewayReady?: () => Promise<void>;
   getOpenClawGatewayClient?: () => GatewayClientLike | null;
   ensureOpenClawGatewayReady?: () => Promise<void>;
   getOpenClawSessionKeysForCoworkSession?: (sessionId: string) => string[];
@@ -84,6 +112,7 @@ export interface IMGatewayManagerOptions {
 
 export class IMGatewayManager extends EventEmitter {
   private nimGateway: NimGateway;
+  private nativeFeishuGateway: NativeFeishuGateway;
   private imStore: IMStore;
   private chatHandler: IMChatHandler | null = null;
   private coworkHandler: IMCoworkHandler | null = null;
@@ -91,8 +120,14 @@ export class IMGatewayManager extends EventEmitter {
   private getSkillsPrompt: (() => Promise<string | null>) | null = null;
   private ensureCoworkReady: (() => Promise<void>) | null = null;
   private isOpenClawEngine: (() => boolean) | null = null;
+  private getFeishuAgentEngine: (() => FeishuAgentEngine | null) | null = null;
+  private getFeishuManagementMode: (() => FeishuManagementModeType) | null = null;
+  private detectOpenClawLocalFeishu: (() => OpenClawLocalFeishuDetection) | null = null;
   private syncOpenClawConfig: (() => Promise<void>) | null = null;
+  private syncHermesConfig: (() => Promise<void>) | null = null;
   private ensureOpenClawGatewayConnected: (() => Promise<void>) | null = null;
+  private hasLocalOpenClawFeishuEnabled: (() => boolean) | null = null;
+  private ensureHermesGatewayReady: (() => Promise<void>) | null = null;
   private getOpenClawGatewayClient: (() => GatewayClientLike | null) | null = null;
   private ensureOpenClawGatewayReady: (() => Promise<void>) | null = null;
   private getOpenClawSessionKeysForCoworkSession: ((sessionId: string) => string[]) | null = null;
@@ -118,6 +153,7 @@ export class IMGatewayManager extends EventEmitter {
 
     this.imStore = new IMStore(db);
     this.nimGateway = new NimGateway();
+    this.nativeFeishuGateway = new NativeFeishuGateway();
 
     // Store Cowork dependencies if provided
     if (options?.coworkRuntime && options?.coworkStore) {
@@ -126,8 +162,14 @@ export class IMGatewayManager extends EventEmitter {
     }
     this.ensureCoworkReady = options?.ensureCoworkReady ?? null;
     this.isOpenClawEngine = options?.isOpenClawEngine ?? null;
+    this.getFeishuAgentEngine = options?.getFeishuAgentEngine ?? null;
+    this.getFeishuManagementMode = options?.getFeishuManagementMode ?? null;
+    this.detectOpenClawLocalFeishu = options?.detectOpenClawLocalFeishu ?? null;
     this.syncOpenClawConfig = options?.syncOpenClawConfig ?? null;
+    this.syncHermesConfig = options?.syncHermesConfig ?? null;
     this.ensureOpenClawGatewayConnected = options?.ensureOpenClawGatewayConnected ?? null;
+    this.hasLocalOpenClawFeishuEnabled = options?.hasLocalOpenClawFeishuEnabled ?? null;
+    this.ensureHermesGatewayReady = options?.ensureHermesGatewayReady ?? null;
     this.getOpenClawGatewayClient = options?.getOpenClawGatewayClient ?? null;
     this.ensureOpenClawGatewayReady = options?.ensureOpenClawGatewayReady ?? null;
     this.getOpenClawSessionKeysForCoworkSession = options?.getOpenClawSessionKeysForCoworkSession ?? null;
@@ -156,12 +198,53 @@ export class IMGatewayManager extends EventEmitter {
     // POPO runs via OpenClaw; no direct gateway events to forward
   }
 
+  private resolveFeishuManagementMode(): FeishuManagementModeType {
+    return this.getFeishuManagementMode?.() ?? FeishuManagementMode.LocalOpenClaw;
+  }
+
+  private resolveFeishuEngineKey(): FeishuEngineKeyType {
+    const engine = this.getFeishuAgentEngine?.() ?? null;
+    if (engine === CoworkAgentEngine.Hermes) return FeishuEngineKey.Hermes;
+    if (engine === CoworkAgentEngine.ClaudeCode) return FeishuEngineKey.ClaudeCode;
+    if (engine === CoworkAgentEngine.Codex) return FeishuEngineKey.Codex;
+    return FeishuEngineKey.OpenClaw;
+  }
+
+  getActiveFeishuEngineKey(): FeishuEngineKeyType {
+    return this.resolveFeishuEngineKey();
+  }
+
+  private getOpenClawLocalFeishuDetection(): OpenClawLocalFeishuDetection | null {
+    return this.detectOpenClawLocalFeishu?.() ?? null;
+  }
+
+  private isFeishuOwnedByLocalOpenClaw(): boolean {
+    if (this.resolveFeishuManagementMode() !== FeishuManagementMode.LocalOpenClaw) return false;
+    const detection = this.getOpenClawLocalFeishuDetection();
+    return Boolean(detection?.configured || detection?.enabled);
+  }
+
+  private isCurrentFeishuEngineOwnedByLocalOpenClaw(): boolean {
+    return this.getFeishuAgentEngine?.() === CoworkAgentEngine.OpenClaw
+      && this.isFeishuOwnedByLocalOpenClaw();
+  }
+
+  private assertNativeFeishuAllowed(): void {
+    if (!this.isCurrentFeishuEngineOwnedByLocalOpenClaw()) return;
+    throw new Error(t('imFeishuLocalOpenClawOwnerSuggestion'));
+  }
+
   /**
    * Reconnect all disconnected gateways
    * Called when network is restored via IPC event
    */
   reconnectAllDisconnected(): void {
     console.log('[IMGatewayManager] Reconnecting all disconnected gateways...');
+
+    if (isNativeFeishuCliEngine(this.getFeishuAgentEngine?.() ?? null)) {
+      void this.nativeFeishuGateway.start(this.getConfig().feishu?.instances || [])
+        .catch(error => console.error('[IMGatewayManager] Failed to reconnect native Feishu gateway:', error));
+    }
 
     // DingTalk runs via OpenClaw; no direct reconnect needed
 
@@ -245,6 +328,7 @@ export class IMGatewayManager extends EventEmitter {
     };
 
     this.nimGateway.setMessageCallback(messageHandler);
+    this.nativeFeishuGateway.setMessageCallback(messageHandler);
   }
 
   /**
@@ -337,7 +421,7 @@ export class IMGatewayManager extends EventEmitter {
 
   // ==================== Configuration ====================
   getConfig(): IMGatewayConfig {
-    return this.imStore.getConfig();
+    return this.imStore.getConfig(this.resolveFeishuEngineKey());
   }
 
   getIMStore(): IMStore {
@@ -345,8 +429,9 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   setConfig(config: Partial<IMGatewayConfig>, options?: { syncGateway?: boolean }): void {
-    const previousConfig = this.imStore.getConfig();
-    this.imStore.setConfig(config);
+    const feishuEngineKey = this.resolveFeishuEngineKey();
+    const previousConfig = this.imStore.getConfig(feishuEngineKey);
+    this.imStore.setConfig(config, feishuEngineKey);
 
     // Update chat handler if settings changed
     if (config.settings) {
@@ -358,7 +443,7 @@ export class IMGatewayManager extends EventEmitter {
 
     // DingTalk now runs via OpenClaw; config sync is handled by IPC handler
 
-    // Feishu now runs via OpenClaw; config sync is handled by IPC handler
+    // Feishu follows the global agent engine; config sync is handled by IPC handler
 
 
     // Hot-update netease-bee config: sync OpenClaw config when credentials change.
@@ -428,18 +513,54 @@ export class IMGatewayManager extends EventEmitter {
         lastOutboundAt: null as number | null,
       })),
     };
-    // Feishu runs via OpenClaw; reflect enabled+configured state per instance
+    const feishuInstances = config.feishu?.instances || [];
+    const feishuProfiles = config.feishu?.profiles ?? {};
+    const activeFeishuEngineKey = this.resolveFeishuEngineKey();
+    const openClawLocalFeishu = this.getOpenClawLocalFeishuDetection();
+    const feishuManagementMode = this.resolveFeishuManagementMode();
+    const importedFromOpenClaw = feishuInstances.some((inst) => inst.importSource === FeishuImportSource.OpenClawLocal);
     const feishuStatus = {
-      instances: (config.feishu?.instances || []).map(inst => ({
-        instanceId: inst.instanceId,
-        instanceName: inst.instanceName,
-        connected: Boolean(inst.enabled && inst.appId && inst.appSecret),
-        startedAt: null as string | null,
-        botOpenId: null as string | null,
-        error: null as string | null,
-        lastInboundAt: null as number | null,
-        lastOutboundAt: null as number | null,
-      })),
+      activeEngineKey: activeFeishuEngineKey,
+      instances: isNativeFeishuCliEngine(this.getFeishuAgentEngine?.() ?? null)
+        ? this.nativeFeishuGateway.getStatus(feishuInstances)
+        : feishuInstances.map(inst => ({
+          instanceId: inst.instanceId,
+          instanceName: inst.instanceName,
+          connected: Boolean(inst.enabled && inst.appId && inst.appSecret),
+          startedAt: null as string | null,
+          botOpenId: null as string | null,
+          error: null as string | null,
+          lastInboundAt: null as number | null,
+          lastOutboundAt: null as number | null,
+        })),
+      profiles: Object.fromEntries(
+        Object.entries(feishuProfiles).map(([engineKey, profile]) => {
+          const instances = profile?.instances ?? [];
+          const enabled = instances.some(instance => instance.enabled);
+          return [engineKey, {
+            engineKey,
+            configured: instances.some(instance => Boolean(instance.appId && instance.appSecret)),
+            enabled,
+            running: engineKey === activeFeishuEngineKey && enabled,
+            instanceCount: instances.length,
+          }];
+        }),
+      ),
+      conflicts: config.feishu?.conflicts ?? [],
+      openClawLocal: {
+        managementMode: feishuManagementMode,
+        configured: Boolean(openClawLocalFeishu?.configured),
+        running: Boolean(openClawLocalFeishu?.enabled),
+        imported: importedFromOpenClaw,
+        managed: feishuManagementMode === FeishuManagementMode.WesightManaged,
+        canImport: Boolean(openClawLocalFeishu?.canImport),
+        configPath: openClawLocalFeishu?.configPath ?? null,
+        channelKey: openClawLocalFeishu?.channelKey ?? null,
+        domain: openClawLocalFeishu?.domain ?? null,
+        appIdPreview: openClawLocalFeishu?.appIdPreview ?? null,
+        secretNeedsInput: Boolean(openClawLocalFeishu?.secretNeedsInput),
+        message: openClawLocalFeishu?.message ?? null,
+      },
     };
     return {
       dingtalk: dingtalkStatus,
@@ -518,9 +639,31 @@ export class IMGatewayManager extends EventEmitter {
       return this.testDiscordOpenClawConnectivity(configOverride);
     }
 
-    // Feishu always uses OpenClaw mode
     if (platform === 'feishu') {
-      return this.testFeishuOpenClawConnectivity(configOverride);
+      const engine = this.getFeishuAgentEngine?.() ?? null;
+      if (engine === CoworkAgentEngine.OpenClaw) {
+        return this.testFeishuOpenClawConnectivity(configOverride);
+      }
+      if (engine === CoworkAgentEngine.Hermes) {
+        return this.testFeishuHermesConnectivity(configOverride);
+      }
+      if (engine === CoworkAgentEngine.ClaudeCode) {
+        return this.testFeishuClaudeCodeConnectivity(configOverride);
+      }
+      if (engine === CoworkAgentEngine.Codex) {
+        return this.testFeishuCodexConnectivity(configOverride);
+      }
+      return {
+        platform,
+        testedAt: Date.now(),
+        verdict: 'fail',
+        checks: [{
+          code: 'unsupported_agent_engine',
+          level: 'fail',
+          message: t('imFeishuUnsupportedEngine'),
+          suggestion: t('imFeishuUnsupportedEngineSuggestion'),
+        }],
+      };
     }
 
     // DingTalk always uses OpenClaw mode
@@ -728,8 +871,6 @@ export class IMGatewayManager extends EventEmitter {
 
   // ==================== Gateway Control ====================
   async startGateway(platform: Platform): Promise<void> {
-    const config = this.getConfig();
-
     // Ensure chat handler is ready
     this.updateChatHandler();
 
@@ -740,11 +881,31 @@ export class IMGatewayManager extends EventEmitter {
       await this.ensureOpenClawGatewayConnected?.();
       return;
     } else if (platform === 'feishu') {
-      // Feishu runs via OpenClaw gateway (feishu-openclaw-plugin)
-      console.log('[IMGatewayManager] Feishu in OpenClaw mode, syncing config instead of starting direct gateway');
-      await this.syncOpenClawConfig?.();
-      await this.ensureOpenClawGatewayConnected?.();
-      return;
+      const engine = this.getFeishuAgentEngine?.() ?? null;
+      if (engine === CoworkAgentEngine.OpenClaw) {
+        console.log('[IMGatewayManager] Feishu follows OpenClaw, syncing config and connecting gateway');
+        await this.nativeFeishuGateway.stopAll();
+        await this.syncOpenClawConfig?.();
+        await this.ensureOpenClawGatewayConnected?.();
+        return;
+      }
+      if (engine === CoworkAgentEngine.Hermes) {
+        this.assertNativeFeishuAllowed();
+        console.log('[IMGatewayManager] Feishu follows Hermes Agent, syncing config and starting gateway');
+        await this.nativeFeishuGateway.stopAll();
+        await this.syncHermesConfig?.();
+        await this.ensureHermesGatewayReady?.();
+        return;
+      }
+      if (isNativeFeishuCliEngine(engine)) {
+        this.assertNativeFeishuAllowed();
+        console.log(`[IMGatewayManager] Feishu follows ${this.getFeishuEngineDisplayName(engine)}, starting native Feishu gateway`);
+        await this.syncOpenClawConfig?.();
+        await this.syncHermesConfig?.();
+        await this.nativeFeishuGateway.start(this.getConfig().feishu?.instances || []);
+        return;
+      }
+      throw new Error(t('imFeishuUnsupportedEngineSuggestion'));
     } else if (platform === 'telegram') {
       // Telegram always runs via OpenClaw gateway
       console.log('[IMGatewayManager] Telegram in OpenClaw mode, syncing config instead of starting direct gateway');
@@ -807,8 +968,23 @@ export class IMGatewayManager extends EventEmitter {
       await this.syncOpenClawConfig?.();
       return;
     } else if (platform === 'feishu') {
-      // Feishu runs via OpenClaw gateway
-      console.log('[IMGatewayManager] Feishu in OpenClaw mode, syncing disabled config');
+      const engine = this.getFeishuAgentEngine?.() ?? null;
+      if (isNativeFeishuCliEngine(engine)) {
+        console.log(`[IMGatewayManager] Feishu follows ${this.getFeishuEngineDisplayName(engine)}, stopping native Feishu gateway`);
+        await this.nativeFeishuGateway.stopAll();
+        await this.syncOpenClawConfig?.();
+        await this.syncHermesConfig?.();
+        return;
+      }
+      if (engine === CoworkAgentEngine.Hermes) {
+        console.log('[IMGatewayManager] Feishu follows Hermes Agent, syncing disabled config');
+        await this.nativeFeishuGateway.stopAll();
+        await this.syncHermesConfig?.();
+        await this.ensureHermesGatewayReady?.();
+        return;
+      }
+      console.log('[IMGatewayManager] Feishu follows OpenClaw, syncing disabled config');
+      await this.nativeFeishuGateway.stopAll();
       await this.syncOpenClawConfig?.();
       return;
     } else if (platform === 'telegram') {
@@ -878,8 +1054,41 @@ export class IMGatewayManager extends EventEmitter {
       openClawPlatformsToStart.push('dingtalk');
     }
     const feishuInstances = config.feishu?.instances || [];
-    if (feishuInstances.some(i => i.enabled && i.appId && i.appSecret)) {
-      openClawPlatformsToStart.push('feishu');
+    const engine = this.getFeishuAgentEngine?.() ?? null;
+    const currentFeishuOwnedByLocalOpenClaw = this.isCurrentFeishuEngineOwnedByLocalOpenClaw();
+    const localOpenClawFeishuEnabled = engine === CoworkAgentEngine.OpenClaw
+      && currentFeishuOwnedByLocalOpenClaw
+      && Boolean(this.hasLocalOpenClawFeishuEnabled?.());
+    const shouldStartFeishu = localOpenClawFeishuEnabled
+      || feishuInstances.some(i => i.enabled && i.appId && i.appSecret);
+    if (shouldStartFeishu) {
+      if (engine === CoworkAgentEngine.OpenClaw) {
+        await this.nativeFeishuGateway.stopAll();
+        openClawPlatformsToStart.push('feishu');
+      } else if (engine === CoworkAgentEngine.Hermes) {
+        console.log('[IMGatewayManager] Starting Feishu through Hermes Agent');
+        try {
+          await this.nativeFeishuGateway.stopAll();
+          await this.syncHermesConfig?.();
+          await this.ensureHermesGatewayReady?.();
+        } catch (error: any) {
+          console.error(`[IMGatewayManager] Failed to start Feishu through Hermes Agent: ${error.message}`);
+        }
+      } else if (isNativeFeishuCliEngine(engine)) {
+        console.log(`[IMGatewayManager] Starting Feishu through ${this.getFeishuEngineDisplayName(engine)}`);
+        try {
+          await this.syncOpenClawConfig?.();
+          await this.syncHermesConfig?.();
+          await this.nativeFeishuGateway.start(feishuInstances);
+        } catch (error: any) {
+          console.error(`[IMGatewayManager] Failed to start Feishu through ${this.getFeishuEngineDisplayName(engine)}: ${error.message}`);
+        }
+      } else {
+        await this.nativeFeishuGateway.stopAll();
+        console.warn('[IMGatewayManager] Feishu is enabled but the current Agent engine does not support Feishu IM.');
+      }
+    } else {
+      await this.nativeFeishuGateway.stopAll();
     }
     if (config.telegram?.enabled && config.telegram.botToken) {
       openClawPlatformsToStart.push('telegram');
@@ -919,11 +1128,11 @@ export class IMGatewayManager extends EventEmitter {
   }
 
   async stopAll(): Promise<void> {
-    // All platforms run via OpenClaw; nothing to stop directly
+    await this.nativeFeishuGateway.stopAll();
   }
 
   isAnyConnected(): boolean {
-    return false;
+    return this.nativeFeishuGateway.isConnected();
   }
 
   isConnected(platform: Platform): boolean {
@@ -934,7 +1143,13 @@ export class IMGatewayManager extends EventEmitter {
       return dingtalkInstances.some(i => i.enabled && i.clientId && i.clientSecret);
     }
     if (platform === 'feishu') {
-      // Feishu runs via OpenClaw; consider it connected when any instance is enabled and configured
+      if (isNativeFeishuCliEngine(this.getFeishuAgentEngine?.() ?? null)) {
+        return this.nativeFeishuGateway.isConnected();
+      }
+      if (this.getFeishuAgentEngine?.() === CoworkAgentEngine.OpenClaw && this.hasLocalOpenClawFeishuEnabled?.()) {
+        return true;
+      }
+      // Feishu runs via OpenClaw or Hermes; consider it connected when any instance is enabled and configured
       const config = this.getConfig();
       const feishuInstances = config.feishu?.instances || [];
       return feishuInstances.some(i => i.enabled && i.appId && i.appSecret);
@@ -1285,6 +1500,309 @@ export class IMGatewayManager extends EventEmitter {
         : 'pass';
 
     return { platform, testedAt, verdict, checks };
+  }
+
+  private async testFeishuHermesConnectivity(
+    configOverride?: Partial<IMGatewayConfig>
+  ): Promise<IMConnectivityTestResult> {
+    const checks: IMConnectivityCheck[] = [];
+    const testedAt = Date.now();
+    const platform: Platform = 'feishu';
+
+    const mergedConfig = this.buildMergedConfig(configOverride);
+    const feishuInstances = mergedConfig.feishu?.instances || [];
+    const enabledInstances = feishuInstances.filter(i => i.enabled && i.appId && i.appSecret);
+
+    if (enabledInstances.length > 1) {
+      checks.push({
+        code: 'hermes_single_instance',
+        level: 'fail',
+        message: t('imFeishuHermesSingleInstance'),
+        suggestion: t('imFeishuHermesSingleInstanceSuggestion'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    const fsConfig = enabledInstances[0] || feishuInstances.find(i => i.appId || i.appSecret) || feishuInstances[0];
+    if (!fsConfig?.appId || !fsConfig?.appSecret) {
+      const missing: string[] = [];
+      if (!fsConfig?.appId) missing.push('appId');
+      if (!fsConfig?.appSecret) missing.push('appSecret');
+      checks.push({
+        code: 'missing_credentials',
+        level: 'fail',
+        message: t('imMissingCredentials', { fields: missing.join(', ') }),
+        suggestion: t('imFeishuFillAppIdSecret'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    try {
+      const Lark = await import('@larksuiteoapi/node-sdk');
+      const domain = this.resolveFeishuDomain(fsConfig.domain, Lark);
+      const client = new Lark.Client({
+        appId: fsConfig.appId,
+        appSecret: fsConfig.appSecret,
+        appType: Lark.AppType.SelfBuild,
+        domain,
+      });
+      const response: any = await client.request({
+        method: 'GET',
+        url: '/open-apis/bot/v3/info',
+      });
+      if (response.code !== 0) {
+        throw new Error(response.msg || `code ${response.code}`);
+      }
+      const botName = response.data?.app_name ?? response.data?.bot?.app_name ?? 'unknown';
+      checks.push({
+        code: 'auth_check',
+        level: 'pass',
+        message: t('imFeishuAuthPassed', { botName }),
+      });
+    } catch (error: any) {
+      checks.push({
+        code: 'auth_check',
+        level: 'fail',
+        message: t('imFeishuAuthFailed', { error: error.message }),
+        suggestion: t('imFeishuCheckAppIdSecret'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    try {
+      await this.syncHermesConfig?.();
+      checks.push({
+        code: 'hermes_config_sync',
+        level: 'pass',
+        message: t('imFeishuHermesHint'),
+      });
+    } catch (error: any) {
+      checks.push({
+        code: 'hermes_config_sync',
+        level: 'fail',
+        message: error?.message || t('imFeishuHermesSyncFailed'),
+        suggestion: t('imFeishuHermesSyncFailedSuggestion'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    checks.push({
+      code: 'feishu_group_requires_mention',
+      level: 'info',
+      message: t('imFeishuGroupMention'),
+      suggestion: t('imFeishuGroupMentionSuggestion'),
+    });
+
+    checks.push({
+      code: 'feishu_event_subscription_required',
+      level: 'info',
+      message: t('imFeishuEventSubscription'),
+      suggestion: t('imFeishuEventSubscriptionSuggestion'),
+    });
+
+    return { platform, testedAt, verdict: this.calculateVerdict(checks), checks };
+  }
+
+  private async testFeishuClaudeCodeConnectivity(
+    configOverride?: Partial<IMGatewayConfig>
+  ): Promise<IMConnectivityTestResult> {
+    const checks: IMConnectivityCheck[] = [];
+    const testedAt = Date.now();
+    const platform: Platform = 'feishu';
+
+    const mergedConfig = this.buildMergedConfig(configOverride);
+    const feishuInstances = mergedConfig.feishu?.instances || [];
+    const fsConfig = feishuInstances.find(i => i.enabled && i.appId && i.appSecret)
+      || feishuInstances.find(i => i.appId || i.appSecret)
+      || feishuInstances[0];
+
+    if (!fsConfig?.appId || !fsConfig?.appSecret) {
+      const missing: string[] = [];
+      if (!fsConfig?.appId) missing.push('appId');
+      if (!fsConfig?.appSecret) missing.push('appSecret');
+      checks.push({
+        code: 'missing_credentials',
+        level: 'fail',
+        message: t('imMissingCredentials', { fields: missing.join(', ') }),
+        suggestion: t('imFeishuFillAppIdSecret'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    try {
+      const Lark = await import('@larksuiteoapi/node-sdk');
+      const domain = this.resolveFeishuDomain(fsConfig.domain, Lark);
+      const client = new Lark.Client({
+        appId: fsConfig.appId,
+        appSecret: fsConfig.appSecret,
+        appType: Lark.AppType.SelfBuild,
+        domain,
+      });
+      const response: any = await client.request({
+        method: 'GET',
+        url: '/open-apis/bot/v3/info',
+      });
+      if (response.code !== 0) {
+        throw new Error(response.msg || `code ${response.code}`);
+      }
+      const botName = response.data?.app_name ?? response.data?.bot?.app_name ?? 'unknown';
+      checks.push({
+        code: 'auth_check',
+        level: 'pass',
+        message: t('imFeishuAuthPassed', { botName }),
+      });
+    } catch (error: any) {
+      checks.push({
+        code: 'auth_check',
+        level: 'fail',
+        message: t('imFeishuAuthFailed', { error: error.message }),
+        suggestion: t('imFeishuCheckAppIdSecret'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    const claudeStatus = getExternalAgentEnvironmentSnapshot()
+      .engines.find(engine => engine.appType === 'claude');
+    if (!claudeStatus?.found) {
+      checks.push({
+        code: 'gateway_running',
+        level: 'fail',
+        message: t('imFeishuClaudeCodeCliMissing'),
+        suggestion: t('imFeishuClaudeCodeCliMissingSuggestion'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    checks.push({
+      code: 'gateway_running',
+      level: 'pass',
+      message: t('imFeishuClaudeCodeCliReady', {
+        path: claudeStatus.path || claudeStatus.command,
+      }),
+    });
+
+    checks.push({
+      code: 'feishu_group_requires_mention',
+      level: 'info',
+      message: t('imFeishuGroupMention'),
+      suggestion: t('imFeishuGroupMentionSuggestion'),
+    });
+
+    checks.push({
+      code: 'feishu_event_subscription_required',
+      level: 'info',
+      message: t('imFeishuEventSubscription'),
+      suggestion: t('imFeishuEventSubscriptionSuggestion'),
+    });
+
+    checks.push({
+      code: 'gateway_running',
+      level: 'info',
+      message: t('imFeishuClaudeCodeHint'),
+    });
+
+    return { platform, testedAt, verdict: this.calculateVerdict(checks), checks };
+  }
+
+  private async testFeishuCodexConnectivity(
+    configOverride?: Partial<IMGatewayConfig>
+  ): Promise<IMConnectivityTestResult> {
+    const checks: IMConnectivityCheck[] = [];
+    const testedAt = Date.now();
+    const platform: Platform = 'feishu';
+
+    const mergedConfig = this.buildMergedConfig(configOverride);
+    const feishuInstances = mergedConfig.feishu?.instances || [];
+    const fsConfig = feishuInstances.find(i => i.enabled && i.appId && i.appSecret)
+      || feishuInstances.find(i => i.appId || i.appSecret)
+      || feishuInstances[0];
+
+    if (!fsConfig?.appId || !fsConfig?.appSecret) {
+      const missing: string[] = [];
+      if (!fsConfig?.appId) missing.push('appId');
+      if (!fsConfig?.appSecret) missing.push('appSecret');
+      checks.push({
+        code: 'missing_credentials',
+        level: 'fail',
+        message: t('imMissingCredentials', { fields: missing.join(', ') }),
+        suggestion: t('imFeishuFillAppIdSecret'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    try {
+      const Lark = await import('@larksuiteoapi/node-sdk');
+      const domain = this.resolveFeishuDomain(fsConfig.domain, Lark);
+      const client = new Lark.Client({
+        appId: fsConfig.appId,
+        appSecret: fsConfig.appSecret,
+        appType: Lark.AppType.SelfBuild,
+        domain,
+      });
+      const response: any = await client.request({
+        method: 'GET',
+        url: '/open-apis/bot/v3/info',
+      });
+      if (response.code !== 0) {
+        throw new Error(response.msg || `code ${response.code}`);
+      }
+      const botName = response.data?.app_name ?? response.data?.bot?.app_name ?? 'unknown';
+      checks.push({
+        code: 'auth_check',
+        level: 'pass',
+        message: t('imFeishuAuthPassed', { botName }),
+      });
+    } catch (error: any) {
+      checks.push({
+        code: 'auth_check',
+        level: 'fail',
+        message: t('imFeishuAuthFailed', { error: error.message }),
+        suggestion: t('imFeishuCheckAppIdSecret'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    const codexStatus = getExternalAgentEnvironmentSnapshot()
+      .engines.find(engine => engine.appType === 'codex');
+    if (!codexStatus?.found) {
+      checks.push({
+        code: 'gateway_running',
+        level: 'fail',
+        message: t('imFeishuCodexCliMissing'),
+        suggestion: t('imFeishuCodexCliMissingSuggestion'),
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    checks.push({
+      code: 'gateway_running',
+      level: 'pass',
+      message: t('imFeishuCodexCliReady', {
+        path: codexStatus.path || codexStatus.command,
+      }),
+    });
+
+    checks.push({
+      code: 'feishu_group_requires_mention',
+      level: 'info',
+      message: t('imFeishuGroupMention'),
+      suggestion: t('imFeishuGroupMentionSuggestion'),
+    });
+
+    checks.push({
+      code: 'feishu_event_subscription_required',
+      level: 'info',
+      message: t('imFeishuEventSubscription'),
+      suggestion: t('imFeishuEventSubscriptionSuggestion'),
+    });
+
+    checks.push({
+      code: 'gateway_running',
+      level: 'info',
+      message: t('imFeishuCodexHint'),
+    });
+
+    return { platform, testedAt, verdict: this.calculateVerdict(checks), checks };
   }
 
   private async testDingTalkOpenClawConnectivity(
@@ -1902,6 +2420,9 @@ export class IMGatewayManager extends EventEmitter {
 
   async sendConversationReply(platform: Platform, conversationId: string, text: string): Promise<boolean> {
     try {
+      if (platform === 'feishu' && isNativeFeishuCliEngine(this.getFeishuAgentEngine?.() ?? null)) {
+        return this.nativeFeishuGateway.sendConversationReply(conversationId, text);
+      }
       switch (platform) {
         default:
           return this.sendNotificationWithMedia(platform, text);
@@ -2321,6 +2842,14 @@ export class IMGatewayManager extends EventEmitter {
     if (domain === 'lark') return Lark.Domain.Lark;
     if (domain === 'feishu') return Lark.Domain.Feishu;
     return domain.replace(/\/+$/, '');
+  }
+
+  private getFeishuEngineDisplayName(engine: FeishuAgentEngine | null): string {
+    if (engine === CoworkAgentEngine.Codex) return 'Codex';
+    if (engine === CoworkAgentEngine.ClaudeCode) return 'Claude Code';
+    if (engine === CoworkAgentEngine.Hermes) return 'Hermes Agent';
+    if (engine === CoworkAgentEngine.OpenClaw) return 'OpenClaw';
+    return 'current Agent engine';
   }
 
   private withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutError: string): Promise<T> {

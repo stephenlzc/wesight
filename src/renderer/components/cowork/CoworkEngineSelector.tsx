@@ -49,10 +49,29 @@ const ENGINE_OPTIONS: Array<{
     labelKey: 'coworkAgentEngineCodex',
     hintKey: 'coworkAgentEngineCodexHint',
   },
+  {
+    engine: CoworkAgentEngine.OpenCode,
+    labelKey: 'coworkAgentEngineOpenCode',
+    hintKey: 'coworkAgentEngineOpenCodeHint',
+  },
+  {
+    engine: CoworkAgentEngine.QwenCode,
+    labelKey: 'coworkAgentEngineQwenCode',
+    hintKey: 'coworkAgentEngineQwenCodeHint',
+  },
+  {
+    engine: CoworkAgentEngine.DeepSeekTui,
+    labelKey: 'coworkAgentEngineDeepSeekTui',
+    hintKey: 'coworkAgentEngineDeepSeekTuiHint',
+  },
 ];
 
 const isCliEngine = (engine: CoworkAgentEngineType): boolean => {
-  return engine === CoworkAgentEngine.ClaudeCode || engine === CoworkAgentEngine.Codex;
+  return engine === CoworkAgentEngine.ClaudeCode
+    || engine === CoworkAgentEngine.Codex
+    || engine === CoworkAgentEngine.OpenCode
+    || engine === CoworkAgentEngine.QwenCode
+    || engine === CoworkAgentEngine.DeepSeekTui;
 };
 
 const CoworkEngineSelector: React.FC<CoworkEngineSelectorProps> = ({

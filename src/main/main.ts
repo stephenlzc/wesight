@@ -1,7 +1,10 @@
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import { randomBytes } from 'crypto';
 import type { WebContents } from 'electron';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, powerSaveBlocker,protocol, screen, session, shell, systemPreferences } from 'electron';
 import fs from 'fs';
+import * as http from 'http';
+import type { AddressInfo } from 'net';
 import os from 'os';
 import path from 'path';
 
@@ -10,10 +13,28 @@ import { migrateScheduledTaskRunsToOpenclaw,migrateScheduledTasksToOpenclaw } fr
 import {
   CoworkAgentEngine as CoworkAgentEngineValue,
   CoworkIpcChannel,
+  ExternalAgentConfigSource,
   isCoworkAgentEngine,
+  isDeepSeekTuiPermissionMode,
   isExternalAgentConfigSource,
   isOpenClawCoworkAgentEngine,
+  isOpenCodePermissionMode,
+  isQwenCodePermissionMode,
+  isRuntimeCallSource,
+  isRuntimeCallStatus,
 } from '../shared/cowork/constants';
+import type { RuntimeMetricsFilters } from '../shared/cowork/runtimeMetrics';
+import { DialogIpcChannel } from '../shared/dialog/constants';
+import {
+  FeishuEngineKey,
+  type FeishuEngineKeyType,
+  FeishuImportSource,
+  FeishuManagementMode,
+  type FeishuManagementModeType,
+  ImIpcChannel,
+  isFeishuEngineKey,
+  isFeishuManagementMode,
+} from '../shared/im/constants';
 import {
   DesktopPetIpcChannel,
   normalizePetConfig,
@@ -44,12 +65,12 @@ import {
   ClaudeRuntimeAdapter,
   type CoworkAgentEngine,
   CoworkEngineRouter,
+  DeepSeekTuiRuntimeAdapter,
   ExternalCliRuntimeAdapter,
   HermesRuntimeAdapter,
   OpenClawRuntimeAdapter,
 } from './libs/agentEngine';
 import { cancelActiveDownload,downloadUpdate, installUpdate } from './libs/appUpdateInstaller';
-import { getExternalAgentEnvironmentSnapshot } from './libs/ccSwitchIntegration';
 import { clearServerModelMetadata,getCurrentApiConfig, resolveCurrentApiConfig, setAuthTokensGetter, setServerBaseUrlGetter, setStoreGetter, updateServerModelMetadata } from './libs/claudeSettings';
 import {
   clearCopilotTokenState,
@@ -62,6 +83,7 @@ import { getCoworkLogPath } from './libs/coworkLogger';
 import { registerProxyTokenRefresher,startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy } from './libs/coworkOpenAICompatProxy';
 import { CoworkRunner } from './libs/coworkRunner';
 import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
+import { DeepSeekTuiRuntimeManager } from './libs/deepSeekTuiRuntimeManager';
 import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints';
 import { mergeEnterpriseOpenclawConfig,resolveEnterpriseConfigPath, syncEnterpriseConfig } from './libs/enterpriseConfigSync';
 import {
@@ -71,7 +93,11 @@ import {
 import {
   applyExternalAgentConfigForEngine,
   importLocalAgentConfigToModelSettings,
+  syncDeepSeekTuiGlobalConfigFromWesightModel,
+  syncOpenCodeGlobalConfigFromWesightModel,
+  syncQwenCodeGlobalConfigFromWesightModel,
 } from './libs/externalAgentConfigSync';
+import { getExternalAgentEnvironmentSnapshot } from './libs/externalAgentEnvironment';
 import {
   type ExternalAgentProviderAppType,
   type ExternalAgentProviderInput,
@@ -79,6 +105,7 @@ import {
 } from './libs/externalAgentProviderStore';
 import { HermesConfigSync } from './libs/hermesConfigSync';
 import { HermesEngineManager, type HermesEngineStatus } from './libs/hermesEngineManager';
+import { syncHermesIMSessions } from './libs/hermesImSessionSync';
 import { exportLogsZip } from './libs/logExport';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import { McpServerManager } from './libs/mcpServerManager';
@@ -103,8 +130,17 @@ import {
   updateMemoryEntry,
   writeBootstrapFile,
 } from './libs/openclawMemoryFile';
+import {
+  detectOpenClawLocalFeishuConfig,
+  importOpenClawLocalFeishuConfig,
+  type OpenClawLocalFeishuDetection,
+} from './libs/openclawSystemRuntime';
 import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
+import {
+  type RuntimeModelSnapshot,
+  RuntimeTelemetryTracker,
+} from './libs/runtimeTelemetryTracker';
 import {
   applySystemProxyEnv,
   resolveSystemProxyUrl,
@@ -113,6 +149,7 @@ import {
 } from './libs/systemProxy';
 import { getLogFilePath, getRecentMainLogEntries,initLogger } from './logger';
 import { McpStore } from './mcpStore';
+import { RuntimeTelemetryStore } from './runtimeTelemetryStore';
 import { SkillManager } from './skillManager';
 import { getSkillServiceManager } from './skillServices';
 import { SqliteStore } from './sqliteStore';
@@ -146,6 +183,7 @@ const MIME_EXTENSION_MAP: Record<string, string> = {
   'application/json': '.json',
   'text/csv': '.csv',
 };
+const IMAGE_FILE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 
 const sanitizeExportFileName = (value: string): string => {
   const sanitized = value.replace(INVALID_FILE_NAME_PATTERN, ' ').replace(/\s+/g, ' ').trim();
@@ -170,6 +208,43 @@ const inferAttachmentExtension = (fileName: string, mimeType?: string): string =
     return MIME_EXTENSION_MAP[normalized] ?? '';
   }
   return '';
+};
+
+const safeDecodePathComponent = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+const normalizeLocalFilePath = (value: string): string => {
+  const trimmed = value.trim().replace(/^localfile:\/\//i, 'file://');
+  if (/^file:\/\//i.test(trimmed)) {
+    try {
+      return safeDecodePathComponent(new URL(trimmed).pathname);
+    } catch {
+      return safeDecodePathComponent(trimmed.replace(/^file:\/\//i, ''));
+    }
+  }
+  return path.resolve(safeDecodePathComponent(trimmed));
+};
+
+const buildUniqueTargetPath = async (directory: string, fileName: string): Promise<string> => {
+  const extension = path.extname(fileName);
+  const baseName = extension ? fileName.slice(0, -extension.length) : fileName;
+
+  for (let index = 0; index < 100; index += 1) {
+    const suffix = index === 0 ? '' : ` (${index})`;
+    const candidate = path.join(directory, `${baseName}${suffix}${extension}`);
+    try {
+      await fs.promises.access(candidate, fs.constants.F_OK);
+    } catch {
+      return candidate;
+    }
+  }
+
+  return path.join(directory, `${baseName}-${Date.now()}${extension}`);
 };
 
 const resolveInlineAttachmentDir = (cwd?: string): string => {
@@ -290,6 +365,27 @@ const sanitizePermissionRequestForIpc = (request: any): any => {
     ...request,
     toolInput: sanitizeIpcPayload(request.toolInput ?? {}),
   };
+};
+
+const normalizeRuntimeMetricsFilters = (input: unknown): RuntimeMetricsFilters => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const record = input as Record<string, unknown>;
+  const filters: RuntimeMetricsFilters = {};
+  const from = Number(record.from);
+  const to = Number(record.to);
+  if (Number.isFinite(from)) filters.from = from;
+  if (Number.isFinite(to)) filters.to = to;
+  if (isCoworkAgentEngine(record.engine)) filters.engine = record.engine;
+  if (typeof record.modelId === 'string' && record.modelId.trim()) filters.modelId = record.modelId.trim();
+  if (typeof record.providerKey === 'string' && record.providerKey.trim()) filters.providerKey = record.providerKey.trim();
+  if (isRuntimeCallStatus(record.status)) filters.status = record.status;
+  if (isRuntimeCallSource(record.source)) filters.source = record.source;
+  if (typeof record.sessionId === 'string' && record.sessionId.trim()) filters.sessionId = record.sessionId.trim();
+  const limit = Number(record.limit);
+  const offset = Number(record.offset);
+  if (Number.isFinite(limit)) filters.limit = limit;
+  if (Number.isFinite(offset)) filters.offset = offset;
+  return filters;
 };
 
 type CaptureRect = { x: number; y: number; width: number; height: number };
@@ -587,6 +683,8 @@ process.on('exit', (code) => {
 
 let store: SqliteStore | null = null;
 let coworkStore: CoworkStore | null = null;
+let runtimeTelemetryStore: RuntimeTelemetryStore | null = null;
+let runtimeTelemetryTracker: RuntimeTelemetryTracker | null = null;
 let coworkRunner: CoworkRunner | null = null;
 let externalAgentProviderStore: ExternalAgentProviderStore | null = null;
 let externalAgentCliInstaller: ExternalAgentCliInstaller | null = null;
@@ -595,6 +693,10 @@ let openClawRuntimeAdapter: OpenClawRuntimeAdapter | null = null;
 let hermesRuntimeAdapter: HermesRuntimeAdapter | null = null;
 let claudeCodeRuntimeAdapter: ExternalCliRuntimeAdapter | null = null;
 let codexRuntimeAdapter: ExternalCliRuntimeAdapter | null = null;
+let openCodeRuntimeAdapter: ExternalCliRuntimeAdapter | null = null;
+let qwenCodeRuntimeAdapter: ExternalCliRuntimeAdapter | null = null;
+let deepSeekTuiRuntimeManager: DeepSeekTuiRuntimeManager | null = null;
+let deepSeekTuiRuntimeAdapter: DeepSeekTuiRuntimeAdapter | null = null;
 let coworkEngineRouter: CoworkEngineRouter | null = null;
 let skillManager: SkillManager | null = null;
 let mcpStore: McpStore | null = null;
@@ -612,10 +714,14 @@ let hermesEngineManager: HermesEngineManager | null = null;
 let hermesConfigSync: HermesConfigSync | null = null;
 let hermesBootstrapPromise: Promise<HermesEngineStatus> | null = null;
 let hermesStatusForwarderBound = false;
+let hermesIMSessionSyncTimer: ReturnType<typeof setInterval> | null = null;
+let hermesIMSessionSyncRunning = false;
 let externalAgentCliInstallerForwarderBound = false;
 let coworkRuntimeForwarderBound = false;
 let memoryMigrationDone = false;
 let preventSleepBlockerId: number | null = null;
+
+const HERMES_IM_SESSION_SYNC_INTERVAL_MS = 4000;
 
 const initStore = async (): Promise<SqliteStore> => {
   if (!storeInitPromise) {
@@ -700,6 +806,18 @@ const bindHermesStatusForwarder = (): void => {
   forwardHermesStatus(manager.getStatus());
 };
 
+const broadcastCoworkSessionsChanged = (): void => {
+  const windows = BrowserWindow.getAllWindows();
+  windows.forEach((win) => {
+    if (win.isDestroyed()) return;
+    try {
+      win.webContents.send('cowork:sessions:changed');
+    } catch (error) {
+      console.error('[Cowork] Failed to broadcast session changes:', error);
+    }
+  });
+};
+
 const getEngineNotReadyResponse = (status: { message?: string }) => {
   const fallbackMessage = 'AI engine is initializing. Please try again in a moment.';
   return {
@@ -752,7 +870,9 @@ const bootstrapOpenClawEngine = async (options: { forceReinstall?: boolean; reas
         await manager.stopGateway();
         console.log(`[OpenClaw] bootstrap: stopGateway done (${elapsed()})`);
       }
-      const ensuredStatus = await manager.ensureReady();
+      const ensuredStatus = await manager.ensureReady({
+        forceReinstall: Boolean(options.forceReinstall),
+      });
       console.log(`[OpenClaw] bootstrap: ensureReady done (${elapsed()}), phase=${ensuredStatus.phase}`);
       if (ensuredStatus.phase !== 'ready' && ensuredStatus.phase !== 'running') {
         return ensuredStatus;
@@ -780,6 +900,13 @@ const getHermesConfigSync = (): HermesConfigSync => {
     hermesConfigSync = new HermesConfigSync({
       engineManager: getHermesEngineManager(),
       getCoworkConfig: () => getCoworkStore().getConfig(),
+      getFeishuInstances: () => {
+        try {
+          return getIMGatewayManager().getIMStore().getFeishuInstances(FeishuEngineKey.Hermes);
+        } catch {
+          return [];
+        }
+      },
     });
   }
   return hermesConfigSync;
@@ -867,6 +994,7 @@ const ensureOpenClawRunningForCowork = async () => {
 };
 
 const ensureHermesRunningForCowork = async () => {
+  bindHermesStatusForwarder();
   const manager = getHermesEngineManager();
   const status = manager.getStatus();
   const syncResult = getHermesConfigSync().sync('ensureRunning');
@@ -881,7 +1009,7 @@ const ensureHermesRunningForCowork = async () => {
     return manager.getStatus();
   }
   if (status.phase === 'starting') {
-    return status;
+    return await manager.startGateway();
   }
   return await manager.startGateway();
 };
@@ -905,11 +1033,93 @@ const getExternalAgentProviderStore = (): ExternalAgentProviderStore => {
   return externalAgentProviderStore;
 };
 
+const getRuntimeTelemetryStore = (): RuntimeTelemetryStore => {
+  if (!runtimeTelemetryStore) {
+    runtimeTelemetryStore = new RuntimeTelemetryStore(getStore().getDatabase());
+  }
+  return runtimeTelemetryStore;
+};
+
+const getConfigSourceForEngine = (engine: CoworkAgentEngine): string | null => {
+  const config = getCoworkStore().getConfig();
+  if (engine === CoworkAgentEngineValue.ClaudeCode) return config.claudeCodeConfigSource;
+  if (engine === CoworkAgentEngineValue.Codex) return config.codexConfigSource;
+  if (engine === CoworkAgentEngineValue.Hermes) return config.hermesConfigSource;
+  if (engine === CoworkAgentEngineValue.OpenCode) return config.opencodeConfigSource;
+  if (engine === CoworkAgentEngineValue.QwenCode) return config.qwenCodeConfigSource;
+  if (engine === CoworkAgentEngineValue.DeepSeekTui) return config.deepseekTuiConfigSource;
+  return ExternalAgentConfigSource.WesightModel;
+};
+
+const getExternalProviderAppTypeForEngine = (
+  engine: CoworkAgentEngine,
+): ExternalAgentProviderAppType | null => {
+  if (engine === CoworkAgentEngineValue.ClaudeCode) return 'claude';
+  if (engine === CoworkAgentEngineValue.Codex) return 'codex';
+  if (engine === CoworkAgentEngineValue.Hermes) return 'hermes';
+  if (engine === CoworkAgentEngineValue.OpenCode) return 'opencode';
+  if (engine === CoworkAgentEngineValue.QwenCode) return 'qwen';
+  if (engine === CoworkAgentEngineValue.DeepSeekTui) return 'deepseek_tui';
+  return null;
+};
+
+const resolveRuntimeModelSnapshot = (engine: CoworkAgentEngine): RuntimeModelSnapshot => {
+  const configSource = getConfigSourceForEngine(engine);
+  const appType = getExternalProviderAppTypeForEngine(engine);
+  if (appType && configSource === ExternalAgentConfigSource.LocalCli) {
+    const provider = getExternalAgentProviderStore().getCurrentProvider(appType);
+    return {
+      providerKey: provider?.id ?? null,
+      providerName: provider?.name ?? null,
+      modelId: provider?.summary.model?.trim() || null,
+      modelName: provider?.summary.model?.trim() || null,
+      configSource,
+    };
+  }
+
+  try {
+    const resolution = resolveCurrentApiConfig();
+    return {
+      providerKey: resolution.providerMetadata?.providerName ?? null,
+      providerName: resolution.providerMetadata?.providerName ?? null,
+      modelId: resolution.config?.model ?? null,
+      modelName: resolution.providerMetadata?.modelName ?? resolution.config?.model ?? null,
+      configSource,
+    };
+  } catch {
+    return {
+      providerKey: null,
+      providerName: null,
+      modelId: null,
+      modelName: null,
+      configSource,
+    };
+  }
+};
+
+const getRuntimeTelemetryTracker = (): RuntimeTelemetryTracker => {
+  if (!runtimeTelemetryTracker) {
+    runtimeTelemetryTracker = new RuntimeTelemetryTracker({
+      store: getCoworkStore(),
+      telemetryStore: getRuntimeTelemetryStore(),
+      getModelSnapshot: resolveRuntimeModelSnapshot,
+    });
+  }
+  return runtimeTelemetryTracker;
+};
+
 const getExternalAgentCliInstaller = (): ExternalAgentCliInstaller => {
   if (!externalAgentCliInstaller) {
     externalAgentCliInstaller = new ExternalAgentCliInstaller();
   }
   return externalAgentCliInstaller;
+};
+
+const getDeepSeekTuiRuntimeManager = (): DeepSeekTuiRuntimeManager => {
+  if (!deepSeekTuiRuntimeManager) {
+    deepSeekTuiRuntimeManager = new DeepSeekTuiRuntimeManager();
+  }
+  return deepSeekTuiRuntimeManager;
 };
 
 const forwardExternalAgentCliInstallProgress = (progress: ExternalAgentCliInstallProgress): void => {
@@ -927,6 +1137,9 @@ const forwardExternalAgentCliInstallProgress = (progress: ExternalAgentCliInstal
 const bindExternalAgentCliInstallerForwarder = (): void => {
   if (externalAgentCliInstallerForwarderBound) return;
   getExternalAgentCliInstaller().onProgress((progress) => {
+    if (progress.appType === 'hermes') {
+      getHermesEngineManager().reportInstallProgress(progress);
+    }
     forwardExternalAgentCliInstallProgress(progress);
   });
   externalAgentCliInstallerForwarderBound = true;
@@ -945,19 +1158,182 @@ const resolveCoworkAgentEngine = (): CoworkAgentEngine => {
   return isCoworkAgentEngine(configured) ? configured : CoworkAgentEngineValue.YdCowork;
 };
 
+type FeishuIMAgentEngine =
+  | typeof CoworkAgentEngineValue.OpenClaw
+  | typeof CoworkAgentEngineValue.Hermes
+  | typeof CoworkAgentEngineValue.ClaudeCode
+  | typeof CoworkAgentEngineValue.Codex;
+
+const resolveFeishuIMAgentEngine = (): FeishuIMAgentEngine | null => {
+  const engine = resolveCoworkAgentEngine();
+  if (
+    engine === CoworkAgentEngineValue.OpenClaw
+    || engine === CoworkAgentEngineValue.Hermes
+    || engine === CoworkAgentEngineValue.ClaudeCode
+    || engine === CoworkAgentEngineValue.Codex
+  ) {
+    return engine;
+  }
+  return null;
+};
+
+const resolveFeishuEngineKey = (): FeishuEngineKeyType => {
+  const engine = resolveFeishuIMAgentEngine();
+  if (engine === CoworkAgentEngineValue.Hermes) return FeishuEngineKey.Hermes;
+  if (engine === CoworkAgentEngineValue.ClaudeCode) return FeishuEngineKey.ClaudeCode;
+  if (engine === CoworkAgentEngineValue.Codex) return FeishuEngineKey.Codex;
+  return FeishuEngineKey.OpenClaw;
+};
+
+const normalizeFeishuEngineKey = (value: unknown): FeishuEngineKeyType => (
+  isFeishuEngineKey(value) ? value : resolveFeishuEngineKey()
+);
+
+const getFeishuManagementMode = (): FeishuManagementModeType => {
+  try {
+    const mode = getIMGatewayManager().getIMStore().getFeishuManagementMode();
+    return isFeishuManagementMode(mode) ? mode : FeishuManagementMode.LocalOpenClaw;
+  } catch {
+    return FeishuManagementMode.LocalOpenClaw;
+  }
+};
+
+const isFeishuManagedByWeSight = (): boolean => (
+  getFeishuManagementMode() === FeishuManagementMode.WesightManaged
+);
+
+const shouldWriteOpenClawFeishuChannel = (): boolean => (
+  isFeishuManagedByWeSight()
+);
+
+const isFeishuManagedByOpenClawConfig = (): boolean => (
+  isFeishuManagedByWeSight()
+  && resolveFeishuIMAgentEngine() === CoworkAgentEngineValue.OpenClaw
+);
+
+const detectLocalOpenClawFeishu = (): OpenClawLocalFeishuDetection => {
+  const detection = detectOpenClawLocalFeishuConfig();
+  const localStatus = getOpenClawEngineManager().getLocalChannelStatus();
+  return {
+    ...detection,
+    configured: detection.configured || Boolean(localStatus.feishuConfigured),
+    enabled: detection.enabled || Boolean(localStatus.feishuRunning),
+  };
+};
+
+const hasLocalOpenClawFeishuConfigured = (): boolean => {
+  const detection = detectLocalOpenClawFeishu();
+  return Boolean(detection.configured || detection.enabled);
+};
+
+const shouldSyncHermesIMSessions = (): boolean => {
+  if (resolveFeishuIMAgentEngine() !== CoworkAgentEngineValue.Hermes) {
+    return false;
+  }
+  try {
+    const config = getIMGatewayManager().getConfig();
+    return Boolean(config.feishu?.instances?.some(instance => (
+      instance.enabled && instance.appId && instance.appSecret
+    )));
+  } catch {
+    return false;
+  }
+};
+
+const syncHermesIMSessionsToCowork = async (reason: string): Promise<void> => {
+  if (hermesIMSessionSyncRunning) {
+    return;
+  }
+  hermesIMSessionSyncRunning = true;
+  try {
+    if (!shouldSyncHermesIMSessions()) {
+      return;
+    }
+    const coworkConfig = getCoworkStore().getConfig();
+    const result = syncHermesIMSessions({
+      coworkStore: getCoworkStore(),
+      imStore: getIMGatewayManager().getIMStore(),
+      cwd: coworkConfig.workingDirectory || os.homedir(),
+      systemPrompt: coworkConfig.systemPrompt,
+      executionMode: coworkConfig.executionMode,
+      agentId: 'main',
+    });
+
+    if (result.changed) {
+      console.log(
+        `[HermesIM] synced ${result.importedSessions} session(s) and ${result.importedMessages} message(s) (${reason})`,
+      );
+      broadcastCoworkSessionsChanged();
+    }
+  } catch (error) {
+    console.warn('[HermesIM] session sync failed:', error);
+  } finally {
+    hermesIMSessionSyncRunning = false;
+  }
+};
+
+const startHermesIMSessionSyncPolling = (): void => {
+  if (hermesIMSessionSyncTimer) {
+    return;
+  }
+  hermesIMSessionSyncTimer = setInterval(() => {
+    void syncHermesIMSessionsToCowork('poll');
+  }, HERMES_IM_SESSION_SYNC_INTERVAL_MS);
+  void syncHermesIMSessionsToCowork('start');
+};
+
+const stopHermesIMSessionSyncPolling = (): void => {
+  if (!hermesIMSessionSyncTimer) {
+    return;
+  }
+  clearInterval(hermesIMSessionSyncTimer);
+  hermesIMSessionSyncTimer = null;
+};
+
 const applyExternalAgentConfigSourceForEngine = (engine: CoworkAgentEngine): void => {
   const config = getCoworkStore().getConfig();
+  if (engine === CoworkAgentEngineValue.OpenClaw) {
+    if (config.openclawConfigSource === ExternalAgentConfigSource.WesightModel) {
+      void syncOpenClawConfig({
+        reason: 'external-agent-config-source',
+        restartGatewayIfRunning: false,
+      });
+    }
+    return;
+  }
   if (engine === CoworkAgentEngineValue.ClaudeCode) {
     applyExternalAgentConfigForEngine(engine, config.claudeCodeConfigSource);
     return;
   }
   if (engine === CoworkAgentEngineValue.Codex) {
     applyExternalAgentConfigForEngine(engine, config.codexConfigSource);
+    return;
+  }
+  if (engine === CoworkAgentEngineValue.Hermes) {
+    getHermesConfigSync().sync('external-agent-config-source');
+    return;
+  }
+  if (engine === CoworkAgentEngineValue.OpenCode) {
+    applyExternalAgentConfigForEngine(engine, config.opencodeConfigSource);
+    return;
+  }
+  if (engine === CoworkAgentEngineValue.QwenCode) {
+    applyExternalAgentConfigForEngine(engine, config.qwenCodeConfigSource);
+    return;
+  }
+  if (engine === CoworkAgentEngineValue.DeepSeekTui) {
+    applyExternalAgentConfigForEngine(engine, config.deepseekTuiConfigSource);
   }
 };
 
 const isExternalAgentProviderAppType = (value: unknown): value is ExternalAgentProviderAppType => (
-  value === 'claude' || value === 'codex'
+  value === 'claude'
+  || value === 'codex'
+  || value === 'hermes'
+  || value === 'openclaw'
+  || value === 'opencode'
+  || value === 'qwen'
+  || value === 'deepseek_tui'
 );
 
 const getMergedExternalAgentEnvironmentSnapshot = () => {
@@ -987,11 +1363,13 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
       },
       getFeishuInstances: () => {
         try {
-          return getIMGatewayManager().getIMStore().getFeishuInstances();
+          return getIMGatewayManager().getIMStore().getFeishuInstances(FeishuEngineKey.OpenClaw);
         } catch {
           return [];
         }
       },
+      isFeishuManagedByOpenClaw: isFeishuManagedByOpenClawConfig,
+      shouldWriteFeishuChannel: shouldWriteOpenClawFeishuChannel,
       getQQInstances: () => {
         try {
           return getIMGatewayManager().getIMStore().getQQInstances();
@@ -1136,6 +1514,14 @@ const syncOpenClawConfig = async (
       changed: false,
       status,
       error: syncResult.error,
+    };
+  }
+
+  if (syncResult.skipped) {
+    return {
+      success: true,
+      changed: false,
+      status: getOpenClawEngineManager().getStatus(),
     };
   }
 
@@ -1344,6 +1730,27 @@ const getCoworkEngineRouter = () => {
         getCurrentProvider: (appType) => getExternalAgentProviderStore().getCurrentProvider(appType),
       });
     }
+    if (!openCodeRuntimeAdapter) {
+      openCodeRuntimeAdapter = new ExternalCliRuntimeAdapter({
+        engine: CoworkAgentEngineValue.OpenCode,
+        store: getCoworkStore(),
+        getCurrentProvider: (appType) => getExternalAgentProviderStore().getCurrentProvider(appType),
+      });
+    }
+    if (!qwenCodeRuntimeAdapter) {
+      qwenCodeRuntimeAdapter = new ExternalCliRuntimeAdapter({
+        engine: CoworkAgentEngineValue.QwenCode,
+        store: getCoworkStore(),
+        getCurrentProvider: (appType) => getExternalAgentProviderStore().getCurrentProvider(appType),
+      });
+    }
+    if (!deepSeekTuiRuntimeAdapter) {
+      deepSeekTuiRuntimeAdapter = new DeepSeekTuiRuntimeAdapter({
+        store: getCoworkStore(),
+        runtimeManager: getDeepSeekTuiRuntimeManager(),
+        getCurrentProvider: (appType) => getExternalAgentProviderStore().getCurrentProvider(appType),
+      });
+    }
     if (!hermesRuntimeAdapter) {
       hermesRuntimeAdapter = new HermesRuntimeAdapter({
         store: getCoworkStore(),
@@ -1358,6 +1765,10 @@ const getCoworkEngineRouter = () => {
       claudeRuntime: claudeRuntimeAdapter,
       claudeCodeRuntime: claudeCodeRuntimeAdapter,
       codexRuntime: codexRuntimeAdapter,
+      openCodeRuntime: openCodeRuntimeAdapter,
+      qwenCodeRuntime: qwenCodeRuntimeAdapter,
+      deepSeekTuiRuntime: deepSeekTuiRuntimeAdapter,
+      telemetryTracker: getRuntimeTelemetryTracker(),
     });
   }
   return coworkEngineRouter;
@@ -1579,24 +1990,50 @@ const getIMGatewayManager = () => {
         coworkRuntime: runtime,
         coworkStore: store,
         ensureCoworkReady: async () => {
-          if (!isOpenClawCoworkAgentEngine(resolveCoworkAgentEngine())) {
+          const engine = resolveCoworkAgentEngine();
+          if (isOpenClawCoworkAgentEngine(engine)) {
+            const status = await ensureOpenClawRunningForCowork();
+            if (status.phase !== 'running') {
+              throw new Error(status.message || 'AI engine is initializing. Please try again in a moment.');
+            }
             return;
           }
-          const status = await ensureOpenClawRunningForCowork();
+          if (engine !== CoworkAgentEngineValue.Hermes) {
+            return;
+          }
+          const status = await ensureHermesRunningForCowork();
           if (status.phase !== 'running') {
             throw new Error(status.message || 'AI engine is initializing. Please try again in a moment.');
           }
         },
         isOpenClawEngine: () => isOpenClawCoworkAgentEngine(resolveCoworkAgentEngine()),
+        getFeishuAgentEngine: resolveFeishuIMAgentEngine,
+        getFeishuManagementMode,
+        detectOpenClawLocalFeishu: detectLocalOpenClawFeishu,
         syncOpenClawConfig: async () => {
           await syncOpenClawConfig({
             reason: 'im-gateway-start',
           });
         },
+        syncHermesConfig: async () => {
+          const syncResult = getHermesConfigSync().sync('im-gateway-start');
+          if (!syncResult.success) {
+            throw new Error(syncResult.error || 'Hermes Agent config sync failed.');
+          }
+        },
         ensureOpenClawGatewayConnected: async () => {
           if (openClawRuntimeAdapter) {
             await openClawRuntimeAdapter.connectGatewayIfNeeded();
           }
+        },
+        hasLocalOpenClawFeishuEnabled: hasLocalOpenClawFeishuConfigured,
+        ensureHermesGatewayReady: async () => {
+          const status = await ensureHermesRunningForCowork();
+          if (status.phase !== 'running') {
+            throw new Error(status.message || 'Hermes Agent gateway is not running.');
+          }
+          startHermesIMSessionSyncPolling();
+          void syncHermesIMSessionsToCowork('gateway-ready');
         },
         getOpenClawGatewayClient: () => openClawRuntimeAdapter?.getGatewayClient() ?? null,
         ensureOpenClawGatewayReady: async () => {
@@ -1722,6 +2159,11 @@ const getIMGatewayManager = () => {
     imGatewayManager.on('error', ({ platform, error }) => {
       console.error(`[IM Gateway] ${platform} error:`, error);
     });
+
+    const feishuMigrationEngineKey = hasLocalOpenClawFeishuConfigured()
+      ? FeishuEngineKey.OpenClaw
+      : resolveFeishuEngineKey();
+    imGatewayManager.getIMStore().migrateLegacyFeishuInstances(feishuMigrationEngineKey);
   }
   return imGatewayManager;
 };
@@ -2063,6 +2505,14 @@ const scheduleReload = (reason: string, webContents?: WebContents) => {
   target.reloadIgnoringCache();
 };
 
+const registerOAuthProtocol = (): void => {
+  const scheme = 'wesight';
+  const appPath = app.getAppPath();
+  const registered = process.defaultApp
+    ? app.setAsDefaultProtocolClient(scheme, process.execPath, [appPath])
+    : app.setAsDefaultProtocolClient(scheme);
+  console.log(`[Auth] custom protocol ${registered ? 'registered' : 'registration failed'} for ${scheme}://`);
+};
 
 // 确保应用程序只有一个实例
 const gotTheLock = app.requestSingleInstanceLock();
@@ -2071,30 +2521,92 @@ if (!gotTheLock) {
   app.quit();
 } else {
   // Register custom protocol for OAuth callback
-  app.setAsDefaultProtocolClient('wesight');
+  registerOAuthProtocol();
 
   // Buffer for deep link auth code received before renderer is ready
   let pendingAuthCode: string | null = null;
+  let desktopAuthCallbackServer: http.Server | null = null;
+  let desktopAuthCallbackUrl: string | null = null;
 
   /**
    * Parse a wesight:// deep link and send (or buffer) the auth code.
    */
+  const deliverAuthCode = (code: string) => {
+    pendingAuthCode = code;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('auth:callback', { code });
+    }
+  };
+
   const handleDeepLink = (url: string) => {
     try {
       const parsed = new URL(url);
       if (parsed.hostname === 'auth' && parsed.pathname === '/callback') {
         const code = parsed.searchParams.get('code');
         if (code) {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('auth:callback', { code });
-          } else {
-            pendingAuthCode = code;
-          }
+          deliverAuthCode(code);
         }
       }
     } catch (e) {
       console.error('[Main] Failed to parse deep link:', e);
     }
+  };
+
+  const ensureDesktopAuthCallbackUrl = async (): Promise<string> => {
+    if (desktopAuthCallbackUrl && desktopAuthCallbackServer?.listening) {
+      return desktopAuthCallbackUrl;
+    }
+
+    const callbackToken = randomBytes(18).toString('base64url');
+    desktopAuthCallbackServer = http.createServer((request, response) => {
+      try {
+        const requestUrl = new URL(request.url || '/', 'http://127.0.0.1');
+        if (requestUrl.pathname !== '/auth/callback' || requestUrl.searchParams.get('token') !== callbackToken) {
+          response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          response.end('Not found');
+          return;
+        }
+
+        const code = requestUrl.searchParams.get('code');
+        if (!code) {
+          response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+          response.end('Missing auth code');
+          return;
+        }
+
+        deliverAuthCode(code);
+        response.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        response.end(`<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>WeSight 登录完成</title>
+  </head>
+  <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:32px;color:#191917;background:#f6f3ea;">
+    <h1>WeSight 登录完成</h1>
+    <p>可以回到 WeSight 桌面端继续使用。</p>
+    <script>window.close();</script>
+  </body>
+</html>`);
+      } catch (error) {
+        response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        response.end('OAuth callback failed');
+        console.error('[Auth] local OAuth callback failed:', error);
+      }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      desktopAuthCallbackServer?.once('error', reject);
+      desktopAuthCallbackServer?.listen(0, '127.0.0.1', resolve);
+    });
+
+    const address = desktopAuthCallbackServer.address() as AddressInfo;
+    desktopAuthCallbackUrl = `http://127.0.0.1:${address.port}/auth/callback?token=${callbackToken}`;
+    console.log('[Auth] local OAuth callback server started');
+    return desktopAuthCallbackUrl;
   };
 
   // Allow renderer to retrieve a buffered auth code on init
@@ -2400,6 +2912,9 @@ if (!gotTheLock) {
           saveAuthTokens(refreshBody.data.accessToken, refreshBody.data.refreshToken || tokens.refreshToken);
           resp = await doFetch(refreshBody.data.accessToken);
         }
+      } else {
+        clearAuthTokens();
+        clearServerModelMetadata();
       }
     }
 
@@ -2450,8 +2965,12 @@ if (!gotTheLock) {
   ipcMain.handle('auth:login', async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
     try {
       const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
-      const finalUrl = `${baseUrl}?source=electron`;
-      await shell.openExternal(finalUrl);
+      const url = new URL(baseUrl);
+      url.searchParams.set('source', 'electron');
+      if (!loginUrl) {
+        url.searchParams.set('desktopCallback', await ensureDesktopAuthCallbackUrl());
+      }
+      await shell.openExternal(url.toString());
       return { success: true };
     } catch (error) {
       console.error('[Auth] login failed:', error);
@@ -2498,7 +3017,13 @@ if (!gotTheLock) {
       const serverBaseUrl = getServerApiBaseUrl();
       // Fetch user profile
       const profileResp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile`);
-      if (!profileResp.ok) return { success: false };
+      if (!profileResp.ok) {
+        if (profileResp.status === 401) {
+          clearAuthTokens();
+          clearServerModelMetadata();
+        }
+        return { success: false };
+      }
       const profileBody = await profileResp.json() as { code: number; data: Record<string, unknown> };
       if (profileBody.code !== 0 || !profileBody.data) return { success: false };
       // Fetch quota separately
@@ -2522,7 +3047,13 @@ if (!gotTheLock) {
       if (!tokens) return { success: false };
       const serverBaseUrl = getServerApiBaseUrl();
       const resp = await fetchWithAuth(`${serverBaseUrl}/api/user/quota`);
-      if (!resp.ok) return { success: false };
+      if (!resp.ok) {
+        if (resp.status === 401) {
+          clearAuthTokens();
+          clearServerModelMetadata();
+        }
+        return { success: false };
+      }
       const body = await resp.json() as { code: number; data: Record<string, unknown> };
       if (body.code !== 0 || !body.data) return { success: false };
       return { success: true, quota: normalizeQuota(body.data) };
@@ -2537,7 +3068,13 @@ if (!gotTheLock) {
       if (!tokens) return { success: false };
       const serverBaseUrl = getServerApiBaseUrl();
       const resp = await fetchWithAuth(`${serverBaseUrl}/api/user/profile-summary`);
-      if (!resp.ok) return { success: false };
+      if (!resp.ok) {
+        if (resp.status === 401) {
+          clearAuthTokens();
+          clearServerModelMetadata();
+        }
+        return { success: false };
+      }
       const body = await resp.json() as { code: number; data: Record<string, unknown> };
       if (body.code !== 0 || !body.data) return { success: false };
       return { success: true, data: body.data };
@@ -2553,7 +3090,11 @@ if (!gotTheLock) {
         const serverBaseUrl = getServerApiBaseUrl();
         await net.fetch(`${serverBaseUrl}/api/auth/logout`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${tokens.accessToken}` },
+          headers: {
+            Authorization: `Bearer ${tokens.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ refreshToken: tokens.refreshToken }),
         }).catch(() => { /* best-effort */ });
       }
       clearAuthTokens();
@@ -2576,9 +3117,17 @@ if (!gotTheLock) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken: tokens.refreshToken }),
       });
-      if (!resp.ok) return { success: false };
+      if (!resp.ok) {
+        clearAuthTokens();
+        clearServerModelMetadata();
+        return { success: false };
+      }
       const body = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
-      if (body.code !== 0 || !body.data) return { success: false };
+      if (body.code !== 0 || !body.data) {
+        clearAuthTokens();
+        clearServerModelMetadata();
+        return { success: false };
+      }
       saveAuthTokens(body.data.accessToken, body.data.refreshToken || tokens.refreshToken);
       return { success: true, accessToken: body.data.accessToken };
     } catch {
@@ -2717,10 +3266,16 @@ if (!gotTheLock) {
 
   ipcMain.handle('openclaw:engine:install', async () => {
     try {
-      const status = await bootstrapOpenClawEngine({
-        forceReinstall: false,
-        reason: 'manual-install',
-      });
+      bindExternalAgentCliInstallerForwarder();
+      const installResult = await getExternalAgentCliInstaller().install('openclaw');
+      if (!installResult.success) {
+        return {
+          success: false,
+          status: getOpenClawEngineManager().getStatus(),
+          error: installResult.error || 'Failed to install OpenClaw CLI',
+        };
+      }
+      const status = await getOpenClawEngineManager().ensureReady();
       return {
         success: status.phase === 'running' || status.phase === 'ready',
         status,
@@ -2737,10 +3292,16 @@ if (!gotTheLock) {
 
   ipcMain.handle('openclaw:engine:retryInstall', async () => {
     try {
-      const status = await bootstrapOpenClawEngine({
-        forceReinstall: true,
-        reason: 'manual-retry',
-      });
+      bindExternalAgentCliInstallerForwarder();
+      const installResult = await getExternalAgentCliInstaller().install('openclaw');
+      if (!installResult.success) {
+        return {
+          success: false,
+          status: getOpenClawEngineManager().getStatus(),
+          error: installResult.error || 'Failed to install OpenClaw CLI',
+        };
+      }
+      const status = await getOpenClawEngineManager().ensureReady();
       return {
         success: status.phase === 'running' || status.phase === 'ready',
         status,
@@ -2798,6 +3359,16 @@ if (!gotTheLock) {
 
   ipcMain.handle('hermes:engine:install', async () => {
     try {
+      bindExternalAgentCliInstallerForwarder();
+      const installResult = await getExternalAgentCliInstaller().install('hermes');
+      if (!installResult.success) {
+        return {
+          success: false,
+          status: getHermesEngineManager().getStatus(),
+          error: installResult.error || 'Failed to install Hermes Agent CLI',
+        };
+      }
+      getCoworkStore().setConfig({ hermesConfigSource: ExternalAgentConfigSource.WesightModel });
       const status = await bootstrapHermesEngine({
         forceReinstall: false,
         reason: 'manual-install',
@@ -2818,6 +3389,16 @@ if (!gotTheLock) {
 
   ipcMain.handle('hermes:engine:retryInstall', async () => {
     try {
+      bindExternalAgentCliInstallerForwarder();
+      const installResult = await getExternalAgentCliInstaller().install('hermes');
+      if (!installResult.success) {
+        return {
+          success: false,
+          status: getHermesEngineManager().getStatus(),
+          error: installResult.error || 'Failed to install Hermes Agent CLI',
+        };
+      }
+      getCoworkStore().setConfig({ hermesConfigSource: ExternalAgentConfigSource.WesightModel });
       const status = await bootstrapHermesEngine({
         forceReinstall: true,
         reason: 'manual-retry',
@@ -2944,9 +3525,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('mcp:fetchMarketplace', async () => {
-    const url = app.isPackaged
-      ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/mcp-marketplace'
-      : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/mcp-marketplace';
+    const url = `${getServerApiBaseUrl()}/api/mcp/marketplace`;
     try {
       const https = await import('https');
       const data = await new Promise<string>((resolve, reject) => {
@@ -3178,6 +3757,7 @@ if (!gotTheLock) {
     try {
       getCoworkEngineRouter().stopSession(sessionId);
       const coworkStoreInstance = getCoworkStore();
+      getRuntimeTelemetryStore().deleteBySession(sessionId);
       coworkStoreInstance.deleteSession(sessionId);
       // Clean up IM session mapping so that new channel messages
       // create a fresh session instead of referencing a deleted one.
@@ -3209,6 +3789,7 @@ if (!gotTheLock) {
         runtime.stopSession(sessionId);
       });
       const coworkStoreInstance = getCoworkStore();
+      getRuntimeTelemetryStore().deleteBySessions(sessionIds);
       coworkStoreInstance.deleteSessions(sessionIds);
       const router = getCoworkEngineRouter();
       for (const sessionId of sessionIds) {
@@ -3610,6 +4191,44 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle(CoworkIpcChannel.RuntimeMetricsSummary, async (_event, input: unknown) => {
+    try {
+      const filters = normalizeRuntimeMetricsFilters(input);
+      return { success: true, summary: getRuntimeTelemetryStore().getSummary(filters) };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to load runtime metrics summary',
+      };
+    }
+  });
+
+  ipcMain.handle(CoworkIpcChannel.RuntimeMetricsCalls, async (_event, input: unknown) => {
+    try {
+      const filters = normalizeRuntimeMetricsFilters(input);
+      return { success: true, ...getRuntimeTelemetryStore().listCalls(filters) };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to load runtime calls',
+      };
+    }
+  });
+
+  ipcMain.handle(CoworkIpcChannel.RuntimeMetricsDetail, async (_event, input: { callId?: unknown }) => {
+    try {
+      if (typeof input?.callId !== 'string' || !input.callId.trim()) {
+        return { success: false, error: 'Invalid runtime call id.' };
+      }
+      return { success: true, ...getRuntimeTelemetryStore().getDetail(input.callId.trim()) };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to load runtime call detail',
+      };
+    }
+  });
+
   ipcMain.handle(CoworkIpcChannel.AgentCliInstall, async (_event, input: { appType?: unknown }) => {
     try {
       if (!isExternalAgentProviderAppType(input?.appType)) {
@@ -3617,6 +4236,17 @@ if (!gotTheLock) {
       }
       bindExternalAgentCliInstallerForwarder();
       const result = await getExternalAgentCliInstaller().install(input.appType);
+      if (result.success && input.appType === 'hermes') {
+        getCoworkStore().setConfig({ hermesConfigSource: ExternalAgentConfigSource.WesightModel });
+        getHermesConfigSync().sync('agent-cli-install');
+        bindHermesStatusForwarder();
+        await getHermesEngineManager().ensureReady();
+      }
+      if (result.success && input.appType === 'openclaw') {
+        getCoworkStore().setConfig({ openclawConfigSource: ExternalAgentConfigSource.WesightModel });
+        bindOpenClawStatusForwarder();
+        await getOpenClawEngineManager().ensureReady();
+      }
       return {
         ...result,
         snapshot: getMergedExternalAgentEnvironmentSnapshot(),
@@ -3634,6 +4264,13 @@ if (!gotTheLock) {
       if (!isExternalAgentProviderAppType(input?.appType)) {
         return { success: false, error: 'Invalid agent CLI app type.' };
       }
+      if (input.appType === 'openclaw') {
+        return {
+          success: false,
+          imported: false,
+          error: 'OpenClaw local config import is not available yet. Use Local CLI Config to keep your existing OpenClaw setup.',
+        };
+      }
       const result = importLocalAgentConfigToModelSettings(getStore(), input.appType);
       if (result.imported) {
         refreshEndpointsTestMode(getStore());
@@ -3650,6 +4287,66 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to import local agent config to model settings',
+      };
+    }
+  });
+
+  ipcMain.handle(CoworkIpcChannel.AgentConfigSyncOpenClawGlobal, async () => {
+    try {
+      getCoworkStore().setConfig({ openclawConfigSource: ExternalAgentConfigSource.WesightModel });
+      const syncResult = await syncOpenClawConfig({
+        reason: 'manual-openclaw-model-sync',
+        restartGatewayIfRunning: false,
+      });
+      return {
+        success: syncResult.success,
+        changed: syncResult.changed,
+        status: syncResult.status ?? getOpenClawEngineManager().getStatus(),
+        error: syncResult.error,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to sync OpenClaw config',
+      };
+    }
+  });
+
+  ipcMain.handle(CoworkIpcChannel.AgentConfigSyncOpenCodeGlobal, async () => {
+    try {
+      syncOpenCodeGlobalConfigFromWesightModel();
+      const list = getExternalAgentProviderStore().listProviders('opencode');
+      return { success: true, ...list };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to sync OpenCode config',
+      };
+    }
+  });
+
+  ipcMain.handle(CoworkIpcChannel.AgentConfigSyncQwenCodeGlobal, async () => {
+    try {
+      syncQwenCodeGlobalConfigFromWesightModel();
+      const list = getExternalAgentProviderStore().listProviders('qwen');
+      return { success: true, ...list };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to sync Qwen Code config',
+      };
+    }
+  });
+
+  ipcMain.handle(CoworkIpcChannel.AgentConfigSyncDeepSeekTuiGlobal, async () => {
+    try {
+      syncDeepSeekTuiGlobalConfigFromWesightModel();
+      const list = getExternalAgentProviderStore().listProviders('deepseek_tui');
+      return { success: true, ...list };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to sync DeepSeek-TUI config',
       };
     }
   });
@@ -3886,6 +4583,13 @@ if (!gotTheLock) {
     agentEngine?: CoworkAgentEngine;
     claudeCodeConfigSource?: unknown;
     codexConfigSource?: unknown;
+    hermesConfigSource?: unknown;
+    opencodeConfigSource?: unknown;
+    opencodePermissionMode?: unknown;
+    qwenCodeConfigSource?: unknown;
+    qwenCodePermissionMode?: unknown;
+    deepseekTuiConfigSource?: unknown;
+    deepseekTuiPermissionMode?: unknown;
     memoryEnabled?: boolean;
     memoryImplicitUpdateEnabled?: boolean;
     memoryLlmJudgeEnabled?: boolean;
@@ -3905,6 +4609,27 @@ if (!gotTheLock) {
         : undefined;
       const normalizedCodexConfigSource = isExternalAgentConfigSource(config.codexConfigSource)
         ? config.codexConfigSource
+        : undefined;
+      const normalizedHermesConfigSource = isExternalAgentConfigSource(config.hermesConfigSource)
+        ? config.hermesConfigSource
+        : undefined;
+      const normalizedOpenCodeConfigSource = isExternalAgentConfigSource(config.opencodeConfigSource)
+        ? config.opencodeConfigSource
+        : undefined;
+      const normalizedOpenCodePermissionMode = isOpenCodePermissionMode(config.opencodePermissionMode)
+        ? config.opencodePermissionMode
+        : undefined;
+      const normalizedQwenCodeConfigSource = isExternalAgentConfigSource(config.qwenCodeConfigSource)
+        ? config.qwenCodeConfigSource
+        : undefined;
+      const normalizedQwenCodePermissionMode = isQwenCodePermissionMode(config.qwenCodePermissionMode)
+        ? config.qwenCodePermissionMode
+        : undefined;
+      const normalizedDeepSeekTuiConfigSource = isExternalAgentConfigSource(config.deepseekTuiConfigSource)
+        ? config.deepseekTuiConfigSource
+        : undefined;
+      const normalizedDeepSeekTuiPermissionMode = isDeepSeekTuiPermissionMode(config.deepseekTuiPermissionMode)
+        ? config.deepseekTuiPermissionMode
         : undefined;
       const normalizedMemoryEnabled = typeof config.memoryEnabled === 'boolean'
         ? config.memoryEnabled
@@ -3933,6 +4658,13 @@ if (!gotTheLock) {
         agentEngine: normalizedAgentEngine,
         claudeCodeConfigSource: normalizedClaudeCodeConfigSource,
         codexConfigSource: normalizedCodexConfigSource,
+        hermesConfigSource: normalizedHermesConfigSource,
+        opencodeConfigSource: normalizedOpenCodeConfigSource,
+        opencodePermissionMode: normalizedOpenCodePermissionMode,
+        qwenCodeConfigSource: normalizedQwenCodeConfigSource,
+        qwenCodePermissionMode: normalizedQwenCodePermissionMode,
+        deepseekTuiConfigSource: normalizedDeepSeekTuiConfigSource,
+        deepseekTuiPermissionMode: normalizedDeepSeekTuiPermissionMode,
         memoryEnabled: normalizedMemoryEnabled,
         memoryImplicitUpdateEnabled: normalizedMemoryImplicitUpdateEnabled,
         memoryLlmJudgeEnabled: normalizedMemoryLlmJudgeEnabled,
@@ -3951,15 +4683,48 @@ if (!gotTheLock) {
       if (normalizedCodexConfigSource !== undefined) {
         nextConfigPreview.codexConfigSource = normalizedCodexConfigSource;
       }
+      if (normalizedHermesConfigSource !== undefined) {
+        nextConfigPreview.hermesConfigSource = normalizedHermesConfigSource;
+      }
+      if (normalizedOpenCodeConfigSource !== undefined) {
+        nextConfigPreview.opencodeConfigSource = normalizedOpenCodeConfigSource;
+      }
+      if (normalizedOpenCodePermissionMode !== undefined) {
+        nextConfigPreview.opencodePermissionMode = normalizedOpenCodePermissionMode;
+      }
+      if (normalizedQwenCodeConfigSource !== undefined) {
+        nextConfigPreview.qwenCodeConfigSource = normalizedQwenCodeConfigSource;
+      }
+      if (normalizedQwenCodePermissionMode !== undefined) {
+        nextConfigPreview.qwenCodePermissionMode = normalizedQwenCodePermissionMode;
+      }
+      if (normalizedDeepSeekTuiConfigSource !== undefined) {
+        nextConfigPreview.deepseekTuiConfigSource = normalizedDeepSeekTuiConfigSource;
+      }
+      if (normalizedDeepSeekTuiPermissionMode !== undefined) {
+        nextConfigPreview.deepseekTuiPermissionMode = normalizedDeepSeekTuiPermissionMode;
+      }
       const shouldApplyExternalAgentConfig =
         (nextConfigPreview.agentEngine === CoworkAgentEngineValue.ClaudeCode
           && (normalizedAgentEngine !== undefined || normalizedClaudeCodeConfigSource !== undefined))
         || (nextConfigPreview.agentEngine === CoworkAgentEngineValue.Codex
-          && (normalizedAgentEngine !== undefined || normalizedCodexConfigSource !== undefined));
+          && (normalizedAgentEngine !== undefined || normalizedCodexConfigSource !== undefined))
+        || (nextConfigPreview.agentEngine === CoworkAgentEngineValue.OpenCode
+          && (normalizedAgentEngine !== undefined || normalizedOpenCodeConfigSource !== undefined))
+        || (nextConfigPreview.agentEngine === CoworkAgentEngineValue.QwenCode
+          && (normalizedAgentEngine !== undefined || normalizedQwenCodeConfigSource !== undefined))
+        || (nextConfigPreview.agentEngine === CoworkAgentEngineValue.DeepSeekTui
+          && (normalizedAgentEngine !== undefined || normalizedDeepSeekTuiConfigSource !== undefined));
       if (shouldApplyExternalAgentConfig) {
         const source = nextConfigPreview.agentEngine === CoworkAgentEngineValue.ClaudeCode
           ? nextConfigPreview.claudeCodeConfigSource
-          : nextConfigPreview.codexConfigSource;
+          : nextConfigPreview.agentEngine === CoworkAgentEngineValue.Codex
+            ? nextConfigPreview.codexConfigSource
+            : nextConfigPreview.agentEngine === CoworkAgentEngineValue.OpenCode
+              ? nextConfigPreview.opencodeConfigSource
+              : nextConfigPreview.agentEngine === CoworkAgentEngineValue.QwenCode
+                ? nextConfigPreview.qwenCodeConfigSource
+                : nextConfigPreview.deepseekTuiConfigSource;
         applyExternalAgentConfigForEngine(nextConfigPreview.agentEngine, source);
       }
       getCoworkStore().setConfig(normalizedConfig);
@@ -3986,6 +4751,9 @@ if (!gotTheLock) {
         && previousConfig.agentEngine !== CoworkAgentEngineValue.OpenClaw;
       const switchedToHermes = normalizedAgentEngine === CoworkAgentEngineValue.Hermes
         && previousConfig.agentEngine !== CoworkAgentEngineValue.Hermes;
+      const switchedAwayFromHermes = normalizedAgentEngine !== undefined
+        && previousConfig.agentEngine === CoworkAgentEngineValue.Hermes
+        && normalizedAgentEngine !== CoworkAgentEngineValue.Hermes;
 
       const openClawConfigRelevant = normalizedAgentEngine === CoworkAgentEngineValue.OpenClaw
         || previousConfig.agentEngine === CoworkAgentEngineValue.OpenClaw
@@ -3997,6 +4765,7 @@ if (!gotTheLock) {
       if (shouldSyncOpenClawConfig) {
         const syncResult = await syncOpenClawConfig({
           reason: 'cowork-config-change',
+          restartGatewayIfRunning: normalizedAgentEngine !== undefined,
         });
         if (!syncResult.success && nextConfig.agentEngine === CoworkAgentEngineValue.OpenClaw) {
           return {
@@ -4014,6 +4783,7 @@ if (!gotTheLock) {
       const shouldSyncHermesConfig = hermesConfigRelevant
         && (normalizedExecutionMode !== undefined
           || normalizedAgentEngine !== undefined
+          || normalizedHermesConfigSource !== undefined
           || (normalizedConfig.workingDirectory !== undefined && normalizedConfig.workingDirectory !== previousWorkingDir));
       if (shouldSyncHermesConfig) {
         const syncResult = getHermesConfigSync().sync('cowork-config-change');
@@ -4033,8 +4803,26 @@ if (!gotTheLock) {
         });
       }
       if (switchedToHermes) {
-        void ensureHermesRunningForCowork().catch((error) => {
-          console.error('[Hermes] Failed to auto-start gateway after engine switch:', error);
+        void ensureHermesRunningForCowork()
+          .then((status) => {
+            if (status.phase === 'running') {
+              startHermesIMSessionSyncPolling();
+              void syncHermesIMSessionsToCowork('engine-switch');
+            }
+          })
+          .catch((error) => {
+            console.error('[Hermes] Failed to auto-start gateway after engine switch:', error);
+          });
+      }
+      if (switchedAwayFromHermes) {
+        stopHermesIMSessionSyncPolling();
+        void getHermesEngineManager().stopGateway().catch((error) => {
+          console.error('[Hermes] Failed to stop gateway after engine switch:', error);
+        });
+      }
+      if (normalizedAgentEngine !== undefined && normalizedAgentEngine !== previousConfig.agentEngine) {
+        void getIMGatewayManager().startAllEnabled().catch((error) => {
+          console.error('[IM] Failed to reconcile enabled gateways after engine switch:', error);
         });
       }
       return { success: true };
@@ -4124,20 +4912,64 @@ if (!gotTheLock) {
   let imConfigSyncPending = false;
   const IM_CONFIG_SYNC_DEBOUNCE_MS = 600;
 
+  const hasEnabledOpenClawManagedIMPlatform = (): boolean => {
+    const config = getIMGatewayManager().getConfig();
+    const feishuManagedByOpenClaw = resolveFeishuIMAgentEngine() === CoworkAgentEngineValue.OpenClaw;
+    const feishuManagedByWeSight = isFeishuManagedByWeSight();
+    const localOpenClawFeishuEnabled = feishuManagedByOpenClaw
+      && !feishuManagedByWeSight
+      && Boolean(getOpenClawEngineManager().getLocalChannelStatus().feishuConfigured);
+    return Boolean(
+      config.dingtalk?.instances?.some(i => i.enabled && i.clientId && i.clientSecret)
+      || localOpenClawFeishuEnabled
+      || (feishuManagedByOpenClaw && feishuManagedByWeSight && config.feishu?.instances?.some(i => i.enabled && i.appId && i.appSecret))
+      || (config.telegram?.enabled && config.telegram.botToken)
+      || (config.discord?.enabled && config.discord.botToken)
+      || config.qq?.instances?.some(i => i.enabled && i.appId && i.appSecret)
+      || (config.wecom?.enabled && config.wecom.botId && config.wecom.secret)
+      || config.weixin?.enabled
+      || (config.popo?.enabled && config.popo.appKey && config.popo.appSecret && config.popo.aesKey)
+      || (config.nim?.enabled && config.nim.appKey && config.nim.account && config.nim.token)
+      || (config['netease-bee']?.enabled && config['netease-bee'].clientId && config['netease-bee'].secret)
+    );
+  };
+
   const doImConfigSync = async () => {
     imConfigSyncRunning = true;
     try {
       await syncOpenClawConfig({
         reason: 'im-config-change',
+        restartGatewayIfRunning: true,
       });
       // After config sync, ensure the runtime adapter's WebSocket client
       // is connected so channel events are received.
-      if (openClawRuntimeAdapter) {
+      if (openClawRuntimeAdapter && hasEnabledOpenClawManagedIMPlatform()) {
         try {
           await openClawRuntimeAdapter.connectGatewayIfNeeded();
         } catch (connectError) {
           console.error('[IM] Failed to connect gateway client after config sync:', connectError);
         }
+      }
+      const hermesSyncResult = getHermesConfigSync().sync('im-config-change');
+      if (!hermesSyncResult.success) {
+        throw new Error(hermesSyncResult.error || 'Hermes Agent config sync failed.');
+      }
+      const hermesStatus = getHermesEngineManager().getStatus();
+      if (hermesSyncResult.changed && hermesStatus.phase === 'running') {
+        const restarted = await getHermesEngineManager().restartGateway();
+        if (restarted.phase !== 'running') {
+          throw new Error(restarted.message || 'Hermes Agent gateway failed to restart after IM config sync.');
+        }
+      }
+      const feishuAgentEngine = resolveFeishuIMAgentEngine();
+      if (feishuAgentEngine === CoworkAgentEngineValue.Hermes) {
+        startHermesIMSessionSyncPolling();
+        void syncHermesIMSessionsToCowork('im-config-change');
+      } else if (
+        feishuAgentEngine === CoworkAgentEngineValue.ClaudeCode
+        || feishuAgentEngine === CoworkAgentEngineValue.Codex
+      ) {
+        await getIMGatewayManager().startAllEnabled();
       }
     } catch (error) {
       console.error('[IM] Debounced config sync failed:', error);
@@ -4163,6 +4995,14 @@ if (!gotTheLock) {
     }, IM_CONFIG_SYNC_DEBOUNCE_MS);
   };
 
+  const shouldSyncRunningIMGatewayConfig = () => (
+    getOpenClawEngineManager().getStatus().phase === 'running'
+    || getHermesEngineManager().getStatus().phase === 'running'
+    || resolveFeishuIMAgentEngine() === CoworkAgentEngineValue.Hermes
+    || resolveFeishuIMAgentEngine() === CoworkAgentEngineValue.ClaudeCode
+    || resolveFeishuIMAgentEngine() === CoworkAgentEngineValue.Codex
+  );
+
   ipcMain.handle('im:config:set', async (_event, config: Partial<IMGatewayConfig>, options?: { syncGateway?: boolean }) => {
     try {
       getIMGatewayManager().setConfig(config, { syncGateway: options?.syncGateway });
@@ -4174,7 +5014,7 @@ if (!gotTheLock) {
       // the global Save button), to avoid frequent gateway restarts on every field blur.
       const hasOpenClawChange = config.telegram || config.discord || config.dingtalk
         || config.feishu || config.qq || config.wecom || config.popo || config.weixin;
-      if (options?.syncGateway && hasOpenClawChange && getOpenClawEngineManager().getStatus().phase === 'running') {
+      if (options?.syncGateway && hasOpenClawChange && shouldSyncRunningIMGatewayConfig()) {
         scheduleImConfigSync();
       }
       return { success: true };
@@ -4191,7 +5031,7 @@ if (!gotTheLock) {
   // persisted to DB via im:config:set (without syncGateway flag).
   ipcMain.handle('im:config:sync', async () => {
     try {
-      if (getOpenClawEngineManager().getStatus().phase === 'running') {
+      if (shouldSyncRunningIMGatewayConfig()) {
         scheduleImConfigSync();
       }
       return { success: true };
@@ -4309,6 +5149,89 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle(ImIpcChannel.FeishuDetectOpenClawLocal, async () => {
+    try {
+      return {
+        success: true,
+        result: detectLocalOpenClawFeishu(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to detect local OpenClaw Feishu config',
+      };
+    }
+  });
+
+  ipcMain.handle(ImIpcChannel.FeishuImportOpenClawLocal, async () => {
+    try {
+      const candidate = importOpenClawLocalFeishuConfig();
+      if (!candidate.canImport) {
+        return {
+          success: false,
+          error: candidate.message || 'No importable local OpenClaw Feishu config was found.',
+        };
+      }
+      const instanceId = crypto.randomUUID();
+      const instance = {
+        ...candidate.instanceConfig,
+        instanceId,
+        instanceName: 'OpenClaw Feishu Bot',
+        enabled: false,
+        importSource: FeishuImportSource.OpenClawLocal,
+      };
+      getIMGatewayManager().getIMStore().setFeishuInstanceConfigForEngine(FeishuEngineKey.OpenClaw, instanceId, {
+        ...instance,
+        engineKey: FeishuEngineKey.OpenClaw,
+      });
+      getIMGatewayManager().getIMStore().setFeishuManagementMode(FeishuManagementMode.LocalOpenClaw);
+      return {
+        success: true,
+        instance,
+        result: detectLocalOpenClawFeishu(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to import local OpenClaw Feishu config',
+      };
+    }
+  });
+
+  ipcMain.handle(ImIpcChannel.FeishuSetManagementMode, async (_event, mode: unknown) => {
+    try {
+      if (!isFeishuManagementMode(mode)) {
+        return {
+          success: false,
+          error: 'Invalid Feishu management mode.',
+        };
+      }
+      getIMGatewayManager().getIMStore().setFeishuManagementMode(mode);
+      if (shouldSyncRunningIMGatewayConfig()) {
+        scheduleImConfigSync();
+      }
+      if (mode === FeishuManagementMode.LocalOpenClaw) {
+        await getIMGatewayManager().stopGateway('feishu').catch((error) => {
+          console.warn('[IM] Failed to stop native Feishu gateway after management mode switch:', error);
+        });
+      } else {
+        await getIMGatewayManager().startAllEnabled().catch((error) => {
+          console.warn('[IM] Failed to restart Feishu gateway after management mode switch:', error);
+        });
+      }
+      return {
+        success: true,
+        mode,
+        status: getIMGatewayManager().getStatus().feishu.openClawLocal,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update Feishu management mode',
+      };
+    }
+  });
+
   // ---- Pairing IPC handlers ----
 
   ipcMain.handle('im:pairing:list', async (_event, platform: string) => {
@@ -4385,7 +5308,7 @@ if (!gotTheLock) {
   ipcMain.handle('im:dingtalk:instance:delete', async (_event, instanceId: string) => {
     try {
       getIMGatewayManager().getIMStore().deleteDingTalkInstance(instanceId);
-      if (getOpenClawEngineManager().getStatus().phase === 'running') {
+      if (shouldSyncRunningIMGatewayConfig()) {
         scheduleImConfigSync();
       }
       return { success: true };
@@ -4400,7 +5323,7 @@ if (!gotTheLock) {
   ipcMain.handle('im:dingtalk:instance:config:set', async (_event, instanceId: string, config: any, options?: { syncGateway?: boolean }) => {
     try {
       getIMGatewayManager().getIMStore().setDingTalkInstanceConfig(instanceId, config);
-      if (options?.syncGateway && getOpenClawEngineManager().getStatus().phase === 'running') {
+      if (options?.syncGateway && shouldSyncRunningIMGatewayConfig()) {
         scheduleImConfigSync();
       }
       return { success: true };
@@ -4435,7 +5358,7 @@ if (!gotTheLock) {
   ipcMain.handle('im:qq:instance:delete', async (_event, instanceId: string) => {
     try {
       getIMGatewayManager().getIMStore().deleteQQInstance(instanceId);
-      if (getOpenClawEngineManager().getStatus().phase === 'running') {
+      if (shouldSyncRunningIMGatewayConfig()) {
         scheduleImConfigSync();
       }
       return { success: true };
@@ -4450,7 +5373,7 @@ if (!gotTheLock) {
   ipcMain.handle('im:qq:instance:config:set', async (_event, instanceId: string, config: any, options?: { syncGateway?: boolean }) => {
     try {
       getIMGatewayManager().getIMStore().setQQInstanceConfig(instanceId, config);
-      if (options?.syncGateway && getOpenClawEngineManager().getStatus().phase === 'running') {
+      if (options?.syncGateway && shouldSyncRunningIMGatewayConfig()) {
         scheduleImConfigSync();
       }
       return { success: true };
@@ -4463,16 +5386,18 @@ if (!gotTheLock) {
   });
 
   // Feishu Multi-Instance handlers
-  ipcMain.handle('im:feishu:instance:add', async (_event, name: string) => {
+  ipcMain.handle('im:feishu:instance:add', async (_event, name: string, engineKeyValue?: unknown) => {
     try {
+      const engineKey = normalizeFeishuEngineKey(engineKeyValue);
       const instanceId = crypto.randomUUID();
       const { DEFAULT_FEISHU_OPENCLAW_CONFIG: defaults } = await import('./im/types');
       const instance = {
         ...defaults,
         instanceId,
         instanceName: name || 'Feishu Bot',
+        engineKey,
       };
-      getIMGatewayManager().getIMStore().setFeishuInstanceConfig(instanceId, instance);
+      getIMGatewayManager().getIMStore().setFeishuInstanceConfigForEngine(engineKey, instanceId, instance);
       return { success: true, instance };
     } catch (error) {
       return {
@@ -4482,10 +5407,11 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:feishu:instance:delete', async (_event, instanceId: string) => {
+  ipcMain.handle('im:feishu:instance:delete', async (_event, instanceId: string, engineKeyValue?: unknown) => {
     try {
-      getIMGatewayManager().getIMStore().deleteFeishuInstance(instanceId);
-      if (getOpenClawEngineManager().getStatus().phase === 'running') {
+      const engineKey = normalizeFeishuEngineKey(engineKeyValue);
+      getIMGatewayManager().getIMStore().deleteFeishuInstanceForEngine(engineKey, instanceId);
+      if (shouldSyncRunningIMGatewayConfig()) {
         scheduleImConfigSync();
       }
       return { success: true };
@@ -4497,10 +5423,14 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('im:feishu:instance:config:set', async (_event, instanceId: string, config: any, options?: { syncGateway?: boolean }) => {
+  ipcMain.handle('im:feishu:instance:config:set', async (_event, instanceId: string, config: any, options?: { syncGateway?: boolean; engineKey?: unknown }) => {
     try {
-      getIMGatewayManager().getIMStore().setFeishuInstanceConfig(instanceId, config);
-      if (options?.syncGateway && getOpenClawEngineManager().getStatus().phase === 'running') {
+      const engineKey = normalizeFeishuEngineKey(options?.engineKey ?? config?.engineKey);
+      getIMGatewayManager().getIMStore().setFeishuInstanceConfigForEngine(engineKey, instanceId, {
+        ...config,
+        engineKey,
+      });
+      if (options?.syncGateway && shouldSyncRunningIMGatewayConfig()) {
         scheduleImConfigSync();
       }
       return { success: true };
@@ -4684,6 +5614,59 @@ if (!gotTheLock) {
     }
     return { success: true, paths: result.filePaths };
   });
+
+  ipcMain.handle(
+    DialogIpcChannel.SaveLocalImageToDirectory,
+    async (
+      event,
+      options?: { sourcePath?: string; fileName?: string }
+    ): Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }> => {
+      try {
+        const rawSourcePath = typeof options?.sourcePath === 'string' ? options.sourcePath.trim() : '';
+        if (!rawSourcePath) {
+          return { success: false, error: 'Missing image path' };
+        }
+
+        const sourcePath = normalizeLocalFilePath(rawSourcePath);
+        const sourceStat = await fs.promises.stat(sourcePath);
+        if (!sourceStat.isFile()) {
+          return { success: false, error: 'Image path is not a file' };
+        }
+
+        const sourceExtension = path.extname(sourcePath).toLowerCase();
+        if (!IMAGE_FILE_EXTENSIONS.has(sourceExtension)) {
+          return { success: false, error: 'Unsupported image file type' };
+        }
+
+        const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+        const dialogOptions = {
+          defaultPath: app.getPath('downloads'),
+          properties: ['openDirectory', 'createDirectory'] as ('openDirectory' | 'createDirectory')[],
+        };
+        const result = ownerWindow
+          ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
+          : await dialog.showOpenDialog(dialogOptions);
+        if (result.canceled || result.filePaths.length === 0) {
+          return { success: true, canceled: true };
+        }
+
+        const selectedDirectory = result.filePaths[0];
+        const sourceName = path.basename(sourcePath);
+        const safeFileName = sanitizeAttachmentFileName(options?.fileName || sourceName);
+        const finalName = path.extname(safeFileName)
+          ? safeFileName
+          : `${safeFileName}${sourceExtension}`;
+        const targetPath = await buildUniqueTargetPath(selectedDirectory, finalName);
+        await fs.promises.copyFile(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
+        return { success: true, canceled: false, path: targetPath };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to save image',
+        };
+      }
+    }
+  );
 
   ipcMain.handle(
     'dialog:saveInlineFile',
@@ -5368,6 +6351,7 @@ if (!gotTheLock) {
   const runAppCleanup = async (): Promise<void> => {
     console.log('[Main] App is quitting, starting cleanup...');
     destroyTray();
+    stopHermesIMSessionSyncPolling();
     if (desktopPetWindow && !desktopPetWindow.isDestroyed()) {
       desktopPetWindow.close();
       desktopPetWindow = null;
@@ -5696,6 +6680,10 @@ if (!gotTheLock) {
     if (!startupSync.success) {
       console.error('[OpenClaw] Startup config sync failed:', startupSync.error);
     }
+    const hermesStartupSync = getHermesConfigSync().sync('startup');
+    if (!hermesStartupSync.success) {
+      console.error('[Hermes] Startup config sync failed:', hermesStartupSync.error);
+    }
     if (isOpenClawCoworkAgentEngine(resolveCoworkAgentEngine())) {
       void ensureOpenClawRunningForCowork().then(() => {
         // Start cron polling once the gateway is confirmed running.
@@ -5810,9 +6798,16 @@ if (!gotTheLock) {
     }
 
     // Auto-reconnect IM bots that were enabled before restart
-    getIMGatewayManager().startAllEnabled().catch((error) => {
-      console.error('[IM] Failed to auto-start enabled gateways:', error);
-    });
+    getIMGatewayManager().startAllEnabled()
+      .then(() => {
+        if (resolveFeishuIMAgentEngine() === CoworkAgentEngineValue.Hermes) {
+          startHermesIMSessionSyncPolling();
+          void syncHermesIMSessionsToCowork('startup');
+        }
+      })
+      .catch((error) => {
+        console.error('[IM] Failed to auto-start enabled gateways:', error);
+      });
 
     // Reconnect OpenClaw gateway WS after system wake from sleep/suspend
     powerMonitor.on('resume', () => {

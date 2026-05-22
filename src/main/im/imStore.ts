@@ -4,42 +4,51 @@
  */
 
 import Database from 'better-sqlite3';
+
+import {
+  FEISHU_ENGINE_KEYS,
+  FeishuEngineKey,
+  type FeishuEngineKeyType,
+  FeishuManagementMode,
+  type FeishuManagementModeType,
+  isFeishuEngineKey,
+  isFeishuManagementMode,
+} from '../../shared/im/constants';
 import { PlatformRegistry } from '../../shared/platform';
 import {
-  IMGatewayConfig,
-  DingTalkOpenClawConfig,
+  DEFAULT_DINGTALK_MULTI_INSTANCE_CONFIG,
+  DEFAULT_DINGTALK_OPENCLAW_CONFIG,
+  DEFAULT_DISCORD_OPENCLAW_CONFIG,
+  DEFAULT_FEISHU_OPENCLAW_CONFIG,
+  DEFAULT_IM_SETTINGS,
+  DEFAULT_NETEASE_BEE_CONFIG,
+  DEFAULT_NIM_CONFIG,
+  DEFAULT_POPO_CONFIG,
+  DEFAULT_QQ_CONFIG,
+  DEFAULT_QQ_MULTI_INSTANCE_CONFIG,
+  DEFAULT_TELEGRAM_OPENCLAW_CONFIG,
+  DEFAULT_WECOM_CONFIG,
+  DEFAULT_WEIXIN_CONFIG,
   DingTalkInstanceConfig,
   DingTalkMultiInstanceConfig,
-  FeishuOpenClawConfig,
+  DingTalkOpenClawConfig,
+  DiscordOpenClawConfig,
   FeishuInstanceConfig,
   FeishuMultiInstanceConfig,
-  TelegramOpenClawConfig,
+  FeishuOpenClawConfig,
+  IMGatewayConfig,
+  IMSessionMapping,
+  IMSettings,
+  NeteaseBeeChanConfig,
+  NimConfig,
+  Platform,
+  PopoOpenClawConfig,
   QQConfig,
   QQInstanceConfig,
   QQMultiInstanceConfig,
-  DiscordOpenClawConfig,
-  NimConfig,
-  NeteaseBeeChanConfig,
+  TelegramOpenClawConfig,
   WecomOpenClawConfig,
-  PopoOpenClawConfig,
   WeixinOpenClawConfig,
-  IMSettings,
-  Platform,
-  IMSessionMapping,
-  DEFAULT_DINGTALK_OPENCLAW_CONFIG,
-  DEFAULT_DINGTALK_MULTI_INSTANCE_CONFIG,
-  DEFAULT_FEISHU_OPENCLAW_CONFIG,
-  DEFAULT_FEISHU_MULTI_INSTANCE_CONFIG,
-  DEFAULT_TELEGRAM_OPENCLAW_CONFIG,
-  DEFAULT_QQ_CONFIG,
-  DEFAULT_QQ_MULTI_INSTANCE_CONFIG,
-  DEFAULT_DISCORD_OPENCLAW_CONFIG,
-  DEFAULT_NIM_CONFIG,
-  DEFAULT_NETEASE_BEE_CONFIG,
-  DEFAULT_WECOM_CONFIG,
-  DEFAULT_POPO_CONFIG,
-  DEFAULT_WEIXIN_CONFIG,
-  DEFAULT_IM_SETTINGS,
 } from './types';
 
 interface StoredConversationReplyRoute {
@@ -56,6 +65,43 @@ interface SessionMappingRow {
   created_at: number;
   last_active_at: number;
 }
+
+const DEFAULT_FEISHU_ENGINE_KEY = FeishuEngineKey.OpenClaw;
+
+const buildFeishuConfigKey = (engineKey: FeishuEngineKeyType, instanceId: string): string => (
+  `feishu:${engineKey}:${instanceId}`
+);
+
+const parseFeishuConfigKey = (
+  key: string,
+): { engineKey: FeishuEngineKeyType | null; instanceId: string; legacy: boolean } | null => {
+  if (!key.startsWith('feishu:')) return null;
+  const parts = key.split(':');
+  if (parts.length === 2) {
+    return {
+      engineKey: null,
+      instanceId: parts[1],
+      legacy: true,
+    };
+  }
+  if (parts.length === 3 && isFeishuEngineKey(parts[1])) {
+    return {
+      engineKey: parts[1],
+      instanceId: parts[2],
+      legacy: false,
+    };
+  }
+  return null;
+};
+
+const normalizeFeishuInstance = (
+  config: FeishuInstanceConfig,
+  engineKey: FeishuEngineKeyType,
+): FeishuInstanceConfig => ({
+  ...DEFAULT_FEISHU_OPENCLAW_CONFIG,
+  ...config,
+  engineKey,
+});
 
 export class IMStore {
   private db: Database.Database;
@@ -451,7 +497,9 @@ export class IMStore {
     const existingFeishuInstances = this.db
       .prepare('SELECT key FROM im_config WHERE key LIKE ?')
       .all('feishu:%') as Array<{ key: string }>;
-    if (oldFeishuSingleRow && !existingFeishuInstances.length) {
+    const hasFeishuInstances = existingFeishuInstances
+      .some(row => Boolean(parseFeishuConfigKey(row.key)));
+    if (oldFeishuSingleRow && !hasFeishuInstances) {
       try {
         const oldConfig = JSON.parse(oldFeishuSingleRow.value) as FeishuOpenClawConfig;
         const instanceId = crypto.randomUUID();
@@ -460,11 +508,12 @@ export class IMStore {
           ...oldConfig,
           instanceId,
           instanceName: 'Feishu Bot 1',
+          engineKey: DEFAULT_FEISHU_ENGINE_KEY,
         };
         const now = Date.now();
         this.db
           .prepare('INSERT INTO im_config (key, value, updated_at) VALUES (?, ?, ?)')
-          .run(`feishu:${instanceId}`, JSON.stringify(instanceConfig), now);
+          .run(buildFeishuConfigKey(DEFAULT_FEISHU_ENGINE_KEY, instanceId), JSON.stringify(instanceConfig), now);
         this.db.prepare('DELETE FROM im_config WHERE key = ?').run('feishuOpenClaw');
         // Migrate session mappings
         this.db
@@ -570,7 +619,7 @@ export class IMStore {
 
   // ==================== Full Config Operations ====================
 
-  getConfig(): IMGatewayConfig {
+  getConfig(feishuEngineKey: FeishuEngineKeyType = DEFAULT_FEISHU_ENGINE_KEY): IMGatewayConfig {
     const dingtalkMulti = this.getDingTalkMultiInstanceConfig();
     const telegram =
       this.getConfigValue<TelegramOpenClawConfig>('telegramOpenClaw') ??
@@ -582,7 +631,7 @@ export class IMStore {
     const neteaseBeeChan =
       this.getConfigValue<NeteaseBeeChanConfig>('netease-bee') ?? DEFAULT_NETEASE_BEE_CONFIG;
     const qqMulti = this.getQQMultiInstanceConfig();
-    const feishuMulti = this.getFeishuMultiInstanceConfig();
+    const feishuMulti = this.getFeishuMultiInstanceConfig(feishuEngineKey);
     const wecom = this.getConfigValue<WecomOpenClawConfig>('wecomOpenClaw') ?? DEFAULT_WECOM_CONFIG;
     const popo = this.getConfigValue<PopoOpenClawConfig>('popo') ?? DEFAULT_POPO_CONFIG;
     const weixin = this.getConfigValue<WeixinOpenClawConfig>('weixin') ?? DEFAULT_WEIXIN_CONFIG;
@@ -614,12 +663,12 @@ export class IMStore {
     };
   }
 
-  setConfig(config: Partial<IMGatewayConfig>): void {
+  setConfig(config: Partial<IMGatewayConfig>, feishuEngineKey: FeishuEngineKeyType = DEFAULT_FEISHU_ENGINE_KEY): void {
     if (config.dingtalk) {
       this.setDingTalkMultiInstanceConfig(config.dingtalk);
     }
     if (config.feishu) {
-      this.setFeishuMultiInstanceConfig(config.feishu);
+      this.setFeishuMultiInstanceConfig(config.feishu, feishuEngineKey);
     }
     if (config.telegram) {
       this.setTelegramOpenClawConfig(config.telegram);
@@ -742,16 +791,61 @@ export class IMStore {
 
   // ==================== Feishu Multi-Instance Config ====================
 
-  getFeishuInstances(): FeishuInstanceConfig[] {
+  migrateLegacyFeishuInstances(targetEngineKey: FeishuEngineKeyType): boolean {
+    const normalizedTarget = isFeishuEngineKey(targetEngineKey) ? targetEngineKey : DEFAULT_FEISHU_ENGINE_KEY;
+    const rows = this.db
+      .prepare('SELECT key, value, updated_at FROM im_config WHERE key LIKE ?')
+      .all('feishu:%') as Array<{ key: string; value: string; updated_at: number }>;
+    const legacyRows = rows.filter(row => parseFeishuConfigKey(row.key)?.legacy);
+    if (legacyRows.length === 0) return false;
+
+    const now = Date.now();
+    this.db.transaction(() => {
+      for (const row of legacyRows) {
+        const parsed = parseFeishuConfigKey(row.key);
+        if (!parsed) continue;
+        try {
+          const config = JSON.parse(row.value) as FeishuInstanceConfig;
+          const instance = normalizeFeishuInstance({
+            ...config,
+            instanceId: config.instanceId || parsed.instanceId,
+          }, normalizedTarget);
+          const nextKey = buildFeishuConfigKey(normalizedTarget, instance.instanceId);
+          const existing = this.db
+            .prepare('SELECT key FROM im_config WHERE key = ?')
+            .get(nextKey) as { key: string } | undefined;
+          if (!existing) {
+            this.db
+              .prepare('INSERT INTO im_config (key, value, updated_at) VALUES (?, ?, ?)')
+              .run(nextKey, JSON.stringify(instance), now);
+          }
+          this.db.prepare('DELETE FROM im_config WHERE key = ?').run(row.key);
+        } catch {
+          // Ignore malformed legacy rows.
+        }
+      }
+    })();
+
+    console.log(`[IMStore] migrated ${legacyRows.length} legacy Feishu instances to ${normalizedTarget}`);
+    return true;
+  }
+
+  getFeishuInstances(engineKey: FeishuEngineKeyType = DEFAULT_FEISHU_ENGINE_KEY): FeishuInstanceConfig[] {
+    const normalizedEngineKey = isFeishuEngineKey(engineKey) ? engineKey : DEFAULT_FEISHU_ENGINE_KEY;
     const rows = this.db
       .prepare('SELECT key, value FROM im_config WHERE key LIKE ?')
-      .all('feishu:%') as Array<{ key: string; value: string }>;
+      .all(`feishu:${normalizedEngineKey}:%`) as Array<{ key: string; value: string }>;
     if (!rows.length) return [];
     const instances: FeishuInstanceConfig[] = [];
     for (const row of rows) {
       try {
+        const parsed = parseFeishuConfigKey(row.key);
+        if (!parsed || parsed.engineKey !== normalizedEngineKey) continue;
         const config = JSON.parse(row.value) as FeishuInstanceConfig;
-        instances.push({ ...DEFAULT_FEISHU_OPENCLAW_CONFIG, ...config });
+        instances.push(normalizeFeishuInstance({
+          ...config,
+          instanceId: config.instanceId || parsed.instanceId,
+        }, normalizedEngineKey));
       } catch {
         // Ignore parse errors
       }
@@ -759,29 +853,74 @@ export class IMStore {
     return instances;
   }
 
-  getFeishuInstanceConfig(instanceId: string): FeishuInstanceConfig | null {
-    const stored = this.getConfigValue<FeishuInstanceConfig>(`feishu:${instanceId}`);
-    if (!stored) return null;
-    return { ...DEFAULT_FEISHU_OPENCLAW_CONFIG, ...stored };
+  getAllFeishuProfiles(): Partial<Record<FeishuEngineKeyType, { engineKey: FeishuEngineKeyType; instances: FeishuInstanceConfig[] }>> {
+    const profiles: Partial<Record<FeishuEngineKeyType, { engineKey: FeishuEngineKeyType; instances: FeishuInstanceConfig[] }>> = {};
+    for (const engineKey of FEISHU_ENGINE_KEYS) {
+      profiles[engineKey] = {
+        engineKey,
+        instances: this.getFeishuInstances(engineKey),
+      };
+    }
+    return profiles;
   }
 
-  setFeishuInstanceConfig(instanceId: string, config: Partial<FeishuInstanceConfig>): void {
-    const current = this.getFeishuInstanceConfig(instanceId);
+  getFeishuConflicts(): FeishuMultiInstanceConfig['conflicts'] {
+    const byAppId = new Map<string, Array<{ engineKey: FeishuEngineKeyType; instanceId: string }>>();
+    for (const engineKey of FEISHU_ENGINE_KEYS) {
+      for (const instance of this.getFeishuInstances(engineKey)) {
+        const appId = instance.appId.trim();
+        if (!appId) continue;
+        const entries = byAppId.get(appId) ?? [];
+        entries.push({ engineKey, instanceId: instance.instanceId });
+        byAppId.set(appId, entries);
+      }
+    }
+
+    return Array.from(byAppId.entries())
+      .filter(([, entries]) => new Set(entries.map(entry => entry.engineKey)).size > 1)
+      .map(([appId, entries]) => ({
+        appId,
+        engineKeys: Array.from(new Set(entries.map(entry => entry.engineKey))),
+        instanceIds: entries.map(entry => entry.instanceId),
+      }));
+  }
+
+  getFeishuInstanceConfig(instanceId: string, engineKey: FeishuEngineKeyType = DEFAULT_FEISHU_ENGINE_KEY): FeishuInstanceConfig | null {
+    const normalizedEngineKey = isFeishuEngineKey(engineKey) ? engineKey : DEFAULT_FEISHU_ENGINE_KEY;
+    const stored = this.getConfigValue<FeishuInstanceConfig>(buildFeishuConfigKey(normalizedEngineKey, instanceId));
+    if (!stored) return null;
+    return normalizeFeishuInstance({ ...stored, instanceId }, normalizedEngineKey);
+  }
+
+  setFeishuInstanceConfigForEngine(
+    engineKey: FeishuEngineKeyType,
+    instanceId: string,
+    config: Partial<FeishuInstanceConfig>,
+  ): void {
+    const normalizedEngineKey = isFeishuEngineKey(engineKey) ? engineKey : DEFAULT_FEISHU_ENGINE_KEY;
+    const current = this.getFeishuInstanceConfig(instanceId, normalizedEngineKey);
+    const key = buildFeishuConfigKey(normalizedEngineKey, instanceId);
     if (current) {
-      this.setConfigValue(`feishu:${instanceId}`, { ...current, ...config });
+      this.setConfigValue(key, normalizeFeishuInstance({ ...current, ...config, instanceId }, normalizedEngineKey));
     } else {
-      this.setConfigValue(`feishu:${instanceId}`, {
+      this.setConfigValue(key, normalizeFeishuInstance({
         ...DEFAULT_FEISHU_OPENCLAW_CONFIG,
         instanceId,
         instanceName: config.instanceName || 'Feishu Bot',
         ...config,
-      });
+      } as FeishuInstanceConfig, normalizedEngineKey));
     }
   }
 
-  deleteFeishuInstance(instanceId: string): void {
+  setFeishuInstanceConfig(instanceId: string, config: Partial<FeishuInstanceConfig>): void {
+    const engineKey = isFeishuEngineKey(config.engineKey) ? config.engineKey : DEFAULT_FEISHU_ENGINE_KEY;
+    this.setFeishuInstanceConfigForEngine(engineKey, instanceId, config);
+  }
+
+  deleteFeishuInstanceForEngine(engineKey: FeishuEngineKeyType, instanceId: string): void {
+    const normalizedEngineKey = isFeishuEngineKey(engineKey) ? engineKey : DEFAULT_FEISHU_ENGINE_KEY;
     const now = Date.now();
-    this.db.prepare('DELETE FROM im_config WHERE key = ?').run(`feishu:${instanceId}`);
+    this.db.prepare('DELETE FROM im_config WHERE key = ?').run(buildFeishuConfigKey(normalizedEngineKey, instanceId));
     // Clean up session mappings for this instance
     this.db
       .prepare('DELETE FROM im_session_mappings WHERE platform = ?')
@@ -789,16 +928,31 @@ export class IMStore {
     void now;
   }
 
-  getFeishuMultiInstanceConfig(): FeishuMultiInstanceConfig {
-    const instances = this.getFeishuInstances();
-    if (instances.length === 0) return DEFAULT_FEISHU_MULTI_INSTANCE_CONFIG;
-    return { instances };
+  deleteFeishuInstance(instanceId: string): void {
+    this.deleteFeishuInstanceForEngine(DEFAULT_FEISHU_ENGINE_KEY, instanceId);
   }
 
-  setFeishuMultiInstanceConfig(config: FeishuMultiInstanceConfig): void {
+  getFeishuMultiInstanceConfig(engineKey: FeishuEngineKeyType = DEFAULT_FEISHU_ENGINE_KEY): FeishuMultiInstanceConfig {
+    const normalizedEngineKey = isFeishuEngineKey(engineKey) ? engineKey : DEFAULT_FEISHU_ENGINE_KEY;
+    const instances = this.getFeishuInstances(normalizedEngineKey);
+    return {
+      activeEngineKey: normalizedEngineKey,
+      instances,
+      profiles: this.getAllFeishuProfiles(),
+      conflicts: this.getFeishuConflicts(),
+    };
+  }
+
+  setFeishuMultiInstanceConfig(config: FeishuMultiInstanceConfig, engineKey: FeishuEngineKeyType = DEFAULT_FEISHU_ENGINE_KEY): void {
+    const normalizedEngineKey = isFeishuEngineKey(config.activeEngineKey)
+      ? config.activeEngineKey
+      : (isFeishuEngineKey(engineKey) ? engineKey : DEFAULT_FEISHU_ENGINE_KEY);
     // Write each instance individually
     for (const inst of config.instances) {
-      this.setFeishuInstanceConfig(inst.instanceId, inst);
+      this.setFeishuInstanceConfigForEngine(normalizedEngineKey, inst.instanceId, {
+        ...inst,
+        engineKey: normalizedEngineKey,
+      });
     }
   }
 
@@ -968,6 +1122,15 @@ export class IMStore {
   setIMSettings(settings: Partial<IMSettings>): void {
     const current = this.getIMSettings();
     this.setConfigValue('settings', { ...current, ...settings });
+  }
+
+  getFeishuManagementMode(): FeishuManagementModeType {
+    const mode = this.getIMSettings().feishuManagementMode;
+    return isFeishuManagementMode(mode) ? mode : FeishuManagementMode.LocalOpenClaw;
+  }
+
+  setFeishuManagementMode(mode: FeishuManagementModeType): void {
+    this.setIMSettings({ feishuManagementMode: mode });
   }
 
   // ==================== Utility ====================

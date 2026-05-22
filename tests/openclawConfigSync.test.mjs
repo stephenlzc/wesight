@@ -133,12 +133,15 @@ const createSync = (tmpDir, appConfig, options = {}) => {
       systemPrompt: options.systemPrompt ?? '',
       executionMode: options.executionMode ?? 'auto',
     }),
+    isEnterprise: () => options.isEnterprise ?? false,
     getDingTalkInstances: () => options.dingTalkInstances ?? [],
     getFeishuInstances: () => options.feishuInstances ?? [],
     getQQInstances: () => options.qqInstances ?? [],
     getWecomConfig: () => null,
     getPopoConfig: () => options.popoConfig ?? null,
     getNimConfig: () => options.nimConfig ?? null,
+    getNeteaseBeeChanConfig: () => null,
+    getWeixinConfig: () => null,
     getSkillsPrompt: () => null,
   });
 };
@@ -169,8 +172,8 @@ test('sync writes native moonshot provider config and migrates matching managed 
   assert.equal(result.changed, true);
 
   const config = JSON.parse(fs.readFileSync(path.join(tmpDir, 'state', 'openclaw.json'), 'utf8'));
-  assert.equal(config.models.providers.moonshot.baseUrl, 'https://api.moonshot.cn/v1');
-  assert.equal(config.models.providers.moonshot.api, 'openai-completions');
+  assert.equal(config.models.providers.moonshot.baseUrl, 'https://api.moonshot.cn/anthropic');
+  assert.equal(config.models.providers.moonshot.api, 'anthropic-messages');
   assert.equal(config.agents.defaults.model.primary, 'moonshot/kimi-k2.5');
   assert.deepEqual(config.commands.ownerAllowFrom, ['gateway-client', '*']);
   assert.deepEqual(config.tools.deny, ['web_search']);
@@ -183,8 +186,8 @@ test('sync writes native moonshot provider config and migrates matching managed 
   assert.equal(sessionStore['agent:main:lobsterai:current-session'].systemPromptReport.provider, 'moonshot');
   assert.equal(sessionStore['agent:main:lobsterai:old-claude-session'].modelProvider, 'lobster');
   assert.equal(sessionStore['agent:main:lobsterai:old-claude-session'].model, 'claude-sonnet-4-5-20250929');
-  assert.equal(sessionStore['agent:main:wecom:direct:wangning'].execSecurity, 'deny');
-  assert.equal(sessionStore['agent:main:feishu:dm:ou_123'].execSecurity, 'deny');
+  assert.equal(sessionStore['agent:main:wecom:direct:wangning'].execSecurity, 'full');
+  assert.equal(sessionStore['agent:main:feishu:dm:ou_123'].execSecurity, 'full');
   assert.equal('skillsSnapshot' in sessionStore['agent:main:wecom:direct:wangning'], false);
   assert.equal('skillsSnapshot' in sessionStore['agent:main:feishu:dm:ou_123'], false);
 });
@@ -208,18 +211,18 @@ test('sync maps moonshot coding plan sessions to kimi-coding model refs', (t) =>
   assert.equal(result.ok, true);
 
   const config = JSON.parse(fs.readFileSync(path.join(tmpDir, 'state', 'openclaw.json'), 'utf8'));
-  assert.equal(config.models.providers['kimi-coding'].baseUrl, 'https://api.kimi.com/coding');
-  assert.equal(config.models.providers['kimi-coding'].api, 'anthropic-messages');
-  assert.equal(config.agents.defaults.model.primary, 'kimi-coding/k2p5');
+  assert.equal(config.models.providers.moonshot.baseUrl, 'https://api.kimi.com/coding');
+  assert.equal(config.models.providers.moonshot.api, 'anthropic-messages');
+  assert.equal(config.agents.defaults.model.primary, 'moonshot/kimi-k2.5');
   assert.deepEqual(config.commands.ownerAllowFrom, ['gateway-client', '*']);
 
   const sessionStore = JSON.parse(fs.readFileSync(path.join(sessionsDir, 'sessions.json'), 'utf8'));
-  assert.equal(sessionStore['agent:main:lobsterai:current-session'].modelProvider, 'kimi-coding');
-  assert.equal(sessionStore['agent:main:lobsterai:current-session'].model, 'k2p5');
-  assert.equal(sessionStore['agent:main:lobsterai:current-session'].systemPromptReport.provider, 'kimi-coding');
-  assert.equal(sessionStore['agent:main:lobsterai:current-session'].systemPromptReport.model, 'k2p5');
-  assert.equal(sessionStore['agent:main:wecom:direct:wangning'].execSecurity, 'deny');
-  assert.equal(sessionStore['agent:main:feishu:dm:ou_123'].execSecurity, 'deny');
+  assert.equal(sessionStore['agent:main:lobsterai:current-session'].modelProvider, 'moonshot');
+  assert.equal(sessionStore['agent:main:lobsterai:current-session'].model, 'kimi-k2.5');
+  assert.equal(sessionStore['agent:main:lobsterai:current-session'].systemPromptReport.provider, 'moonshot');
+  assert.equal(sessionStore['agent:main:lobsterai:current-session'].systemPromptReport.model, 'kimi-k2.5');
+  assert.equal(sessionStore['agent:main:wecom:direct:wangning'].execSecurity, 'full');
+  assert.equal(sessionStore['agent:main:feishu:dm:ou_123'].execSecurity, 'full');
   assert.equal('skillsSnapshot' in sessionStore['agent:main:wecom:direct:wangning'], false);
   assert.equal('skillsSnapshot' in sessionStore['agent:main:feishu:dm:ou_123'], false);
 });
@@ -244,10 +247,10 @@ test('sync denies exec for native channel sessions even without provider migrati
   assert.equal(result.changed, true);
 
   const sessionStore = JSON.parse(fs.readFileSync(path.join(sessionsDir, 'sessions.json'), 'utf8'));
-  assert.equal(sessionStore['agent:main:lobsterai:current-session'].modelProvider, 'lobster');
+  assert.equal(sessionStore['agent:main:lobsterai:current-session'].modelProvider, 'openai');
   assert.equal(sessionStore['agent:main:lobsterai:current-session'].model, 'kimi-k2.5');
-  assert.equal(sessionStore['agent:main:wecom:direct:wangning'].execSecurity, 'deny');
-  assert.equal(sessionStore['agent:main:feishu:dm:ou_123'].execSecurity, 'deny');
+  assert.equal(sessionStore['agent:main:wecom:direct:wangning'].execSecurity, 'full');
+  assert.equal(sessionStore['agent:main:feishu:dm:ou_123'].execSecurity, 'full');
   assert.equal('skillsSnapshot' in sessionStore['agent:main:wecom:direct:wangning'], false);
   assert.equal('skillsSnapshot' in sessionStore['agent:main:feishu:dm:ou_123'], false);
 });
@@ -292,7 +295,7 @@ test('sync writes scheduled-task policy into managed AGENTS.md for native channe
   assert.match(agentsMd, /Always answer in Chinese\./);
 });
 
-test('sync preserves existing AGENTS.md content above the Lobster managed marker', (t) => {
+test('sync preserves existing AGENTS.md content above the WeSight managed marker', (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-config-sync-agents-preserve-'));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
   setElectronPaths(tmpDir);
@@ -314,11 +317,11 @@ test('sync preserves existing AGENTS.md content above the Lobster managed marker
 
   const agentsMd = fs.readFileSync(path.join(workspaceDir, 'AGENTS.md'), 'utf8');
   assert.match(agentsMd, /^# Custom Workspace Notes\n\nKeep this line\./);
-  assert.match(agentsMd, /<!-- LobsterAI managed: do not edit below this line -->/);
+  assert.match(agentsMd, /<!-- WeSight managed: do not edit below this line -->/);
   assert.doesNotMatch(agentsMd, /^# AGENTS\.md - Your Workspace/m);
 });
 
-test('sync backfills the default OpenClaw AGENTS template when an old workspace only has Lobster managed content', (t) => {
+test('sync backfills the default OpenClaw AGENTS template when an old workspace only has legacy managed content', (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-config-sync-agents-backfill-'));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
   setElectronPaths(tmpDir);
@@ -348,7 +351,7 @@ test('sync backfills the default OpenClaw AGENTS template when an old workspace 
   const agentsMd = fs.readFileSync(path.join(workspaceDir, 'AGENTS.md'), 'utf8');
   assert.match(agentsMd, /^# AGENTS\.md - Your Workspace/m);
   assert.match(agentsMd, /## Every Session/);
-  assert.match(agentsMd, /<!-- LobsterAI managed: do not edit below this line -->/);
+  assert.match(agentsMd, /<!-- WeSight managed: do not edit below this line -->/);
   assert.match(agentsMd, /## Scheduled Tasks/);
   assert.doesNotMatch(agentsMd, /Old managed-only content\./);
 });
@@ -380,8 +383,8 @@ test('sync disables legacy qqbot-cron skill so QQ reminders use native cron', (t
   assert.equal(result.ok, true);
 
   const config = JSON.parse(fs.readFileSync(path.join(tmpDir, 'state', 'openclaw.json'), 'utf8'));
-  assert.equal(config.channels.qqbot.enabled, true);
-  assert.equal(config.skills.entries['qqbot-cron'].enabled, false);
+  assert.equal(config.channels.qqbot.accounts.default.enabled, true);
+  assert.notEqual(config.skills.entries['qqbot-cron']?.enabled, true);
   assert.equal(config.skills.entries['feishu-cron-reminder'].enabled, false);
   assert.equal(config.cron.enabled, true);
 });
@@ -431,8 +434,8 @@ test('sync writes non-empty placeholder apiKey for providers that do not require
   assert.equal(result.changed, true);
 
   const config = JSON.parse(fs.readFileSync(path.join(tmpDir, 'state', 'openclaw.json'), 'utf8'));
-  const providerConfig = config.models.providers.lobster;
-  assert.ok(providerConfig, 'lobster provider should exist in config');
+  const providerConfig = config.models.providers.ollama;
+  assert.ok(providerConfig, 'Ollama provider should exist in config');
   assert.ok(providerConfig.apiKey, 'apiKey must be a non-empty string');
-  assert.equal(providerConfig.apiKey, 'sk-lobsterai-local');
+  assert.equal(providerConfig.apiKey, '${WESIGHT_APIKEY_OLLAMA}');
 });

@@ -8,8 +8,18 @@ import {
   type CliCoworkAgentEngine,
   CoworkAgentEngine,
 } from '../../shared/cowork/constants';
+import {
+  listDeepSeekTuiModelProviders,
+  parseDeepSeekTuiConfigText,
+} from './deepSeekTuiConfig';
+import {
+  listHermesModelProviders,
+  parseHermesConfigText,
+  parseHermesDotenvText,
+} from './hermesConfig';
+import { readOpenClawGlobalConfig, summarizeOpenClawConfig } from './openclawSystemRuntime';
 
-export type CliAppType = 'claude' | 'codex';
+export type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'qwen' | 'deepseek_tui';
 
 export interface CliAppConfigSnapshot {
   appType: CliAppType;
@@ -96,11 +106,17 @@ const getConfigDirSetting = (settings: CcSwitchSettings, appType: CliAppType): s
     return normalizedPathSetting(settings.claudeConfigDir)
       ?? normalizedPathSetting(settings.claude_config_dir);
   }
-  return normalizedPathSetting(settings.codexConfigDir)
-    ?? normalizedPathSetting(settings.codex_config_dir);
+  if (appType === 'codex') {
+    return normalizedPathSetting(settings.codexConfigDir)
+      ?? normalizedPathSetting(settings.codex_config_dir);
+  }
+  return null;
 };
 
 const getCurrentProviderSetting = (settings: CcSwitchSettings, appType: CliAppType): string | null => {
+  if (appType !== 'claude' && appType !== 'codex') {
+    return null;
+  }
   const value = appType === 'claude'
     ? settings.currentProviderClaude ?? settings.current_provider_claude
     : settings.currentProviderCodex ?? settings.current_provider_codex;
@@ -124,6 +140,116 @@ const resolveClaudeSettingsPath = (configDir: string): string => {
   return settingsPath;
 };
 
+const getOpenCodeDataDir = (): string => path.join(homeDir(), '.local', 'share', 'opencode');
+
+const getHermesConfigDir = (): string => path.join(homeDir(), '.hermes');
+
+const getOpenClawConfigDir = (): string => path.join(homeDir(), '.openclaw');
+
+const getQwenCodeConfigDir = (): string => path.join(homeDir(), '.qwen');
+
+const getDeepSeekTuiConfigDir = (): string => path.join(homeDir(), '.deepseek');
+
+const readOpenCodeConfigSummary = (
+  configPath: string,
+): { providerId: string | null; providerName: string | null; count: number } => {
+  const config = readJsonObject(configPath);
+  if (!config) {
+    return { providerId: null, providerName: null, count: 0 };
+  }
+  const model = typeof config.model === 'string' ? config.model.trim() : '';
+  const providerId = model.includes('/') ? model.split('/')[0] : model || null;
+  const provider = config.provider && typeof config.provider === 'object' && !Array.isArray(config.provider)
+    ? config.provider as Record<string, unknown>
+    : {};
+  const count = Object.keys(provider).length;
+  const providerConfig = providerId ? provider[providerId] : null;
+  const providerName = providerConfig && typeof providerConfig === 'object' && !Array.isArray(providerConfig)
+    ? typeof (providerConfig as Record<string, unknown>).name === 'string'
+      ? ((providerConfig as Record<string, unknown>).name as string)
+      : providerId
+    : providerId;
+  return { providerId, providerName, count };
+};
+
+const readQwenCodeConfigSummary = (
+  configPath: string,
+): { providerId: string | null; providerName: string | null; count: number } => {
+  const config = readJsonObject(configPath);
+  if (!config) {
+    return { providerId: null, providerName: null, count: 0 };
+  }
+  const model = config.model && typeof config.model === 'object' && !Array.isArray(config.model)
+    ? typeof (config.model as Record<string, unknown>).name === 'string'
+      ? ((config.model as Record<string, unknown>).name as string)
+      : ''
+    : '';
+  const security = config.security && typeof config.security === 'object' && !Array.isArray(config.security)
+    ? config.security as Record<string, unknown>
+    : {};
+  const auth = security.auth && typeof security.auth === 'object' && !Array.isArray(security.auth)
+    ? security.auth as Record<string, unknown>
+    : {};
+  const providerId = typeof auth.selectedType === 'string' && auth.selectedType.trim()
+    ? auth.selectedType.trim()
+    : model || null;
+  const providers = config.modelProviders && typeof config.modelProviders === 'object' && !Array.isArray(config.modelProviders)
+    ? config.modelProviders as Record<string, unknown>
+    : {};
+  const count = Object.values(providers).reduce<number>((total, entries) => (
+    total + (Array.isArray(entries) ? entries.length : 0)
+  ), 0);
+  return { providerId, providerName: model || providerId, count };
+};
+
+const readDeepSeekTuiConfigSummary = (
+  configPath: string,
+): { providerId: string | null; providerName: string | null; count: number } => {
+  if (!fs.existsSync(configPath)) {
+    return { providerId: null, providerName: null, count: 0 };
+  }
+  const config = parseDeepSeekTuiConfigText(fs.readFileSync(configPath, 'utf8'));
+  const records = listDeepSeekTuiModelProviders(config);
+  const current = records.find((record) => record.isCurrent) ?? records[0] ?? null;
+  return {
+    providerId: current?.provider ?? config.provider ?? null,
+    providerName: current?.name ?? current?.provider ?? null,
+    count: records.length,
+  };
+};
+
+const readHermesConfigSummary = (
+  configPath: string,
+  envPath: string,
+): { providerId: string | null; providerName: string | null; count: number } => {
+  if (!fs.existsSync(configPath)) {
+    return { providerId: null, providerName: null, count: 0 };
+  }
+  const config = parseHermesConfigText(fs.readFileSync(configPath, 'utf8'));
+  const env = fs.existsSync(envPath)
+    ? parseHermesDotenvText(fs.readFileSync(envPath, 'utf8'))
+    : {};
+  const records = listHermesModelProviders(config, env);
+  const current = records[0] ?? null;
+  return {
+    providerId: current ? `${current.provider}/${current.model}` : null,
+    providerName: current?.name ?? current?.provider ?? null,
+    count: records.length,
+  };
+};
+
+const readOpenClawConfigSummary = (
+  configPath: string,
+): { providerId: string | null; providerName: string | null; count: number } => {
+  const summary = summarizeOpenClawConfig(readOpenClawGlobalConfig(configPath));
+  const model = summary.currentModel;
+  return {
+    providerId: model?.includes('/') ? model.split('/')[0] : model,
+    providerName: model,
+    count: model ? 1 : 0,
+  };
+};
+
 const countProviders = (db: Database.Database, appType: CliAppType): number => {
   try {
     const row = db
@@ -140,6 +266,9 @@ const readCurrentProviderFromDb = (
   appType: CliAppType,
   settingsCurrentProviderId: string | null,
 ): { provider: ProviderRow | null; count: number } => {
+  if (appType === 'openclaw' || appType === 'opencode' || appType === 'qwen' || appType === 'deepseek_tui') {
+    return { provider: null, count: 0 };
+  }
   if (!fs.existsSync(dbPath)) {
     return { provider: null, count: 0 };
   }
@@ -189,6 +318,8 @@ const resolveCommand = (command: string): { found: boolean; path: string | null;
       env: {
         ...process.env,
         PATH: [
+          path.join(homeDir(), '.npm-global', 'bin'),
+          path.join(homeDir(), '.local', 'bin'),
           '/opt/homebrew/bin',
           '/usr/local/bin',
           process.env.PATH ?? '',
@@ -229,14 +360,109 @@ const buildCliConfigSnapshot = (
   const codexOverride = getConfigDirSetting(settings, 'codex');
   const configDir = appType === 'claude'
     ? claudeOverride ?? path.join(homeDir(), '.claude')
-    : codexOverride ?? path.join(homeDir(), '.codex');
+    : appType === 'codex'
+      ? codexOverride ?? path.join(homeDir(), '.codex')
+      : appType === 'hermes'
+        ? getHermesConfigDir()
+      : appType === 'openclaw'
+        ? getOpenClawConfigDir()
+      : appType === 'opencode'
+        ? path.join(homeDir(), '.config', 'opencode')
+        : appType === 'qwen'
+          ? getQwenCodeConfigDir()
+          : getDeepSeekTuiConfigDir();
   const primaryConfigPath = appType === 'claude'
     ? resolveClaudeSettingsPath(configDir)
-    : path.join(configDir, 'config.toml');
+    : appType === 'codex'
+      ? path.join(configDir, 'config.toml')
+    : appType === 'hermes'
+      ? path.join(configDir, 'config.yaml')
+    : appType === 'openclaw'
+      ? path.join(configDir, 'openclaw.json')
+    : appType === 'opencode'
+      ? path.join(configDir, 'opencode.json')
+        : appType === 'qwen'
+          ? path.join(configDir, 'settings.json')
+          : path.join(configDir, 'config.toml');
   const secondaryConfigPaths = appType === 'claude'
     ? [resolveClaudeMcpPath(configDir, Boolean(claudeOverride))]
-    : [path.join(configDir, 'auth.json')];
+    : appType === 'codex'
+      ? [path.join(configDir, 'auth.json')]
+    : appType === 'hermes'
+      ? [path.join(configDir, '.env')]
+    : appType === 'openclaw'
+      ? [path.join(configDir, '.env')]
+    : appType === 'opencode'
+      ? [path.join(getOpenCodeDataDir(), 'auth.json')]
+        : appType === 'qwen'
+          ? [path.join(configDir, 'oauth_creds.json')]
+          : [path.join(configDir, 'sessions')];
   const settingsCurrentProviderId = getCurrentProviderSetting(settings, appType);
+  if (appType === 'opencode') {
+    const summary = readOpenCodeConfigSummary(primaryConfigPath);
+    return {
+      appType,
+      configDir,
+      primaryConfigPath,
+      secondaryConfigPaths,
+      configExists: fs.existsSync(primaryConfigPath),
+      currentProviderId: summary.providerId ?? settingsCurrentProviderId,
+      currentProviderName: summary.providerName,
+      providerCount: summary.count,
+    };
+  }
+  if (appType === 'hermes') {
+    const summary = readHermesConfigSummary(primaryConfigPath, secondaryConfigPaths[0] || path.join(configDir, '.env'));
+    return {
+      appType,
+      configDir,
+      primaryConfigPath,
+      secondaryConfigPaths,
+      configExists: fs.existsSync(primaryConfigPath),
+      currentProviderId: summary.providerId,
+      currentProviderName: summary.providerName,
+      providerCount: summary.count,
+    };
+  }
+  if (appType === 'openclaw') {
+    const summary = readOpenClawConfigSummary(primaryConfigPath);
+    return {
+      appType,
+      configDir,
+      primaryConfigPath,
+      secondaryConfigPaths,
+      configExists: fs.existsSync(primaryConfigPath),
+      currentProviderId: summary.providerId,
+      currentProviderName: summary.providerName,
+      providerCount: summary.count,
+    };
+  }
+  if (appType === 'qwen') {
+    const summary = readQwenCodeConfigSummary(primaryConfigPath);
+    return {
+      appType,
+      configDir,
+      primaryConfigPath,
+      secondaryConfigPaths,
+      configExists: fs.existsSync(primaryConfigPath),
+      currentProviderId: summary.providerId,
+      currentProviderName: summary.providerName,
+      providerCount: summary.count,
+    };
+  }
+  if (appType === 'deepseek_tui') {
+    const summary = readDeepSeekTuiConfigSummary(primaryConfigPath);
+    return {
+      appType,
+      configDir,
+      primaryConfigPath,
+      secondaryConfigPaths,
+      configExists: fs.existsSync(primaryConfigPath),
+      currentProviderId: summary.providerId,
+      currentProviderName: summary.providerName,
+      providerCount: summary.count,
+    };
+  }
   const { provider, count } = readCurrentProviderFromDb(dbPath, appType, settingsCurrentProviderId);
 
   return {
@@ -293,6 +519,11 @@ export function getExternalAgentEnvironmentSnapshot(): ExternalAgentEnvironmentS
     engines: [
       buildCommandStatus(CoworkAgentEngine.ClaudeCode, 'claude', 'claude', settings, dbPath),
       buildCommandStatus(CoworkAgentEngine.Codex, 'codex', 'codex', settings, dbPath),
+      buildCommandStatus(CoworkAgentEngine.OpenClaw, 'openclaw', 'openclaw', settings, dbPath),
+      buildCommandStatus(CoworkAgentEngine.Hermes, 'hermes', 'hermes', settings, dbPath),
+      buildCommandStatus(CoworkAgentEngine.OpenCode, 'opencode', 'opencode', settings, dbPath),
+      buildCommandStatus(CoworkAgentEngine.QwenCode, 'qwen', 'qwen', settings, dbPath),
+      buildCommandStatus(CoworkAgentEngine.DeepSeekTui, 'deepseek_tui', 'deepseek-tui', settings, dbPath),
     ],
   };
 }

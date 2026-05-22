@@ -4,7 +4,44 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { type CliAppType } from './ccSwitchIntegration';
+import {
+  DEFAULT_DEEPSEEK_TUI_MODEL,
+  listDeepSeekTuiModelProviders,
+  mergeDeepSeekTuiConfigForWesightModel,
+  parseDeepSeekTuiConfig,
+  parseDeepSeekTuiConfigText,
+  serializeDeepSeekTuiConfig,
+  settingsConfigFromDeepSeekTuiRecord,
+  summarizeDeepSeekTuiSettingsConfig,
+} from './deepSeekTuiConfig';
+import { type CliAppType } from './externalAgentEnvironment';
+import {
+  DEFAULT_HERMES_MODEL,
+  listHermesModelProviders,
+  mergeHermesConfigForWesightModel,
+  parseHermesConfig,
+  parseHermesConfigText,
+  parseHermesDotenvText,
+  serializeHermesConfig,
+  settingsConfigFromHermesRecord,
+  summarizeHermesSettingsConfig,
+} from './hermesConfig';
+import {
+  DEFAULT_OPENCODE_MODEL,
+  listOpenCodeModelProviders,
+  mergeOpenCodeConfigForWesightModel,
+  parseOpenCodeConfig,
+  settingsConfigFromOpenCodeRecord,
+  summarizeOpenCodeSettingsConfig,
+} from './openCodeConfig';
+import {
+  DEFAULT_QWEN_CODE_MODEL,
+  listQwenCodeModelProviders,
+  mergeQwenCodeConfigForWesightModel,
+  parseQwenCodeSettings,
+  settingsConfigFromQwenCodeRecord,
+  summarizeQwenCodeSettingsConfig,
+} from './qwenCodeConfig';
 
 export type ExternalAgentProviderAppType = CliAppType;
 
@@ -71,10 +108,20 @@ type CcSwitchProviderRow = {
 
 const CLAUDE_APP_TYPE: ExternalAgentProviderAppType = 'claude';
 const CODEX_APP_TYPE: ExternalAgentProviderAppType = 'codex';
+const HERMES_APP_TYPE: ExternalAgentProviderAppType = 'hermes';
+const OPENCLAW_APP_TYPE: ExternalAgentProviderAppType = 'openclaw';
+const OPENCODE_APP_TYPE: ExternalAgentProviderAppType = 'opencode';
+const QWEN_APP_TYPE: ExternalAgentProviderAppType = 'qwen';
+const DEEPSEEK_TUI_APP_TYPE: ExternalAgentProviderAppType = 'deepseek_tui';
 const INTERNAL_META_KEY = '__wesightProviderMeta';
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5';
 const DEFAULT_CODEX_MODEL = 'gpt-5.4';
+const DEFAULT_HERMES_LOCAL_MODEL = DEFAULT_HERMES_MODEL;
+const DEFAULT_OPENCLAW_LOCAL_MODEL = 'openai-codex/gpt-5.5';
+const DEFAULT_OPENCODE_LOCAL_MODEL = DEFAULT_OPENCODE_MODEL;
+const DEFAULT_QWEN_CODE_LOCAL_MODEL = DEFAULT_QWEN_CODE_MODEL;
+const DEFAULT_DEEPSEEK_TUI_LOCAL_MODEL = DEFAULT_DEEPSEEK_TUI_MODEL;
 
 const homeDir = (): string => os.homedir();
 
@@ -136,12 +183,55 @@ const getClaudeSettingsPath = (): string => {
 
 const getCodexAuthPath = (): string => path.join(getCodexConfigDir(), 'auth.json');
 const getCodexConfigPath = (): string => path.join(getCodexConfigDir(), 'config.toml');
+const getHermesConfigDir = (): string => path.join(homeDir(), '.hermes');
+const getHermesConfigPath = (): string => path.join(getHermesConfigDir(), 'config.yaml');
+const getHermesEnvPath = (): string => path.join(getHermesConfigDir(), '.env');
+const getOpenClawConfigDir = (): string => path.join(homeDir(), '.openclaw');
+const getOpenClawConfigPath = (): string => path.join(getOpenClawConfigDir(), 'openclaw.json');
+const getOpenCodeConfigDir = (): string => path.join(homeDir(), '.config', 'opencode');
+const getOpenCodeConfigPath = (): string => path.join(getOpenCodeConfigDir(), 'opencode.json');
+const getOpenCodeAuthPath = (): string => path.join(homeDir(), '.local', 'share', 'opencode', 'auth.json');
+const getQwenCodeConfigDir = (): string => path.join(homeDir(), '.qwen');
+const getQwenCodeSettingsPath = (): string => path.join(getQwenCodeConfigDir(), 'settings.json');
+const getQwenCodeOauthPath = (): string => path.join(getQwenCodeConfigDir(), 'oauth_creds.json');
+const getDeepSeekTuiConfigDir = (): string => path.join(homeDir(), '.deepseek');
+const getDeepSeekTuiConfigPath = (): string => path.join(getDeepSeekTuiConfigDir(), 'config.toml');
 
 const getLiveConfigPaths = (appType: ExternalAgentProviderAppType): ExternalAgentProviderListResult['liveConfigPaths'] => {
   if (appType === CLAUDE_APP_TYPE) {
     return {
       primaryConfigPath: getClaudeSettingsPath(),
       secondaryConfigPaths: [],
+    };
+  }
+  if (appType === OPENCODE_APP_TYPE) {
+    return {
+      primaryConfigPath: getOpenCodeConfigPath(),
+      secondaryConfigPaths: [getOpenCodeAuthPath()],
+    };
+  }
+  if (appType === HERMES_APP_TYPE) {
+    return {
+      primaryConfigPath: getHermesConfigPath(),
+      secondaryConfigPaths: [getHermesEnvPath()],
+    };
+  }
+  if (appType === OPENCLAW_APP_TYPE) {
+    return {
+      primaryConfigPath: getOpenClawConfigPath(),
+      secondaryConfigPaths: [path.join(getOpenClawConfigDir(), 'identity', 'device-auth.json')],
+    };
+  }
+  if (appType === QWEN_APP_TYPE) {
+    return {
+      primaryConfigPath: getQwenCodeSettingsPath(),
+      secondaryConfigPaths: [getQwenCodeOauthPath()],
+    };
+  }
+  if (appType === DEEPSEEK_TUI_APP_TYPE) {
+    return {
+      primaryConfigPath: getDeepSeekTuiConfigPath(),
+      secondaryConfigPaths: [path.join(getDeepSeekTuiConfigDir(), 'sessions')],
     };
   }
   return {
@@ -202,6 +292,37 @@ const getString = (value: unknown): string => {
   return typeof value === 'string' ? value : '';
 };
 
+const resolveOpenClawCurrentModel = (config: Record<string, unknown>): string => {
+  const agents = getNestedRecord(config, 'agents');
+  const defaults = getNestedRecord(agents, 'defaults');
+  const model = getNestedRecord(defaults, 'model');
+  return getString(model.primary) || getString(defaults.model) || DEFAULT_OPENCLAW_LOCAL_MODEL;
+};
+
+const listOpenClawModelIds = (config: Record<string, unknown>): string[] => {
+  const currentModel = resolveOpenClawCurrentModel(config);
+  const agents = getNestedRecord(config, 'agents');
+  const defaults = getNestedRecord(agents, 'defaults');
+  const models = getNestedRecord(defaults, 'models');
+  const modelIds = new Set<string>();
+  for (const key of Object.keys(models)) {
+    if (key.trim()) modelIds.add(key.trim());
+  }
+  if (currentModel.trim()) modelIds.add(currentModel.trim());
+  return [...modelIds];
+};
+
+const summarizeOpenClawSettingsConfig = (
+  settingsConfig: Record<string, unknown>,
+): ExternalAgentProviderSummary => {
+  const model = getString(settingsConfig.model) || DEFAULT_OPENCLAW_LOCAL_MODEL;
+  return {
+    apiKey: '',
+    baseUrl: '',
+    model,
+  };
+};
+
 const extractTomlString = (configText: string, key: string): string => {
   const match = configText.match(new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']*)["']`, 'm'));
   return match?.[1] ?? '';
@@ -228,6 +349,25 @@ const summarizeProvider = (
       model: getString(env.ANTHROPIC_MODEL)
         || getString(env.ANTHROPIC_DEFAULT_SONNET_MODEL),
     };
+  }
+
+  if (appType === OPENCODE_APP_TYPE) {
+    return summarizeOpenCodeSettingsConfig(settingsConfig);
+  }
+  if (appType === HERMES_APP_TYPE) {
+    return summarizeHermesSettingsConfig(settingsConfig);
+  }
+
+  if (appType === OPENCLAW_APP_TYPE) {
+    return summarizeOpenClawSettingsConfig(settingsConfig);
+  }
+
+  if (appType === QWEN_APP_TYPE) {
+    return summarizeQwenCodeSettingsConfig(settingsConfig);
+  }
+
+  if (appType === DEEPSEEK_TUI_APP_TYPE) {
+    return summarizeDeepSeekTuiSettingsConfig(settingsConfig);
   }
 
   const auth = getNestedRecord(settingsConfig, 'auth');
@@ -260,6 +400,71 @@ const buildSettingsConfigFromInput = (input: ExternalAgentProviderInput): Record
     return { env };
   }
 
+  if (input.appType === OPENCODE_APP_TYPE) {
+    const model = input.model?.trim() || DEFAULT_OPENCODE_LOCAL_MODEL;
+    return {
+      config: mergeOpenCodeConfigForWesightModel({}, {
+        apiKey: input.apiKey?.trim() || '',
+        baseURL: input.baseUrl?.trim() || '',
+        model: model.includes('/') ? model.split('/').slice(1).join('/') : model,
+        apiType: 'openai',
+      }, input.name),
+      model,
+    };
+  }
+  if (input.appType === OPENCLAW_APP_TYPE) {
+    return {
+      model: input.model?.trim() || DEFAULT_OPENCLAW_LOCAL_MODEL,
+    };
+  }
+  if (input.appType === HERMES_APP_TYPE) {
+    const model = input.model?.trim() || DEFAULT_HERMES_LOCAL_MODEL;
+    return {
+      config: mergeHermesConfigForWesightModel({}, {
+        apiKey: input.apiKey?.trim() || '',
+        baseURL: input.baseUrl?.trim() || '',
+        model,
+        apiType: 'openai',
+      }, {
+        providerName: input.name,
+      }),
+      env: {
+        HERMES_INFERENCE_API_KEY: input.apiKey?.trim() || '',
+        HERMES_INFERENCE_BASE_URL: input.baseUrl?.trim() || '',
+        HERMES_INFERENCE_MODEL: model,
+      },
+      model,
+    };
+  }
+
+  if (input.appType === QWEN_APP_TYPE) {
+    const model = input.model?.trim() || DEFAULT_QWEN_CODE_LOCAL_MODEL;
+    return {
+      config: mergeQwenCodeConfigForWesightModel({}, {
+        apiKey: input.apiKey?.trim() || '',
+        baseURL: input.baseUrl?.trim() || '',
+        model,
+        apiType: 'openai',
+      }, input.name),
+      model,
+      authType: 'openai',
+    };
+  }
+
+  if (input.appType === DEEPSEEK_TUI_APP_TYPE) {
+    const model = input.model?.trim() || DEFAULT_DEEPSEEK_TUI_LOCAL_MODEL;
+    return {
+      provider: 'openai',
+      config: mergeDeepSeekTuiConfigForWesightModel({}, {
+        apiKey: input.apiKey?.trim() || '',
+        baseURL: input.baseUrl?.trim() || '',
+        model,
+        apiType: 'openai',
+      }, input.name),
+      model,
+    };
+  }
+
   const model = input.model?.trim() || DEFAULT_CODEX_MODEL;
   return {
     auth: {
@@ -270,8 +475,13 @@ const buildSettingsConfigFromInput = (input: ExternalAgentProviderInput): Record
 };
 
 export const appTypeFromEngine = (engine: string): ExternalAgentProviderAppType | null => {
+  if (engine === 'openclaw') return OPENCLAW_APP_TYPE;
   if (engine === 'claude_code') return CLAUDE_APP_TYPE;
   if (engine === 'codex') return CODEX_APP_TYPE;
+  if (engine === 'hermes') return HERMES_APP_TYPE;
+  if (engine === 'opencode') return OPENCODE_APP_TYPE;
+  if (engine === 'qwen_code') return QWEN_APP_TYPE;
+  if (engine === 'deepseek_tui') return DEEPSEEK_TUI_APP_TYPE;
   return null;
 };
 
@@ -428,10 +638,23 @@ export class ExternalAgentProviderStore {
     const settingsConfig = this.readLiveSettingsConfig(appType);
     if (!settingsConfig) return null;
     const existing = this.getProvider(appType, 'local-live');
+    const localName = appType === CLAUDE_APP_TYPE
+      ? 'Local Claude Code'
+      : appType === HERMES_APP_TYPE
+        ? 'Local Hermes Agent'
+      : appType === OPENCLAW_APP_TYPE
+        ? 'Local OpenClaw'
+      : appType === OPENCODE_APP_TYPE
+        ? 'Local OpenCode'
+        : appType === QWEN_APP_TYPE
+          ? 'Local Qwen Code'
+          : appType === DEEPSEEK_TUI_APP_TYPE
+            ? 'Local DeepSeek-TUI'
+            : 'Local Codex';
     return this.saveProvider({
       appType,
       id: existing?.id ?? 'local-live',
-      name: appType === CLAUDE_APP_TYPE ? 'Local Claude Code' : 'Local Codex',
+      name: localName,
       settingsConfig,
       category: 'local',
       setCurrent: !this.getCurrentProviderId(appType),
@@ -439,6 +662,15 @@ export class ExternalAgentProviderStore {
   }
 
   importCcSwitchProviders(appType: ExternalAgentProviderAppType, options: { seedCurrent?: boolean } = {}): number {
+    if (
+      appType === HERMES_APP_TYPE
+      || appType === OPENCLAW_APP_TYPE
+      || appType === OPENCODE_APP_TYPE
+      || appType === QWEN_APP_TYPE
+      || appType === DEEPSEEK_TUI_APP_TYPE
+    ) {
+      return 0;
+    }
     const dbPath = path.join(homeDir(), '.cc-switch', 'cc-switch.db');
     if (!fs.existsSync(dbPath)) return 0;
     let sourceDb: Database.Database | null = null;
@@ -506,6 +738,13 @@ export class ExternalAgentProviderStore {
   }
 
   private getCcSwitchCurrentProviderId(appType: ExternalAgentProviderAppType): string | null {
+    if (
+      appType === HERMES_APP_TYPE
+      || appType === OPENCLAW_APP_TYPE
+      || appType === OPENCODE_APP_TYPE
+      || appType === QWEN_APP_TYPE
+      || appType === DEEPSEEK_TUI_APP_TYPE
+    ) return null;
     const settings = readCcSwitchSettings();
     const value = appType === CLAUDE_APP_TYPE
       ? settings.currentProviderClaude ?? settings.current_provider_claude
@@ -543,6 +782,12 @@ export class ExternalAgentProviderStore {
   }
 
   private writeCcSwitchCurrentProvider(appType: ExternalAgentProviderAppType, provider: ExternalAgentProvider): void {
+    if (
+      appType === HERMES_APP_TYPE
+      || appType === OPENCODE_APP_TYPE
+      || appType === QWEN_APP_TYPE
+      || appType === DEEPSEEK_TUI_APP_TYPE
+    ) return;
     const providerId = this.getCcSwitchProviderId(provider);
     if (!providerId) return;
 
@@ -580,6 +825,12 @@ export class ExternalAgentProviderStore {
   }
 
   private selectCcSwitchCurrentProvider(appType: ExternalAgentProviderAppType): void {
+    if (
+      appType === HERMES_APP_TYPE
+      || appType === OPENCODE_APP_TYPE
+      || appType === QWEN_APP_TYPE
+      || appType === DEEPSEEK_TUI_APP_TYPE
+    ) return;
     const currentProviderId = this.getCcSwitchCurrentProviderId(appType);
     const currentProvider = currentProviderId
       ? this.getProvider(appType, `ccswitch-${currentProviderId}`)
@@ -614,6 +865,26 @@ export class ExternalAgentProviderStore {
   }
 
   private syncConfiguredProviders(appType: ExternalAgentProviderAppType): void {
+    if (appType === OPENCODE_APP_TYPE) {
+      this.syncOpenCodeLiveProviders();
+      return;
+    }
+    if (appType === HERMES_APP_TYPE) {
+      this.syncHermesLiveProviders();
+      return;
+    }
+    if (appType === OPENCLAW_APP_TYPE) {
+      this.syncOpenClawLiveProviders();
+      return;
+    }
+    if (appType === QWEN_APP_TYPE) {
+      this.syncQwenCodeLiveProviders();
+      return;
+    }
+    if (appType === DEEPSEEK_TUI_APP_TYPE) {
+      this.syncDeepSeekTuiLiveProviders();
+      return;
+    }
     const hasCurrent = Boolean(this.getCurrentProviderId(appType));
     const imported = this.importCcSwitchProviders(appType, { seedCurrent: !hasCurrent });
     if (imported > 0) {
@@ -627,6 +898,236 @@ export class ExternalAgentProviderStore {
       .get(appType));
     if (!hasAnyProvider || imported === 0) {
       this.importLiveProviderIfEmpty(appType);
+    }
+  }
+
+  private syncOpenClawLiveProviders(): void {
+    const config = readJsonObject(getOpenClawConfigPath());
+    if (!config) {
+      this.importLiveProviderIfEmpty(OPENCLAW_APP_TYPE);
+      return;
+    }
+    const currentModel = resolveOpenClawCurrentModel(config);
+    const modelIds = listOpenClawModelIds(config);
+    this.db
+      .prepare('DELETE FROM external_agent_providers WHERE app_type = ? AND category = ?')
+      .run(OPENCLAW_APP_TYPE, 'local');
+    const now = Date.now();
+    for (const modelId of modelIds) {
+      const providerId = modelId.includes('/') ? modelId.split('/')[0] : 'openclaw';
+      this.db
+        .prepare(
+          `
+          INSERT INTO external_agent_providers (
+            id, app_type, name, settings_config, category, is_current, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id, app_type) DO UPDATE SET
+            name = excluded.name,
+            settings_config = excluded.settings_config,
+            category = excluded.category,
+            is_current = excluded.is_current,
+            updated_at = excluded.updated_at
+        `,
+        )
+        .run(
+          `local-${crypto.createHash('sha1').update(modelId).digest('hex').slice(0, 16)}`,
+          OPENCLAW_APP_TYPE,
+          providerId === 'openclaw' ? modelId : providerId,
+          JSON.stringify({ model: modelId }),
+          'local',
+          modelId === currentModel ? 1 : 0,
+          now,
+          now,
+        );
+    }
+    if (!modelIds.includes(currentModel) && currentModel) {
+      this.importLiveProvider(OPENCLAW_APP_TYPE);
+    }
+  }
+
+  private syncOpenCodeLiveProviders(): void {
+    const config = readJsonObject(getOpenCodeConfigPath());
+    if (!config) {
+      this.importLiveProviderIfEmpty(OPENCODE_APP_TYPE);
+      return;
+    }
+    const records = listOpenCodeModelProviders(parseOpenCodeConfig(config));
+    this.db
+      .prepare('DELETE FROM external_agent_providers WHERE app_type = ? AND category = ?')
+      .run(OPENCODE_APP_TYPE, 'local');
+    const now = Date.now();
+    for (const record of records) {
+      this.db
+        .prepare(
+          `
+          INSERT INTO external_agent_providers (
+            id, app_type, name, settings_config, category, is_current, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id, app_type) DO UPDATE SET
+            name = excluded.name,
+            settings_config = excluded.settings_config,
+            category = excluded.category,
+            is_current = excluded.is_current,
+            updated_at = excluded.updated_at
+        `,
+        )
+        .run(
+          record.id,
+          OPENCODE_APP_TYPE,
+          record.name,
+          JSON.stringify(settingsConfigFromOpenCodeRecord(record)),
+          'local',
+          record.isCurrent ? 1 : 0,
+          now,
+          now,
+        );
+    }
+    if (!records.some((record) => record.isCurrent) && records[0]) {
+      this.db
+        .prepare('UPDATE external_agent_providers SET is_current = 1 WHERE app_type = ? AND id = ?')
+        .run(OPENCODE_APP_TYPE, records[0].id);
+    }
+  }
+
+  private syncHermesLiveProviders(): void {
+    const configPath = getHermesConfigPath();
+    if (!fs.existsSync(configPath)) {
+      this.importLiveProviderIfEmpty(HERMES_APP_TYPE);
+      return;
+    }
+    const config = parseHermesConfigText(fs.readFileSync(configPath, 'utf8'));
+    const env = fs.existsSync(getHermesEnvPath())
+      ? parseHermesDotenvText(fs.readFileSync(getHermesEnvPath(), 'utf8'))
+      : {};
+    const records = listHermesModelProviders(config, env);
+    this.db
+      .prepare('DELETE FROM external_agent_providers WHERE app_type = ? AND category = ?')
+      .run(HERMES_APP_TYPE, 'local');
+    const now = Date.now();
+    for (const record of records) {
+      this.db
+        .prepare(
+          `
+          INSERT INTO external_agent_providers (
+            id, app_type, name, settings_config, category, is_current, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id, app_type) DO UPDATE SET
+            name = excluded.name,
+            settings_config = excluded.settings_config,
+            category = excluded.category,
+            is_current = excluded.is_current,
+            updated_at = excluded.updated_at
+        `,
+        )
+        .run(
+          record.id,
+          HERMES_APP_TYPE,
+          record.name,
+          JSON.stringify(settingsConfigFromHermesRecord(record)),
+          'local',
+          record.isCurrent ? 1 : 0,
+          now,
+          now,
+        );
+    }
+    if (!records.some((record) => record.isCurrent) && records[0]) {
+      this.db
+        .prepare('UPDATE external_agent_providers SET is_current = 1 WHERE app_type = ? AND id = ?')
+        .run(HERMES_APP_TYPE, records[0].id);
+    }
+  }
+
+  private syncQwenCodeLiveProviders(): void {
+    const config = readJsonObject(getQwenCodeSettingsPath());
+    if (!config) {
+      this.importLiveProviderIfEmpty(QWEN_APP_TYPE);
+      return;
+    }
+    const records = listQwenCodeModelProviders(parseQwenCodeSettings(config));
+    this.db
+      .prepare('DELETE FROM external_agent_providers WHERE app_type = ? AND category = ?')
+      .run(QWEN_APP_TYPE, 'local');
+    const now = Date.now();
+    for (const record of records) {
+      this.db
+        .prepare(
+          `
+          INSERT INTO external_agent_providers (
+            id, app_type, name, settings_config, category, is_current, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id, app_type) DO UPDATE SET
+            name = excluded.name,
+            settings_config = excluded.settings_config,
+            category = excluded.category,
+            is_current = excluded.is_current,
+            updated_at = excluded.updated_at
+        `,
+        )
+        .run(
+          record.id,
+          QWEN_APP_TYPE,
+          record.name,
+          JSON.stringify(settingsConfigFromQwenCodeRecord(record)),
+          'local',
+          record.isCurrent ? 1 : 0,
+          now,
+          now,
+        );
+    }
+    if (!records.some((record) => record.isCurrent) && records[0]) {
+      this.db
+        .prepare('UPDATE external_agent_providers SET is_current = 1 WHERE app_type = ? AND id = ?')
+        .run(QWEN_APP_TYPE, records[0].id);
+    }
+  }
+
+  private syncDeepSeekTuiLiveProviders(): void {
+    const configPath = getDeepSeekTuiConfigPath();
+    if (!fs.existsSync(configPath)) {
+      this.importLiveProviderIfEmpty(DEEPSEEK_TUI_APP_TYPE);
+      return;
+    }
+    const config = parseDeepSeekTuiConfigText(fs.readFileSync(configPath, 'utf8'));
+    const records = listDeepSeekTuiModelProviders(config);
+    this.db
+      .prepare('DELETE FROM external_agent_providers WHERE app_type = ? AND category = ?')
+      .run(DEEPSEEK_TUI_APP_TYPE, 'local');
+    const now = Date.now();
+    for (const record of records) {
+      this.db
+        .prepare(
+          `
+          INSERT INTO external_agent_providers (
+            id, app_type, name, settings_config, category, is_current, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id, app_type) DO UPDATE SET
+            name = excluded.name,
+            settings_config = excluded.settings_config,
+            category = excluded.category,
+            is_current = excluded.is_current,
+            updated_at = excluded.updated_at
+        `,
+        )
+        .run(
+          record.id,
+          DEEPSEEK_TUI_APP_TYPE,
+          record.name,
+          JSON.stringify(settingsConfigFromDeepSeekTuiRecord(record)),
+          'local',
+          record.isCurrent ? 1 : 0,
+          now,
+          now,
+        );
+    }
+    if (!records.some((record) => record.isCurrent) && records[0]) {
+      this.db
+        .prepare('UPDATE external_agent_providers SET is_current = 1 WHERE app_type = ? AND id = ?')
+        .run(DEEPSEEK_TUI_APP_TYPE, records[0].id);
     }
   }
 
@@ -657,6 +1158,57 @@ export class ExternalAgentProviderStore {
     if (appType === CLAUDE_APP_TYPE) {
       return readJsonObject(getClaudeSettingsPath());
     }
+    if (appType === OPENCODE_APP_TYPE) {
+      const config = readJsonObject(getOpenCodeConfigPath());
+      if (!config) return null;
+      return {
+        config,
+        model: typeof config.model === 'string' ? config.model : DEFAULT_OPENCODE_LOCAL_MODEL,
+      };
+    }
+    if (appType === HERMES_APP_TYPE) {
+      if (!fs.existsSync(getHermesConfigPath())) return null;
+      const config = parseHermesConfigText(fs.readFileSync(getHermesConfigPath(), 'utf8'));
+      const env = fs.existsSync(getHermesEnvPath())
+        ? parseHermesDotenvText(fs.readFileSync(getHermesEnvPath(), 'utf8'))
+        : {};
+      const summary = summarizeHermesSettingsConfig({ config, env });
+      return {
+        config,
+        env,
+        model: summary.model || DEFAULT_HERMES_LOCAL_MODEL,
+      };
+    }
+    if (appType === OPENCLAW_APP_TYPE) {
+      const config = readJsonObject(getOpenClawConfigPath());
+      if (!config) return null;
+      return {
+        config,
+        model: resolveOpenClawCurrentModel(config),
+      };
+    }
+    if (appType === QWEN_APP_TYPE) {
+      const config = readJsonObject(getQwenCodeSettingsPath());
+      if (!config) return null;
+      const model = getNestedRecord(config, 'model');
+      const security = getNestedRecord(config, 'security');
+      const auth = getNestedRecord(security, 'auth');
+      return {
+        authType: getString(auth.selectedType) || 'openai',
+        config,
+        model: getString(model.name) || DEFAULT_QWEN_CODE_LOCAL_MODEL,
+      };
+    }
+    if (appType === DEEPSEEK_TUI_APP_TYPE) {
+      const configPath = getDeepSeekTuiConfigPath();
+      if (!fs.existsSync(configPath)) return null;
+      const config = parseDeepSeekTuiConfigText(fs.readFileSync(configPath, 'utf8'));
+      return {
+        provider: config.provider ?? 'deepseek',
+        config,
+        model: config.default_text_model ?? DEFAULT_DEEPSEEK_TUI_LOCAL_MODEL,
+      };
+    }
     const auth = readJsonObject(getCodexAuthPath()) ?? {};
     const configPath = getCodexConfigPath();
     const config = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
@@ -669,6 +1221,123 @@ export class ExternalAgentProviderStore {
     this.writeCcSwitchCurrentProvider(provider.appType, provider);
     if (provider.appType === CLAUDE_APP_TYPE) {
       writeJsonFile(getClaudeSettingsPath(), settingsConfig);
+      return;
+    }
+    if (provider.appType === OPENCODE_APP_TYPE) {
+      const existingConfig = readJsonObject(getOpenCodeConfigPath()) ?? {};
+      const selectedModel = getString(settingsConfig.model)
+        || summarizeOpenCodeSettingsConfig(settingsConfig).model
+        || DEFAULT_OPENCODE_LOCAL_MODEL;
+      const storedConfig = parseOpenCodeConfig(settingsConfig.config);
+      const nextConfig = {
+        ...existingConfig,
+        ...(Object.keys(storedConfig).length > 0 ? storedConfig : {}),
+        model: selectedModel,
+      };
+      writeJsonFile(getOpenCodeConfigPath(), nextConfig);
+      return;
+    }
+    if (provider.appType === HERMES_APP_TYPE) {
+      const existingText = fs.existsSync(getHermesConfigPath())
+        ? fs.readFileSync(getHermesConfigPath(), 'utf8')
+        : '';
+      const existingConfig = parseHermesConfigText(existingText);
+      const selectedModel = getString(settingsConfig.model)
+        || summarizeHermesSettingsConfig(settingsConfig).model
+        || DEFAULT_HERMES_LOCAL_MODEL;
+      const storedConfig = parseHermesConfig(settingsConfig.config);
+      const nextConfig = {
+        ...existingConfig,
+        ...storedConfig,
+        model: {
+          ...getNestedRecord(existingConfig, 'model'),
+          ...getNestedRecord(storedConfig, 'model'),
+          default: selectedModel,
+        },
+      };
+      atomicWrite(getHermesConfigPath(), serializeHermesConfig(nextConfig));
+      return;
+    }
+    if (provider.appType === OPENCLAW_APP_TYPE) {
+      const existingConfig = readJsonObject(getOpenClawConfigPath()) ?? {};
+      const selectedModel = getString(settingsConfig.model)
+        || summarizeOpenClawSettingsConfig(settingsConfig).model
+        || DEFAULT_OPENCLAW_LOCAL_MODEL;
+      const agents = getNestedRecord(existingConfig, 'agents');
+      const defaults = getNestedRecord(agents, 'defaults');
+      const models = getNestedRecord(defaults, 'models');
+      const model = getNestedRecord(defaults, 'model');
+      const nextConfig = {
+        ...existingConfig,
+        agents: {
+          ...agents,
+          defaults: {
+            ...defaults,
+            models: {
+              ...models,
+              [selectedModel]: models[selectedModel] ?? {},
+            },
+            model: {
+              ...model,
+              primary: selectedModel,
+            },
+          },
+        },
+      };
+      writeJsonFile(getOpenClawConfigPath(), nextConfig);
+      return;
+    }
+    if (provider.appType === QWEN_APP_TYPE) {
+      const existingConfig = readJsonObject(getQwenCodeSettingsPath()) ?? {};
+      const selectedModel = getString(settingsConfig.model)
+        || summarizeQwenCodeSettingsConfig(settingsConfig).model
+        || DEFAULT_QWEN_CODE_LOCAL_MODEL;
+      const authType = getString(settingsConfig.authType) || 'openai';
+      const storedConfig = parseQwenCodeSettings(settingsConfig.config);
+      const existingSecurity = getNestedRecord(existingConfig, 'security');
+      const storedSecurity = getNestedRecord(storedConfig, 'security');
+      const existingAuth = getNestedRecord(existingSecurity, 'auth');
+      const storedAuth = getNestedRecord(storedSecurity, 'auth');
+      const nextConfig = {
+        ...existingConfig,
+        ...(Object.keys(storedConfig).length > 0 ? storedConfig : {}),
+        security: {
+          ...existingSecurity,
+          ...storedSecurity,
+          auth: {
+            ...existingAuth,
+            ...storedAuth,
+            selectedType: authType,
+          },
+        },
+        model: {
+          ...getNestedRecord(existingConfig, 'model'),
+          ...getNestedRecord(storedConfig, 'model'),
+          name: selectedModel,
+        },
+      };
+      writeJsonFile(getQwenCodeSettingsPath(), nextConfig);
+      return;
+    }
+    if (provider.appType === DEEPSEEK_TUI_APP_TYPE) {
+      const existingText = fs.existsSync(getDeepSeekTuiConfigPath())
+        ? fs.readFileSync(getDeepSeekTuiConfigPath(), 'utf8')
+        : '';
+      const existingConfig = parseDeepSeekTuiConfigText(existingText);
+      const selectedModel = getString(settingsConfig.model)
+        || summarizeDeepSeekTuiSettingsConfig(settingsConfig).model
+        || DEFAULT_DEEPSEEK_TUI_LOCAL_MODEL;
+      const selectedProvider = getString(settingsConfig.provider)
+        || getString(parseDeepSeekTuiConfig(settingsConfig.config).provider)
+        || 'deepseek';
+      const storedConfig = parseDeepSeekTuiConfig(settingsConfig.config);
+      const nextConfig = {
+        ...existingConfig,
+        ...storedConfig,
+        provider: selectedProvider,
+        default_text_model: selectedModel,
+      };
+      atomicWrite(getDeepSeekTuiConfigPath(), serializeDeepSeekTuiConfig(nextConfig));
       return;
     }
 

@@ -17,7 +17,7 @@ import ModelSelector from '../ModelSelector';
 import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
 
 function toOpenClawModelRef(model: { id: string; providerKey?: string; isServerModel?: boolean }): string {
-  if (model.isServerModel) return `${OpenClawProviderId.LobsteraiServer}/${model.id}`;
+  if (model.isServerModel) return `${OpenClawProviderId.WesightServer}/${model.id}`;
   const openClawId = ProviderRegistry.getOpenClawProviderId(model.providerKey ?? '');
   return `${openClawId}/${model.id}`;
 }

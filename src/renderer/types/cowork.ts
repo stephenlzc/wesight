@@ -1,4 +1,18 @@
-import type { CoworkAgentEngine, ExternalAgentConfigSource } from '@shared/cowork/constants';
+import type {
+  CoworkAgentEngine,
+  DeepSeekTuiPermissionMode,
+  ExternalAgentConfigSource,
+  OpenCodePermissionMode,
+  QwenCodePermissionMode,
+} from '@shared/cowork/constants';
+export type {
+  RuntimeCallRecord,
+  RuntimeMetricsDetailResult,
+  RuntimeMetricsFilters,
+  RuntimeMetricsListResult,
+  RuntimeMetricsSummary,
+  RuntimeToolMetric,
+} from '@shared/cowork/runtimeMetrics';
 
 // Cowork image attachment for vision-capable models
 export interface CoworkImageAttachment {
@@ -16,6 +30,7 @@ export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result
 // Cowork execution mode
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
 export type { CoworkAgentEngine, ExternalAgentConfigSource };
+export type { DeepSeekTuiPermissionMode, OpenCodePermissionMode, QwenCodePermissionMode };
 
 // Cowork message metadata
 export interface CoworkMessageMetadata {
@@ -29,6 +44,7 @@ export interface CoworkMessageMetadata {
   isFinal?: boolean;
   isThinking?: boolean;
   skillIds?: string[];  // Skills used for this message
+  generatedImages?: Array<{ path: string; name?: string; mimeType?: string; source?: string }>;
   [key: string]: unknown;
 }
 
@@ -64,8 +80,16 @@ export interface CoworkConfig {
   systemPrompt: string;
   executionMode: CoworkExecutionMode;
   agentEngine: CoworkAgentEngine;
+  openclawConfigSource: ExternalAgentConfigSource;
   claudeCodeConfigSource: ExternalAgentConfigSource;
   codexConfigSource: ExternalAgentConfigSource;
+  hermesConfigSource: ExternalAgentConfigSource;
+  opencodeConfigSource: ExternalAgentConfigSource;
+  opencodePermissionMode: OpenCodePermissionMode;
+  qwenCodeConfigSource: ExternalAgentConfigSource;
+  qwenCodePermissionMode: QwenCodePermissionMode;
+  deepseekTuiConfigSource: ExternalAgentConfigSource;
+  deepseekTuiPermissionMode: DeepSeekTuiPermissionMode;
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
@@ -78,8 +102,16 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'workingDirectory'
   | 'executionMode'
   | 'agentEngine'
+  | 'openclawConfigSource'
   | 'claudeCodeConfigSource'
   | 'codexConfigSource'
+  | 'hermesConfigSource'
+  | 'opencodeConfigSource'
+  | 'opencodePermissionMode'
+  | 'qwenCodeConfigSource'
+  | 'qwenCodePermissionMode'
+  | 'deepseekTuiConfigSource'
+  | 'deepseekTuiPermissionMode'
   | 'memoryEnabled'
   | 'memoryImplicitUpdateEnabled'
   | 'memoryLlmJudgeEnabled'
@@ -108,6 +140,14 @@ export interface OpenClawEngineStatus {
   progressPercent?: number;
   message?: string;
   canRetry: boolean;
+  gatewayMode?: 'attached' | 'managed' | null;
+  binaryPath?: string | null;
+  configPath?: string | null;
+  gatewayUrl?: string | null;
+  gatewayPort?: number | null;
+  currentModel?: string | null;
+  feishuConfigured?: boolean;
+  feishuRunning?: boolean;
 }
 
 export type HermesEngineStatus = OpenClawEngineStatus;
@@ -205,7 +245,7 @@ export interface CoworkConfigResult {
   error?: string;
 }
 
-export type CliAppType = 'claude' | 'codex';
+export type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'qwen' | 'deepseek_tui';
 
 export interface CliAppConfigSnapshot {
   appType: CliAppType;
@@ -219,7 +259,7 @@ export interface CliAppConfigSnapshot {
 }
 
 export interface CliCommandStatus {
-  engine: Extract<CoworkAgentEngine, 'claude_code' | 'codex'>;
+  engine: Extract<CoworkAgentEngine, 'openclaw' | 'claude_code' | 'codex' | 'hermes' | 'opencode' | 'qwen_code' | 'deepseek_tui'>;
   appType: CliAppType;
   command: string;
   found: boolean;

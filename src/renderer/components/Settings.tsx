@@ -2,7 +2,10 @@ import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroico
 import { ArrowTopRightOnSquareIcon,ChatBubbleLeftIcon, CheckCircleIcon, Cog6ToothIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, SignalIcon, UserCircleIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import {
   CoworkAgentEngine as CoworkAgentEngineValue,
+  DeepSeekTuiPermissionMode as DeepSeekTuiPermissionModeValue,
   ExternalAgentConfigSource as ExternalAgentConfigSourceValue,
+  OpenCodePermissionMode as OpenCodePermissionModeValue,
+  QwenCodePermissionMode as QwenCodePermissionModeValue,
 } from '@shared/cowork/constants';
 import {
   DEFAULT_PET_CONFIG,
@@ -34,6 +37,7 @@ import type {
   CoworkAgentEngine,
   CoworkMemoryStats,
   CoworkUserMemoryEntry,
+  DeepSeekTuiPermissionMode,
   ExternalAgentCliInstallProgress,
   ExternalAgentConfigSource,
   ExternalAgentEnvironmentSnapshot,
@@ -42,6 +46,8 @@ import type {
   ExternalAgentProviderListResult,
   HermesEngineStatus,
   OpenClawEngineStatus,
+  OpenCodePermissionMode,
+  QwenCodePermissionMode,
 } from '../types/cowork';
 import Modal from './common/Modal';
 import ErrorMessage from './ErrorMessage';
@@ -103,6 +109,21 @@ const COWORK_AGENT_ENGINE_OPTIONS: Array<{
     value: CoworkAgentEngineValue.Codex,
     labelKey: 'coworkAgentEngineCodex',
     hintKey: 'coworkAgentEngineCodexHint',
+  },
+  {
+    value: CoworkAgentEngineValue.OpenCode,
+    labelKey: 'coworkAgentEngineOpenCode',
+    hintKey: 'coworkAgentEngineOpenCodeHint',
+  },
+  {
+    value: CoworkAgentEngineValue.QwenCode,
+    labelKey: 'coworkAgentEngineQwenCode',
+    hintKey: 'coworkAgentEngineQwenCodeHint',
+  },
+  {
+    value: CoworkAgentEngineValue.DeepSeekTui,
+    labelKey: 'coworkAgentEngineDeepSeekTui',
+    hintKey: 'coworkAgentEngineDeepSeekTuiHint',
   },
 ];
 
@@ -798,17 +819,50 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
   const [hermesEngineStatus, setHermesEngineStatus] = useState<HermesEngineStatus | null>(null);
   const [agentEnvironmentSnapshot, setAgentEnvironmentSnapshot] = useState<ExternalAgentEnvironmentSnapshot | null>(null);
+  const [openclawConfigSource, setOpenClawConfigSource] = useState<ExternalAgentConfigSource>(
+    coworkConfig.openclawConfigSource ?? ExternalAgentConfigSourceValue.LocalCli,
+  );
   const [claudeCodeConfigSource, setClaudeCodeConfigSource] = useState<ExternalAgentConfigSource>(
     coworkConfig.claudeCodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
   );
   const [codexConfigSource, setCodexConfigSource] = useState<ExternalAgentConfigSource>(
     coworkConfig.codexConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
   );
+  const [hermesConfigSource, setHermesConfigSource] = useState<ExternalAgentConfigSource>(
+    coworkConfig.hermesConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
+  );
+  const [opencodeConfigSource, setOpenCodeConfigSource] = useState<ExternalAgentConfigSource>(
+    coworkConfig.opencodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
+  );
+  const [opencodePermissionMode, setOpenCodePermissionMode] = useState<OpenCodePermissionMode>(
+    coworkConfig.opencodePermissionMode ?? OpenCodePermissionModeValue.Auto,
+  );
+  const [qwenCodeConfigSource, setQwenCodeConfigSource] = useState<ExternalAgentConfigSource>(
+    coworkConfig.qwenCodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
+  );
+  const [qwenCodePermissionMode, setQwenCodePermissionMode] = useState<QwenCodePermissionMode>(
+    coworkConfig.qwenCodePermissionMode ?? QwenCodePermissionModeValue.Auto,
+  );
+  const [deepseekTuiConfigSource, setDeepSeekTuiConfigSource] = useState<ExternalAgentConfigSource>(
+    coworkConfig.deepseekTuiConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
+  );
+  const [deepseekTuiPermissionMode, setDeepSeekTuiPermissionMode] = useState<DeepSeekTuiPermissionMode>(
+    coworkConfig.deepseekTuiPermissionMode ?? DeepSeekTuiPermissionModeValue.Auto,
+  );
   const [agentConfigImportingAppType, setAgentConfigImportingAppType] = useState<ExternalAgentProviderAppType | null>(null);
+  const [openclawGlobalSyncing, setOpenClawGlobalSyncing] = useState(false);
+  const [opencodeGlobalSyncing, setOpenCodeGlobalSyncing] = useState(false);
+  const [qwenCodeGlobalSyncing, setQwenCodeGlobalSyncing] = useState(false);
+  const [deepseekTuiGlobalSyncing, setDeepSeekTuiGlobalSyncing] = useState(false);
   const [agentCliInstallingAppType, setAgentCliInstallingAppType] = useState<ExternalAgentProviderAppType | null>(null);
   const [agentCliInstallProgress, setAgentCliInstallProgress] = useState<Record<ExternalAgentProviderAppType, string>>({
     claude: '',
     codex: '',
+    hermes: '',
+    openclaw: '',
+    opencode: '',
+    qwen: '',
+    deepseek_tui: '',
   });
   const [agentProviderLists, setAgentProviderLists] = useState<Partial<Record<ExternalAgentProviderAppType, ExternalAgentProviderListResult>>>({});
   const [agentProviderLoadingAppType, setAgentProviderLoadingAppType] = useState<ExternalAgentProviderAppType | null>(null);
@@ -817,19 +871,39 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const selectedExternalAgentAppType = useMemo<ExternalAgentProviderAppType | null>(() => {
     if (coworkAgentEngine === CoworkAgentEngineValue.ClaudeCode) return 'claude';
     if (coworkAgentEngine === CoworkAgentEngineValue.Codex) return 'codex';
+    if (coworkAgentEngine === CoworkAgentEngineValue.Hermes) return 'hermes';
+    if (coworkAgentEngine === CoworkAgentEngineValue.OpenCode) return 'opencode';
+    if (coworkAgentEngine === CoworkAgentEngineValue.QwenCode) return 'qwen';
+    if (coworkAgentEngine === CoworkAgentEngineValue.DeepSeekTui) return 'deepseek_tui';
     return null;
   }, [coworkAgentEngine]);
 
   useEffect(() => {
     setCoworkAgentEngine(coworkConfig.agentEngine || CoworkAgentEngineValue.YdCowork);
+    setOpenClawConfigSource(coworkConfig.openclawConfigSource ?? ExternalAgentConfigSourceValue.LocalCli);
     setClaudeCodeConfigSource(coworkConfig.claudeCodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
     setCodexConfigSource(coworkConfig.codexConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
+    setHermesConfigSource(coworkConfig.hermesConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
+    setOpenCodeConfigSource(coworkConfig.opencodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
+    setOpenCodePermissionMode(coworkConfig.opencodePermissionMode ?? OpenCodePermissionModeValue.Auto);
+    setQwenCodeConfigSource(coworkConfig.qwenCodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
+    setQwenCodePermissionMode(coworkConfig.qwenCodePermissionMode ?? QwenCodePermissionModeValue.Auto);
+    setDeepSeekTuiConfigSource(coworkConfig.deepseekTuiConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
+    setDeepSeekTuiPermissionMode(coworkConfig.deepseekTuiPermissionMode ?? DeepSeekTuiPermissionModeValue.Auto);
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
   }, [
     coworkConfig.agentEngine,
+    coworkConfig.openclawConfigSource,
     coworkConfig.claudeCodeConfigSource,
     coworkConfig.codexConfigSource,
+    coworkConfig.hermesConfigSource,
+    coworkConfig.opencodeConfigSource,
+    coworkConfig.opencodePermissionMode,
+    coworkConfig.qwenCodeConfigSource,
+    coworkConfig.qwenCodePermissionMode,
+    coworkConfig.deepseekTuiConfigSource,
+    coworkConfig.deepseekTuiPermissionMode,
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
   ]);
@@ -863,10 +937,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         ...prev,
         [progress.appType]: message,
       }));
+      if (progress.phase === 'starting' || progress.phase === 'installing' || progress.phase === 'verifying') {
+        setAgentCliInstallingAppType(progress.appType);
+      }
       if (progress.phase === 'success' || progress.phase === 'error' || progress.phase === 'unsupported') {
         setAgentCliInstallingAppType((current) => (
           current === progress.appType ? null : current
         ));
+        if (progress.phase === 'success') {
+          void refreshAgentEnvironmentSnapshot();
+        }
       }
     });
     return unsubscribe;
@@ -1517,15 +1597,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   };
 
   const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
+    || openclawConfigSource !== coworkConfig.openclawConfigSource
     || claudeCodeConfigSource !== coworkConfig.claudeCodeConfigSource
     || codexConfigSource !== coworkConfig.codexConfigSource
+    || hermesConfigSource !== coworkConfig.hermesConfigSource
+    || opencodeConfigSource !== coworkConfig.opencodeConfigSource
+    || opencodePermissionMode !== coworkConfig.opencodePermissionMode
+    || qwenCodeConfigSource !== coworkConfig.qwenCodeConfigSource
+    || qwenCodePermissionMode !== coworkConfig.qwenCodePermissionMode
+    || deepseekTuiConfigSource !== coworkConfig.deepseekTuiConfigSource
+    || deepseekTuiPermissionMode !== coworkConfig.deepseekTuiPermissionMode
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled;
   const hasCoworkAgentEngineApplyChanges = coworkAgentEngine !== coworkConfig.agentEngine
+    || (coworkAgentEngine === CoworkAgentEngineValue.OpenClaw
+      && openclawConfigSource !== coworkConfig.openclawConfigSource)
     || (coworkAgentEngine === CoworkAgentEngineValue.ClaudeCode
       && claudeCodeConfigSource !== coworkConfig.claudeCodeConfigSource)
     || (coworkAgentEngine === CoworkAgentEngineValue.Codex
-      && codexConfigSource !== coworkConfig.codexConfigSource);
+      && codexConfigSource !== coworkConfig.codexConfigSource)
+    || (coworkAgentEngine === CoworkAgentEngineValue.Hermes
+      && hermesConfigSource !== coworkConfig.hermesConfigSource)
+    || (coworkAgentEngine === CoworkAgentEngineValue.OpenCode
+      && (opencodeConfigSource !== coworkConfig.opencodeConfigSource
+        || opencodePermissionMode !== coworkConfig.opencodePermissionMode))
+    || (coworkAgentEngine === CoworkAgentEngineValue.QwenCode
+      && (qwenCodeConfigSource !== coworkConfig.qwenCodeConfigSource
+        || qwenCodePermissionMode !== coworkConfig.qwenCodePermissionMode))
+    || (coworkAgentEngine === CoworkAgentEngineValue.DeepSeekTui
+      && (deepseekTuiConfigSource !== coworkConfig.deepseekTuiConfigSource
+        || deepseekTuiPermissionMode !== coworkConfig.deepseekTuiPermissionMode));
   const isCoworkAgentConfigApplying = isSaving
     && activeTab === 'coworkAgentEngine'
     && hasCoworkAgentEngineApplyChanges;
@@ -1548,7 +1649,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     if (!status) {
       return i18nService.t('coworkOpenClawNotInstalledNotice');
     }
-    if (status.message?.trim()) {
+    if ((status.phase === 'installing' || status.phase === 'error') && status.message?.trim()) {
       return status.message.trim();
     }
     switch (status.phase) {
@@ -1920,8 +2021,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       if (hasCoworkConfigChanges) {
         const updated = await coworkService.updateConfig({
           agentEngine: coworkAgentEngine,
+          openclawConfigSource,
           claudeCodeConfigSource,
           codexConfigSource,
+          hermesConfigSource,
+          opencodeConfigSource,
+          opencodePermissionMode,
+          qwenCodeConfigSource,
+          qwenCodePermissionMode,
+          deepseekTuiConfigSource,
+          deepseekTuiPermissionMode,
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
         });
@@ -2594,6 +2703,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         setError(result.error || i18nService.t('coworkAgentEngineInstallCliFailed'));
         return;
       }
+      if (appType === 'hermes') {
+        setHermesConfigSource(ExternalAgentConfigSourceValue.WesightModel);
+      }
       setNoticeMessage(i18nService.t('coworkAgentEngineInstallCliSuccess'));
       setAgentCliInstallProgress((prev) => ({
         ...prev,
@@ -2602,6 +2714,43 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     } finally {
       setAgentCliInstallingAppType((current) => (
         current === appType ? null : current
+      ));
+    }
+  };
+
+  const handleInstallHermesEngine = async () => {
+    if (window.electron?.platform !== 'darwin') {
+      setError(i18nService.t('coworkAgentEngineInstallCliUnsupported'));
+      return;
+    }
+    setError(null);
+    setAgentCliInstallingAppType('hermes');
+    setAgentCliInstallProgress((prev) => ({
+      ...prev,
+      hermes: i18nService.t('coworkAgentEngineInstallCliStarting'),
+    }));
+    setHermesEngineStatus((current) => ({
+      phase: 'installing',
+      version: current?.version ?? null,
+      progressPercent: 8,
+      message: i18nService.t('coworkHermesInstalling'),
+      canRetry: false,
+    }));
+    try {
+      const status = await coworkService.installHermesEngine();
+      if (status) {
+        setHermesEngineStatus(status);
+      }
+      await refreshAgentEnvironmentSnapshot();
+      if (!status || status.phase === 'error' || status.phase === 'not_installed') {
+        setError(status?.message || i18nService.t('coworkAgentEngineInstallCliFailed'));
+        return;
+      }
+      setHermesConfigSource(ExternalAgentConfigSourceValue.WesightModel);
+      setNoticeMessage(i18nService.t('coworkAgentEngineInstallCliSuccess'));
+    } finally {
+      setAgentCliInstallingAppType((current) => (
+        current === 'hermes' ? null : current
       ));
     }
   };
@@ -2703,34 +2852,148 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     );
   };
 
-  const renderOpenClawAgentEngineDetails = () => (
-    <div className="space-y-3 border-t border-border pt-4">
-      <div className="text-xs text-secondary">
-        {i18nService.t('coworkOpenClawInstallHint')}
-      </div>
-      <div className={`rounded-xl border px-4 py-3 text-sm ${openClawEngineStatus?.phase === 'error'
-        ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
-        : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'}`}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            {resolveOpenClawStatusText(openClawEngineStatus)}
-            {openClawProgressPercent !== null && (
-              <span className="ml-2 text-xs opacity-80">{openClawProgressPercent}%</span>
-            )}
+  const renderOpenClawAgentEngineDetails = () => {
+    const cliStatus = agentEnvironmentSnapshot?.engines.find((item) => item.appType === 'openclaw');
+    const installProgress = agentCliInstallProgress.openclaw;
+    const isInstalling = agentCliInstallingAppType === 'openclaw' || openClawEngineStatus?.phase === 'installing';
+    const statusRows = [
+      { label: i18nService.t('coworkAgentEngineCommandPath'), value: openClawEngineStatus?.binaryPath || cliStatus?.path || '-' },
+      { label: i18nService.t('coworkAgentEngineVersion'), value: openClawEngineStatus?.version || cliStatus?.version || '-' },
+      { label: i18nService.t('coworkAgentEngineConfigPath'), value: openClawEngineStatus?.configPath || cliStatus?.config.primaryConfigPath || '-' },
+      { label: i18nService.t('coworkAgentOpenClawGateway'), value: openClawEngineStatus?.gatewayUrl || (openClawEngineStatus?.gatewayPort ? `loopback:${openClawEngineStatus.gatewayPort}` : '-') },
+      { label: i18nService.t('coworkAgentOpenClawGatewayMode'), value: openClawEngineStatus?.gatewayMode ? i18nService.t(openClawEngineStatus.gatewayMode === 'attached' ? 'coworkAgentOpenClawGatewayAttached' : 'coworkAgentOpenClawGatewayManaged') : '-' },
+      { label: i18nService.t('coworkAgentOpenClawCurrentModel'), value: openClawEngineStatus?.currentModel || cliStatus?.config.currentProviderName || '-' },
+      { label: i18nService.t('coworkAgentOpenClawFeishuStatus'), value: openClawEngineStatus?.feishuRunning ? i18nService.t('coworkAgentOpenClawFeishuRunning') : openClawEngineStatus?.feishuConfigured ? i18nService.t('coworkAgentOpenClawFeishuConfigured') : '-' },
+    ];
+    const sourceOptions = [
+      {
+        value: ExternalAgentConfigSourceValue.LocalCli,
+        labelKey: 'coworkAgentConfigSourceLocalCli',
+        hintKey: 'coworkAgentOpenClawLocalCliHint',
+      },
+      {
+        value: ExternalAgentConfigSourceValue.WesightModel,
+        labelKey: 'coworkAgentConfigSourceWesightModel',
+        hintKey: 'coworkAgentOpenClawWesightModelHint',
+      },
+    ];
+
+    return (
+      <div className="mt-4 space-y-4">
+        {renderAgentEngineMeta(CoworkAgentEngineValue.OpenClaw)}
+        <div className="space-y-3 border-t border-border pt-4">
+          <div className="text-sm font-medium text-foreground">
+            {i18nService.t('coworkAgentConfigSourceTitle')}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {sourceOptions.map((option) => {
+              const checked = openclawConfigSource === option.value;
+              return (
+                <label
+                  key={option.value}
+                  className={`flex gap-3 rounded-xl border px-3 py-3 transition-colors ${isSaving ? 'cursor-wait opacity-70' : 'cursor-pointer'} ${checked ? 'border-primary bg-primary/5' : 'border-border hover:bg-surface-raised'}`}
+                >
+                  <input
+                    type="radio"
+                    name="openclaw-config-source"
+                    checked={checked}
+                    disabled={isSaving}
+                    onChange={() => setOpenClawConfigSource(option.value)}
+                    className="mt-1"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-foreground">
+                      {i18nService.t(option.labelKey)}
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-secondary">
+                      {i18nService.t(option.hintKey)}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
           </div>
         </div>
-        {openClawProgressPercent !== null && (
-          <div className="mt-2 h-2 overflow-hidden rounded-full bg-black/10">
-            <div
-              className="h-full bg-primary transition-all"
-              style={{ width: `${openClawProgressPercent}%` }}
-            />
+
+        <div className={`rounded-xl border px-4 py-3 text-sm ${openClawEngineStatus?.phase === 'error'
+          ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
+          : 'border-border bg-surface-raised/60 text-foreground'}`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              {resolveOpenClawStatusText(openClawEngineStatus)}
+              {openClawProgressPercent !== null && (
+                <span className="ml-2 text-xs opacity-80">{openClawProgressPercent}%</span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (openClawEngineStatus?.phase === 'not_installed') {
+                  void coworkService.installOpenClawEngine();
+                } else {
+                  void coworkService.restartOpenClawGateway();
+                }
+              }}
+              disabled={isInstalling || openClawEngineStatus?.phase === 'starting'}
+              className="shrink-0 rounded-md border border-current/20 px-2 py-1 text-[11px] font-medium hover:bg-black/5 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-white/10"
+            >
+              {i18nService.t(openClawEngineStatus?.phase === 'not_installed'
+                ? 'coworkOpenClawInstallCli'
+                : openClawEngineStatus?.gatewayMode === 'attached'
+                  ? 'coworkOpenClawReconnectGateway'
+                  : 'coworkOpenClawRestartGateway')}
+            </button>
+          </div>
+          {installProgress && (
+            <div className="mt-2 truncate text-[11px] leading-5 text-secondary" title={installProgress}>
+              {installProgress}
+            </div>
+          )}
+          {openClawProgressPercent !== null && (
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-black/10">
+              <div
+                className="h-full bg-primary transition-all"
+                style={{ width: `${openClawProgressPercent}%` }}
+              />
+            </div>
+          )}
+          <div className="mt-3 space-y-1">
+            {statusRows.map((row) => (
+              <div key={row.label} className="grid grid-cols-[104px_minmax(0,1fr)] gap-2 text-[11px] leading-5">
+                <span className="text-secondary">{row.label}</span>
+                <span className="truncate font-mono text-foreground/80" title={row.value}>{row.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border px-3 py-3 text-xs leading-5 text-secondary">
+          {i18nService.t('coworkAgentOpenClawFeishuLocalHint')}
+        </div>
+
+        {openclawConfigSource === ExternalAgentConfigSourceValue.WesightModel && (
+          <div className="flex flex-col gap-2 rounded-xl border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs leading-5 text-secondary">
+              {i18nService.t('coworkAgentOpenClawSyncGlobalHint')}
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleSyncOpenClawGlobalConfig()}
+              disabled={openclawGlobalSyncing}
+              className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised disabled:cursor-wait disabled:opacity-50"
+            >
+              {i18nService.t(openclawGlobalSyncing
+                ? 'coworkAgentOpenClawSyncGlobalSyncing'
+                : 'coworkAgentOpenClawSyncGlobal')}
+            </button>
           </div>
         )}
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderHermesAgentEngineDetails = () => (
     <div className="space-y-3 border-t border-border pt-4">
@@ -2753,12 +3016,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              void coworkService.restartHermesGateway();
+              if (hermesEngineStatus?.phase === 'not_installed') {
+                void handleInstallHermesEngine();
+              } else {
+                void coworkService.restartHermesGateway();
+              }
             }}
-            disabled={hermesEngineStatus?.phase === 'starting'}
+            disabled={
+              agentCliInstallingAppType === 'hermes'
+              || hermesEngineStatus?.phase === 'installing'
+              || hermesEngineStatus?.phase === 'starting'
+            }
             className="shrink-0 rounded-md border border-current/20 px-2 py-1 text-[11px] font-medium hover:bg-black/5 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-white/10"
           >
-            {i18nService.t('coworkHermesRestartGateway')}
+            {i18nService.t(
+              agentCliInstallingAppType === 'hermes'
+                ? 'coworkAgentEngineInstallCliInstalling'
+                : hermesEngineStatus?.phase === 'not_installed'
+                  ? 'coworkAgentEngineInstallCli'
+                  : 'coworkHermesRestartGateway',
+            )}
           </button>
         </div>
         {hermesProgressPercent !== null && (
@@ -2774,19 +3051,24 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   );
 
   const renderSelectedAgentEngineDetails = (engine: CoworkAgentEngine) => {
-    if (engine === CoworkAgentEngineValue.ClaudeCode || engine === CoworkAgentEngineValue.Codex) {
+    if (
+      engine === CoworkAgentEngineValue.ClaudeCode
+      || engine === CoworkAgentEngineValue.Codex
+      || engine === CoworkAgentEngineValue.Hermes
+      || engine === CoworkAgentEngineValue.OpenCode
+      || engine === CoworkAgentEngineValue.QwenCode
+      || engine === CoworkAgentEngineValue.DeepSeekTui
+    ) {
       return (
         <div className="mt-4 space-y-4">
           {renderAgentEngineMeta(engine)}
+          {engine === CoworkAgentEngineValue.Hermes && renderHermesAgentEngineDetails()}
           {renderAgentConfigSourceSettings()}
         </div>
       );
     }
     if (engine === CoworkAgentEngineValue.OpenClaw) {
       return renderOpenClawAgentEngineDetails();
-    }
-    if (engine === CoworkAgentEngineValue.Hermes) {
-      return renderHermesAgentEngineDetails();
     }
     return (
       <div className="mt-4 rounded-lg border border-border bg-surface-raised/50 px-3 py-2 text-xs leading-5 text-secondary">
@@ -2857,8 +3139,20 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const selectedAgentConfigSource = useMemo<ExternalAgentConfigSource | null>(() => {
     if (selectedExternalAgentAppType === 'claude') return claudeCodeConfigSource;
     if (selectedExternalAgentAppType === 'codex') return codexConfigSource;
+    if (selectedExternalAgentAppType === 'hermes') return hermesConfigSource;
+    if (selectedExternalAgentAppType === 'opencode') return opencodeConfigSource;
+    if (selectedExternalAgentAppType === 'qwen') return qwenCodeConfigSource;
+    if (selectedExternalAgentAppType === 'deepseek_tui') return deepseekTuiConfigSource;
     return null;
-  }, [claudeCodeConfigSource, codexConfigSource, selectedExternalAgentAppType]);
+  }, [
+    claudeCodeConfigSource,
+    codexConfigSource,
+    deepseekTuiConfigSource,
+    hermesConfigSource,
+    opencodeConfigSource,
+    qwenCodeConfigSource,
+    selectedExternalAgentAppType,
+  ]);
 
   const setSelectedAgentConfigSource = (source: ExternalAgentConfigSource) => {
     if (isSaving) return;
@@ -2868,6 +3162,22 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     }
     if (selectedExternalAgentAppType === 'codex') {
       setCodexConfigSource(source);
+      return;
+    }
+    if (selectedExternalAgentAppType === 'hermes') {
+      setHermesConfigSource(source);
+      return;
+    }
+    if (selectedExternalAgentAppType === 'opencode') {
+      setOpenCodeConfigSource(source);
+      return;
+    }
+    if (selectedExternalAgentAppType === 'qwen') {
+      setQwenCodeConfigSource(source);
+      return;
+    }
+    if (selectedExternalAgentAppType === 'deepseek_tui') {
+      setDeepSeekTuiConfigSource(source);
     }
   };
 
@@ -2977,6 +3287,91 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     }
   };
 
+  const handleSyncOpenClawGlobalConfig = async () => {
+    setError(null);
+    setOpenClawGlobalSyncing(true);
+    try {
+      const result = await coworkService.syncOpenClawGlobalConfig();
+      if (!result.success) {
+        setError(result.error || i18nService.t('coworkAgentOpenClawSyncGlobalFailed'));
+        return;
+      }
+      if (result.status) {
+        setOpenClawEngineStatus(result.status);
+      }
+      setOpenClawConfigSource(ExternalAgentConfigSourceValue.WesightModel);
+      setNoticeMessage(i18nService.t('coworkAgentOpenClawSyncGlobalSuccess'));
+    } finally {
+      setOpenClawGlobalSyncing(false);
+    }
+  };
+
+  const handleSyncOpenCodeGlobalConfig = async () => {
+    setError(null);
+    setOpenCodeGlobalSyncing(true);
+    try {
+      const result = await coworkService.syncOpenCodeGlobalConfig();
+      if (!result.success) {
+        setError(result.error || i18nService.t('coworkAgentOpenCodeSyncGlobalFailed'));
+        return;
+      }
+      setAgentProviderLists((prev) => ({
+        ...prev,
+        opencode: result,
+      }));
+      setNoticeMessage(i18nService.t('coworkAgentOpenCodeSyncGlobalSuccess'));
+      window.dispatchEvent(new CustomEvent('wesight-agent-provider-changed', {
+        detail: { appType: 'opencode' },
+      }));
+    } finally {
+      setOpenCodeGlobalSyncing(false);
+    }
+  };
+
+  const handleSyncQwenCodeGlobalConfig = async () => {
+    setError(null);
+    setQwenCodeGlobalSyncing(true);
+    try {
+      const result = await coworkService.syncQwenCodeGlobalConfig();
+      if (!result.success) {
+        setError(result.error || i18nService.t('coworkAgentQwenCodeSyncGlobalFailed'));
+        return;
+      }
+      setAgentProviderLists((prev) => ({
+        ...prev,
+        qwen: result,
+      }));
+      setNoticeMessage(i18nService.t('coworkAgentQwenCodeSyncGlobalSuccess'));
+      window.dispatchEvent(new CustomEvent('wesight-agent-provider-changed', {
+        detail: { appType: 'qwen' },
+      }));
+    } finally {
+      setQwenCodeGlobalSyncing(false);
+    }
+  };
+
+  const handleSyncDeepSeekTuiGlobalConfig = async () => {
+    setError(null);
+    setDeepSeekTuiGlobalSyncing(true);
+    try {
+      const result = await coworkService.syncDeepSeekTuiGlobalConfig();
+      if (!result.success) {
+        setError(result.error || i18nService.t('coworkAgentDeepSeekTuiSyncGlobalFailed'));
+        return;
+      }
+      setAgentProviderLists((prev) => ({
+        ...prev,
+        deepseek_tui: result,
+      }));
+      setNoticeMessage(i18nService.t('coworkAgentDeepSeekTuiSyncGlobalSuccess'));
+      window.dispatchEvent(new CustomEvent('wesight-agent-provider-changed', {
+        detail: { appType: 'deepseek_tui' },
+      }));
+    } finally {
+      setDeepSeekTuiGlobalSyncing(false);
+    }
+  };
+
   const renderAgentConfigSourceSettings = () => {
     if (!selectedExternalAgentAppType || !selectedAgentConfigSource) return null;
     const cliStatus = agentEnvironmentSnapshot?.engines.find((item) => item.appType === selectedExternalAgentAppType);
@@ -3041,6 +3436,156 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           })}
         </div>
 
+        {selectedExternalAgentAppType === 'opencode' && (
+          <div className="rounded-xl border border-border px-3 py-3">
+            <div className="text-xs font-medium text-foreground">
+              {i18nService.t('coworkAgentOpenCodePermissionTitle')}
+            </div>
+            <div className="mt-1 text-[11px] leading-5 text-secondary">
+              {i18nService.t('coworkAgentOpenCodePermissionHint')}
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {[
+                {
+                  value: OpenCodePermissionModeValue.Auto,
+                  labelKey: 'coworkAgentOpenCodePermissionAuto',
+                  hintKey: 'coworkAgentOpenCodePermissionAutoHint',
+                },
+                {
+                  value: OpenCodePermissionModeValue.Conservative,
+                  labelKey: 'coworkAgentOpenCodePermissionConservative',
+                  hintKey: 'coworkAgentOpenCodePermissionConservativeHint',
+                },
+              ].map((option) => {
+                const checked = opencodePermissionMode === option.value;
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex gap-3 rounded-lg border px-3 py-2 ${checked ? 'border-primary bg-primary/5' : 'border-border hover:bg-surface-raised'}`}
+                  >
+                    <input
+                      type="radio"
+                      name="opencode-permission-mode"
+                      checked={checked}
+                      disabled={isSaving}
+                      onChange={() => setOpenCodePermissionMode(option.value)}
+                      className="mt-1"
+                    />
+                    <span>
+                      <span className="block text-xs font-medium text-foreground">
+                        {i18nService.t(option.labelKey)}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-5 text-secondary">
+                        {i18nService.t(option.hintKey)}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {selectedExternalAgentAppType === 'qwen' && (
+          <div className="rounded-xl border border-border px-3 py-3">
+            <div className="text-xs font-medium text-foreground">
+              {i18nService.t('coworkAgentQwenCodePermissionTitle')}
+            </div>
+            <div className="mt-1 text-[11px] leading-5 text-secondary">
+              {i18nService.t('coworkAgentQwenCodePermissionHint')}
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {[
+                {
+                  value: QwenCodePermissionModeValue.Auto,
+                  labelKey: 'coworkAgentQwenCodePermissionAuto',
+                  hintKey: 'coworkAgentQwenCodePermissionAutoHint',
+                },
+                {
+                  value: QwenCodePermissionModeValue.Conservative,
+                  labelKey: 'coworkAgentQwenCodePermissionConservative',
+                  hintKey: 'coworkAgentQwenCodePermissionConservativeHint',
+                },
+              ].map((option) => {
+                const checked = qwenCodePermissionMode === option.value;
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex gap-3 rounded-lg border px-3 py-2 ${checked ? 'border-primary bg-primary/5' : 'border-border hover:bg-surface-raised'}`}
+                  >
+                    <input
+                      type="radio"
+                      name="qwen-code-permission-mode"
+                      checked={checked}
+                      disabled={isSaving}
+                      onChange={() => setQwenCodePermissionMode(option.value)}
+                      className="mt-1"
+                    />
+                    <span>
+                      <span className="block text-xs font-medium text-foreground">
+                        {i18nService.t(option.labelKey)}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-5 text-secondary">
+                        {i18nService.t(option.hintKey)}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {selectedExternalAgentAppType === 'deepseek_tui' && (
+          <div className="rounded-xl border border-border px-3 py-3">
+            <div className="text-xs font-medium text-foreground">
+              {i18nService.t('coworkAgentDeepSeekTuiPermissionTitle')}
+            </div>
+            <div className="mt-1 text-[11px] leading-5 text-secondary">
+              {i18nService.t('coworkAgentDeepSeekTuiPermissionHint')}
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {[
+                {
+                  value: DeepSeekTuiPermissionModeValue.Auto,
+                  labelKey: 'coworkAgentDeepSeekTuiPermissionAuto',
+                  hintKey: 'coworkAgentDeepSeekTuiPermissionAutoHint',
+                },
+                {
+                  value: DeepSeekTuiPermissionModeValue.Conservative,
+                  labelKey: 'coworkAgentDeepSeekTuiPermissionConservative',
+                  hintKey: 'coworkAgentDeepSeekTuiPermissionConservativeHint',
+                },
+              ].map((option) => {
+                const checked = deepseekTuiPermissionMode === option.value;
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex gap-3 rounded-lg border px-3 py-2 ${checked ? 'border-primary bg-primary/5' : 'border-border hover:bg-surface-raised'}`}
+                  >
+                    <input
+                      type="radio"
+                      name="deepseek-tui-permission-mode"
+                      checked={checked}
+                      disabled={isSaving}
+                      onChange={() => setDeepSeekTuiPermissionMode(option.value)}
+                      className="mt-1"
+                    />
+                    <span>
+                      <span className="block text-xs font-medium text-foreground">
+                        {i18nService.t(option.labelKey)}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-5 text-secondary">
+                        {i18nService.t(option.hintKey)}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {selectedAgentConfigSource === ExternalAgentConfigSourceValue.LocalCli && (
           <div className="rounded-xl border border-border px-3 py-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -3089,6 +3634,60 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 ))
               )}
             </select>
+          </div>
+        )}
+
+        {selectedExternalAgentAppType === 'opencode' && selectedAgentConfigSource === ExternalAgentConfigSourceValue.WesightModel && (
+          <div className="flex flex-col gap-2 rounded-xl border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs leading-5 text-secondary">
+              {i18nService.t('coworkAgentOpenCodeSyncGlobalHint')}
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleSyncOpenCodeGlobalConfig()}
+              disabled={opencodeGlobalSyncing}
+              className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised disabled:cursor-wait disabled:opacity-50"
+            >
+              {i18nService.t(opencodeGlobalSyncing
+                ? 'coworkAgentOpenCodeSyncGlobalSyncing'
+                : 'coworkAgentOpenCodeSyncGlobal')}
+            </button>
+          </div>
+        )}
+
+        {selectedExternalAgentAppType === 'qwen' && selectedAgentConfigSource === ExternalAgentConfigSourceValue.WesightModel && (
+          <div className="flex flex-col gap-2 rounded-xl border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs leading-5 text-secondary">
+              {i18nService.t('coworkAgentQwenCodeSyncGlobalHint')}
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleSyncQwenCodeGlobalConfig()}
+              disabled={qwenCodeGlobalSyncing}
+              className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised disabled:cursor-wait disabled:opacity-50"
+            >
+              {i18nService.t(qwenCodeGlobalSyncing
+                ? 'coworkAgentQwenCodeSyncGlobalSyncing'
+                : 'coworkAgentQwenCodeSyncGlobal')}
+            </button>
+          </div>
+        )}
+
+        {selectedExternalAgentAppType === 'deepseek_tui' && selectedAgentConfigSource === ExternalAgentConfigSourceValue.WesightModel && (
+          <div className="flex flex-col gap-2 rounded-xl border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs leading-5 text-secondary">
+              {i18nService.t('coworkAgentDeepSeekTuiSyncGlobalHint')}
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleSyncDeepSeekTuiGlobalConfig()}
+              disabled={deepseekTuiGlobalSyncing}
+              className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised disabled:cursor-wait disabled:opacity-50"
+            >
+              {i18nService.t(deepseekTuiGlobalSyncing
+                ? 'coworkAgentDeepSeekTuiSyncGlobalSyncing'
+                : 'coworkAgentDeepSeekTuiSyncGlobal')}
+            </button>
           </div>
         )}
 
@@ -4859,16 +5458,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    void window.electron.shell.openExternal('https://github.com/netease-youdao/lobsterai');
+                    void window.electron.shell.openExternal('https://github.com/freestylefly/wesight');
                   }}
                   className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-primary dark:hover:text-primary transition-colors"
                 >
-                  基于 LobsterAI 二次开发
+                  开源项目
                 </button>
               </div>
 
               <p className="mt-5 text-xs text-secondary">
-                &copy; {new Date().getFullYear()} WeSight 基于 LobsterAI by 苍何团队开发 · 数据本地存储 版权所有
+                &copy; {new Date().getFullYear()} WeSight by 苍何团队 · 数据本地存储 版权所有
               </p>
             </div>
           </div>

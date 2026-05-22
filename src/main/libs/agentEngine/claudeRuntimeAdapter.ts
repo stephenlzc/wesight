@@ -1,5 +1,6 @@
-import { EventEmitter } from 'events';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import { EventEmitter } from 'events';
+
 import type { CoworkRunner } from '../coworkRunner';
 import type {
   CoworkContinueOptions,
@@ -68,6 +69,9 @@ export class ClaudeRuntimeAdapter extends EventEmitter implements CoworkRuntime 
     });
     this.runner.on('permissionRequest', (sessionId, request) => {
       this.emit('permissionRequest', sessionId, request);
+    });
+    this.runner.on('runtimeMetric', (sessionId, metric) => {
+      this.emit('runtimeMetric', sessionId, metric);
     });
     this.runner.on('complete', (sessionId, claudeSessionId) => {
       this.emit('complete', sessionId, claudeSessionId);

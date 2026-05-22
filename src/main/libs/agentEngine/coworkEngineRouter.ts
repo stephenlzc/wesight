@@ -4,7 +4,9 @@ import { EventEmitter } from 'events';
 import {
   CoworkAgentEngine as CoworkAgentEngineValue,
   isCoworkAgentEngine,
+  RuntimeCallStatus,
 } from '../../../shared/cowork/constants';
+import type { RuntimeTelemetryTracker } from '../runtimeTelemetryTracker';
 import type {
   CoworkAgentEngine,
   CoworkContinueOptions,
@@ -21,6 +23,10 @@ type RouterDeps = {
   claudeRuntime: CoworkRuntime;
   claudeCodeRuntime: CoworkRuntime;
   codexRuntime: CoworkRuntime;
+  openCodeRuntime: CoworkRuntime;
+  qwenCodeRuntime: CoworkRuntime;
+  deepSeekTuiRuntime: CoworkRuntime;
+  telemetryTracker?: RuntimeTelemetryTracker;
 };
 
 export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
@@ -29,6 +35,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   private readonly sessionEngine = new Map<string, CoworkAgentEngine>();
   private readonly requestEngine = new Map<string, CoworkAgentEngine>();
   private readonly requestSession = new Map<string, string>();
+  private readonly telemetryTracker?: RuntimeTelemetryTracker;
   private currentEngine: CoworkAgentEngine;
 
   constructor(deps: RouterDeps) {
@@ -40,14 +47,21 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       [CoworkAgentEngineValue.YdCowork]: deps.claudeRuntime,
       [CoworkAgentEngineValue.ClaudeCode]: deps.claudeCodeRuntime,
       [CoworkAgentEngineValue.Codex]: deps.codexRuntime,
+      [CoworkAgentEngineValue.OpenCode]: deps.openCodeRuntime,
+      [CoworkAgentEngineValue.QwenCode]: deps.qwenCodeRuntime,
+      [CoworkAgentEngineValue.DeepSeekTui]: deps.deepSeekTuiRuntime,
     };
     this.currentEngine = this.safeResolveEngine();
+    this.telemetryTracker = deps.telemetryTracker;
 
     this.bindRuntimeEvents(CoworkAgentEngineValue.OpenClaw, deps.openclawRuntime);
     this.bindRuntimeEvents(CoworkAgentEngineValue.Hermes, deps.hermesRuntime);
     this.bindRuntimeEvents(CoworkAgentEngineValue.YdCowork, deps.claudeRuntime);
     this.bindRuntimeEvents(CoworkAgentEngineValue.ClaudeCode, deps.claudeCodeRuntime);
     this.bindRuntimeEvents(CoworkAgentEngineValue.Codex, deps.codexRuntime);
+    this.bindRuntimeEvents(CoworkAgentEngineValue.OpenCode, deps.openCodeRuntime);
+    this.bindRuntimeEvents(CoworkAgentEngineValue.QwenCode, deps.qwenCodeRuntime);
+    this.bindRuntimeEvents(CoworkAgentEngineValue.DeepSeekTui, deps.deepSeekTuiRuntime);
   }
 
   override on<U extends keyof CoworkRuntimeEvents>(
@@ -67,9 +81,15 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   async startSession(sessionId: string, prompt: string, options: CoworkStartOptions = {}): Promise<void> {
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
+    this.telemetryTracker?.startTurn(sessionId, prompt, engine, options);
     try {
       await this.runtimeByEngine[engine].startSession(sessionId, prompt, options);
     } catch (error) {
+      this.telemetryTracker?.finishTurn(
+        sessionId,
+        RuntimeCallStatus.Error,
+        error instanceof Error ? error.message : String(error),
+      );
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       throw error;
@@ -79,9 +99,15 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   async continueSession(sessionId: string, prompt: string, options: CoworkContinueOptions = {}): Promise<void> {
     const engine = this.safeResolveEngine();
     this.sessionEngine.set(sessionId, engine);
+    this.telemetryTracker?.startTurn(sessionId, prompt, engine, options);
     try {
       await this.runtimeByEngine[engine].continueSession(sessionId, prompt, options);
     } catch (error) {
+      this.telemetryTracker?.finishTurn(
+        sessionId,
+        RuntimeCallStatus.Error,
+        error instanceof Error ? error.message : String(error),
+      );
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       throw error;
@@ -174,11 +200,13 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
   private bindRuntimeEvents(engine: CoworkAgentEngine, runtime: CoworkRuntime): void {
     runtime.on('message', (sessionId, message) => {
       this.sessionEngine.set(sessionId, engine);
+      this.telemetryTracker?.recordMessage(sessionId, message);
       this.emit('message', sessionId, message);
     });
 
     runtime.on('messageUpdate', (sessionId, messageId, content) => {
       this.sessionEngine.set(sessionId, engine);
+      this.telemetryTracker?.recordMessageUpdate(sessionId, messageId, content);
       this.emit('messageUpdate', sessionId, messageId, content);
     });
 
@@ -189,19 +217,30 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       this.emit('permissionRequest', sessionId, request);
     });
 
+    runtime.on('runtimeMetric', (sessionId, metric) => {
+      this.sessionEngine.set(sessionId, engine);
+      this.telemetryTracker?.recordRuntimeMetric(sessionId, metric);
+      this.emit('runtimeMetric', sessionId, metric);
+    });
+
     runtime.on('complete', (sessionId, claudeSessionId) => {
+      this.telemetryTracker?.finishTurn(sessionId, RuntimeCallStatus.Completed);
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       this.emit('complete', sessionId, claudeSessionId);
     });
 
     runtime.on('error', (sessionId, error) => {
+      this.telemetryTracker?.finishTurn(sessionId, RuntimeCallStatus.Error, error);
       this.sessionEngine.delete(sessionId);
       this.clearRequestEngineBySession(sessionId);
       this.emit('error', sessionId, error);
     });
 
     runtime.on('sessionStopped', (sessionId) => {
+      this.telemetryTracker?.finishTurn(sessionId, RuntimeCallStatus.Stopped);
+      this.sessionEngine.delete(sessionId);
+      this.clearRequestEngineBySession(sessionId);
       this.emit('sessionStopped', sessionId);
     });
   }

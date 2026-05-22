@@ -10,7 +10,7 @@ describe('ProviderName constants', () => {
     expect(ProviderName.OpenAI).toBe('openai');
     expect(ProviderName.DeepSeek).toBe('deepseek');
     expect(ProviderName.Custom).toBe('custom');
-    expect(ProviderName.LobsteraiServer).toBe('lobsterai-server');
+    expect(ProviderName.WesightServer).toBe('wesight-server');
   });
 });
 
@@ -19,7 +19,7 @@ describe('ProviderRegistry', () => {
     const ids = ProviderRegistry.providerIds;
     expect(ids.length).toBe(15);
     expect(ids).not.toContain(ProviderName.Custom);
-    expect(ids).not.toContain(ProviderName.LobsteraiServer);
+    expect(ids).not.toContain(ProviderName.WesightServer);
   });
 
   test('get returns definition for known provider', () => {

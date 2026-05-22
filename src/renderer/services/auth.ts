@@ -1,7 +1,7 @@
 import { store } from '../store';
-import { setAuthLoading, setLoggedIn, setLoggedOut, updateQuota, setProfileSummary } from '../store/slices/authSlice';
-import { setServerModels, clearServerModels } from '../store/slices/modelSlice';
+import { setAuthLoading, setLoggedIn, setLoggedOut, setProfileSummary, updateQuota } from '../store/slices/authSlice';
 import type { Model } from '../store/slices/modelSlice';
+import { clearServerModels, setServerModels } from '../store/slices/modelSlice';
 
 class AuthService {
   private unsubCallback: (() => void) | null = null;
@@ -33,6 +33,10 @@ class AuthService {
     this.unsubCallback = window.electron.auth.onCallback(async ({ code }) => {
       await this.handleCallback(code);
     });
+    const pendingCode = await window.electron.auth.getPendingCallback?.();
+    if (typeof pendingCode === 'string' && pendingCode) {
+      await this.handleCallback(pendingCode);
+    }
 
     // Listen for quota changes (e.g. after cowork session using server model)
     this.unsubQuotaChanged = window.electron.auth.onQuotaChanged(() => {
@@ -57,33 +61,7 @@ class AuthService {
    * Initiate login (opens system browser).
    */
   async login() {
-    const loginUrl = await this.fetchLoginUrl();
-    await window.electron.auth.login(loginUrl);
-  }
-
-  /**
-   * Fetch login URL from overmind, fallback to server base + /login.
-   */
-  private async fetchLoginUrl(): Promise<string> {
-    const { getLoginOvermindUrl } = await import('./endpoints');
-    const url = getLoginOvermindUrl();
-    try {
-      const response = await window.electron.api.fetch({
-        url,
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-      });
-      if (response.ok && typeof response.data === 'object' && response.data !== null) {
-        const value = (response.data as any)?.data?.value;
-        if (typeof value === 'string' && value.trim()) {
-          return value.trim();
-        }
-      }
-    } catch (e) {
-      console.error('[Auth] Failed to fetch login URL from overmind:', e);
-    }
-    // Fallback: let main process use its server base URL
-    return '';
+    await window.electron.auth.login();
   }
 
   /**

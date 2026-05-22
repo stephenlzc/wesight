@@ -86,6 +86,66 @@ export class SqliteStore {
     `);
 
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS cowork_runtime_calls (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        turn_index INTEGER NOT NULL,
+        agent_id TEXT,
+        source TEXT NOT NULL DEFAULT 'chat',
+        engine TEXT NOT NULL,
+        provider_key TEXT,
+        provider_name TEXT,
+        model_id TEXT,
+        model_name TEXT,
+        config_source TEXT,
+        cwd TEXT,
+        status TEXT NOT NULL DEFAULT 'running',
+        started_at INTEGER NOT NULL,
+        first_output_at INTEGER,
+        last_output_at INTEGER,
+        completed_at INTEGER,
+        duration_ms INTEGER,
+        ttft_ms INTEGER,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        cache_read_tokens INTEGER,
+        cache_write_tokens INTEGER,
+        context_tokens INTEGER,
+        tokens_estimated INTEGER NOT NULL DEFAULT 0,
+        output_chars INTEGER NOT NULL DEFAULT 0,
+        visible_output_tokens INTEGER,
+        visible_output_updates INTEGER NOT NULL DEFAULT 0,
+        tool_call_count INTEGER NOT NULL DEFAULT 0,
+        tool_latency_ms INTEGER,
+        agent_steps INTEGER NOT NULL DEFAULT 0,
+        estimated_cost_usd REAL,
+        error TEXT,
+        metadata TEXT,
+        FOREIGN KEY (session_id) REFERENCES cowork_sessions(id) ON DELETE CASCADE
+      );
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_runtime_calls_started_at
+      ON cowork_runtime_calls(started_at);
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_runtime_calls_session_started
+      ON cowork_runtime_calls(session_id, started_at);
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_runtime_calls_engine_started
+      ON cowork_runtime_calls(engine, started_at);
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_cowork_runtime_calls_model_started
+      ON cowork_runtime_calls(model_id, started_at);
+    `);
+
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS cowork_config (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
@@ -236,6 +296,22 @@ export class SqliteStore {
       this.db.exec('UPDATE cowork_sessions SET pinned = 0 WHERE pinned IS NULL;');
     } catch {
       // Column might not exist yet.
+    }
+
+    try {
+      const runtimeColumns = this.db.pragma('table_info(cowork_runtime_calls)') as Array<{ name: string }>;
+      const runtimeColumnNames = runtimeColumns.map(column => column.name);
+      if (!runtimeColumnNames.includes('last_output_at')) {
+        this.db.exec('ALTER TABLE cowork_runtime_calls ADD COLUMN last_output_at INTEGER;');
+      }
+      if (!runtimeColumnNames.includes('visible_output_tokens')) {
+        this.db.exec('ALTER TABLE cowork_runtime_calls ADD COLUMN visible_output_tokens INTEGER;');
+      }
+      if (!runtimeColumnNames.includes('visible_output_updates')) {
+        this.db.exec('ALTER TABLE cowork_runtime_calls ADD COLUMN visible_output_updates INTEGER NOT NULL DEFAULT 0;');
+      }
+    } catch {
+      // Column already exists or migration not needed.
     }
 
     // Migration: Add agent_id column to cowork_sessions

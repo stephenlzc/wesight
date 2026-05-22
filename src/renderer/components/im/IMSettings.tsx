@@ -3,28 +3,31 @@
  * Configuration UI for DingTalk, Feishu and Telegram IM bots
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import { SignalIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import { RootState } from '../../store';
-import { imService } from '../../services/im';
-import { setDingTalkConfig, setDingTalkInstanceConfig, setFeishuConfig, setFeishuInstanceConfig, setTelegramOpenClawConfig, setQQConfig, setQQInstanceConfig, setDiscordConfig, setNimConfig, setNeteaseBeeChanConfig, setWecomConfig, setWeixinConfig, setPopoConfig, clearError } from '../../store/slices/imSlice';
-import { i18nService } from '../../services/i18n';
-import type { IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, TelegramOpenClawConfig, DiscordOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig } from '../../types/im';
-import { MAX_QQ_INSTANCES, MAX_FEISHU_INSTANCES, MAX_DINGTALK_INSTANCES } from '../../types/im';
-import QQInstanceSettings from './QQInstanceSettings';
-import FeishuInstanceSettings from './FeishuInstanceSettings';
-import DingTalkInstanceSettings from './DingTalkInstanceSettings';
-import { PlatformRegistry } from '@shared/platform';
+import { CheckCircleIcon, ExclamationTriangleIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon } from '@heroicons/react/24/outline';
+import { CoworkAgentEngine } from '@shared/cowork/constants';
+import { FEISHU_ENGINE_KEYS, FeishuEngineKey, type FeishuEngineKeyType, FeishuManagementMode } from '@shared/im/constants';
 import type { Platform } from '@shared/platform';
-import { getVisibleIMPlatforms } from '../../utils/regionFilter';
+import { PlatformRegistry } from '@shared/platform';
 import WecomAIBotSDK from '@wecom/wecom-aibot-sdk';
 import { QRCodeSVG } from 'qrcode.react';
-import { ArrowPathIcon } from '@heroicons/react/24/outline';
-import { SchemaForm } from './SchemaForm';
-import type { UiHint } from './SchemaForm';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+
+import { i18nService } from '../../services/i18n';
+import { imService } from '../../services/im';
+import { RootState } from '../../store';
+import { clearError, setDingTalkConfig, setDingTalkInstanceConfig, setDiscordConfig, setFeishuConfig, setFeishuInstanceConfig, setNeteaseBeeChanConfig, setNimConfig, setPopoConfig, setQQConfig, setQQInstanceConfig, setTelegramOpenClawConfig, setWecomConfig, setWeixinConfig } from '../../store/slices/imSlice';
+import type { DiscordOpenClawConfig, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, PopoOpenClawConfig, TelegramOpenClawConfig, WecomOpenClawConfig } from '../../types/im';
+import { MAX_DINGTALK_INSTANCES, MAX_FEISHU_INSTANCES, MAX_QQ_INSTANCES } from '../../types/im';
+import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 import Modal from '../common/Modal';
+import DingTalkInstanceSettings from './DingTalkInstanceSettings';
+import FeishuInstanceSettings from './FeishuInstanceSettings';
+import QQInstanceSettings from './QQInstanceSettings';
+import type { UiHint } from './SchemaForm';
+import { SchemaForm } from './SchemaForm';
 
 
 
@@ -101,14 +104,39 @@ function deepSet(obj: Record<string, unknown>, path: string, value: unknown): Re
   return result;
 }
 
+const feishuEngineKeyFromAgentEngine = (engine: CoworkAgentEngine): FeishuEngineKeyType => {
+  if (engine === CoworkAgentEngine.Hermes) return FeishuEngineKey.Hermes;
+  if (engine === CoworkAgentEngine.ClaudeCode) return FeishuEngineKey.ClaudeCode;
+  if (engine === CoworkAgentEngine.Codex) return FeishuEngineKey.Codex;
+  return FeishuEngineKey.OpenClaw;
+};
+
+const coworkAgentEngineFromFeishuKey = (engineKey: FeishuEngineKeyType): CoworkAgentEngine => {
+  if (engineKey === FeishuEngineKey.Hermes) return CoworkAgentEngine.Hermes;
+  if (engineKey === FeishuEngineKey.ClaudeCode) return CoworkAgentEngine.ClaudeCode;
+  if (engineKey === FeishuEngineKey.Codex) return CoworkAgentEngine.Codex;
+  return CoworkAgentEngine.OpenClaw;
+};
+
+const feishuEngineLabel = (engineKey: FeishuEngineKeyType): string => {
+  if (engineKey === FeishuEngineKey.Hermes) return i18nService.t('imFeishuAgentEngineHermes');
+  if (engineKey === FeishuEngineKey.ClaudeCode) return i18nService.t('imFeishuAgentEngineClaudeCode');
+  if (engineKey === FeishuEngineKey.Codex) return i18nService.t('imFeishuAgentEngineCodex');
+  return i18nService.t('imFeishuAgentEngineOpenClaw');
+};
+
 const IMSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { config, status, isLoading } = useSelector((state: RootState) => state.im);
+  const coworkConfig = useSelector((state: RootState) => state.cowork.config);
   const [activePlatform, setActivePlatform] = useState<Platform>('weixin');
   const [activeQQInstanceId, setActiveQQInstanceId] = useState<string | null>(null);
   const [qqExpanded, setQqExpanded] = useState(false);
   const [activeFeishuInstanceId, setActiveFeishuInstanceId] = useState<string | null>(null);
   const [feishuExpanded, setFeishuExpanded] = useState(false);
+  const [selectedFeishuEngineKey, setSelectedFeishuEngineKey] = useState<FeishuEngineKeyType>(FeishuEngineKey.OpenClaw);
+  const [feishuImporting, setFeishuImporting] = useState(false);
+  const [feishuModeSwitching, setFeishuModeSwitching] = useState(false);
   const [activeDingTalkInstanceId, setActiveDingTalkInstanceId] = useState<string | null>(null);
   const [dingtalkExpanded, setDingtalkExpanded] = useState(false);
   const [testingPlatform, setTestingPlatform] = useState<Platform | null>(null);
@@ -313,7 +341,34 @@ const IMSettings: React.FC = () => {
   const dingtalkMultiConfig = config.dingtalk;
 
   // Handle Feishu multi-instance config
-  const feishuMultiConfig = config.feishu;
+  const activeFeishuEngineKey = config.feishu.activeEngineKey || feishuEngineKeyFromAgentEngine(coworkConfig.agentEngine);
+  const selectedFeishuProfile = config.feishu.profiles?.[selectedFeishuEngineKey] || {
+    engineKey: selectedFeishuEngineKey,
+    instances: selectedFeishuEngineKey === activeFeishuEngineKey ? config.feishu.instances : [],
+  };
+  const feishuMultiConfig = {
+    ...config.feishu,
+    activeEngineKey: selectedFeishuEngineKey,
+    instances: selectedFeishuProfile.instances,
+  };
+  const feishuOpenClawLocalStatus = status.feishu?.openClawLocal;
+  const feishuManagementMode = config.settings.feishuManagementMode || FeishuManagementMode.LocalOpenClaw;
+  const feishuLocalOpenClawOwned = selectedFeishuEngineKey === FeishuEngineKey.OpenClaw
+    && feishuManagementMode === FeishuManagementMode.LocalOpenClaw
+    && Boolean(feishuOpenClawLocalStatus?.configured || feishuOpenClawLocalStatus?.running);
+  const feishuImportedFromOpenClaw = feishuMultiConfig.instances.some((instance) => instance.importSource === 'openclaw_local');
+  const feishuAgentEngine = coworkAgentEngineFromFeishuKey(selectedFeishuEngineKey);
+  const isFeishuAgentEngineSupported = feishuAgentEngine === CoworkAgentEngine.OpenClaw
+    || feishuAgentEngine === CoworkAgentEngine.Hermes
+    || feishuAgentEngine === CoworkAgentEngine.ClaudeCode
+    || feishuAgentEngine === CoworkAgentEngine.Codex;
+  const enabledFeishuInstanceCount = feishuMultiConfig.instances.filter((instance) => instance.enabled).length;
+  const feishuAppConflicts = config.feishu.conflicts || [];
+
+  useEffect(() => {
+    setSelectedFeishuEngineKey(activeFeishuEngineKey);
+    setActiveFeishuInstanceId(null);
+  }, [activeFeishuEngineKey]);
 
   // Inline QR code state for feishu bot creation (mirroring WeCom quick-setup pattern)
   // These are used by handleFeishuStartQr which creates instances via QR flow
@@ -776,7 +831,7 @@ const IMSettings: React.FC = () => {
       }
       return !!(config.popo.appKey && config.popo.appSecret && config.popo.aesKey);
     }
-    return config.feishu.instances?.some(i => !!(i.appId && i.appSecret));
+    return feishuMultiConfig.instances?.some(i => !!(i.appId && i.appSecret));
   };
 
   // Get platform enabled state (persisted toggle state)
@@ -788,7 +843,7 @@ const IMSettings: React.FC = () => {
       return config.qq.instances.some(i => i.enabled);
     }
     if (platform === 'feishu') {
-      return config.feishu.instances?.some(i => i.enabled);
+      return feishuMultiConfig.instances?.some(i => i.enabled);
     }
     return (config[platform] as { enabled: boolean }).enabled;
   };
@@ -918,8 +973,8 @@ const IMSettings: React.FC = () => {
         if (inst && !inst.enabled) {
           const authCheck = result.checks.find((c) => c.code === 'auth_check');
           if (authCheck && authCheck.level === 'pass') {
-            dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { enabled: true } }));
-            await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, { enabled: true });
+            dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { enabled: true }, engineKey: selectedFeishuEngineKey }));
+            await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, { enabled: true }, selectedFeishuEngineKey);
           }
         }
       }
@@ -1068,6 +1123,67 @@ const IMSettings: React.FC = () => {
     </div>
   );
 
+  const renderFeishuEngineTabs = () => (
+    <div className="mb-4 rounded-xl border border-border-subtle bg-surface px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium text-foreground">
+            {i18nService.t('imFeishuEngineProfilesTitle')}
+          </div>
+          <div className="mt-0.5 text-xs text-secondary">
+            {i18nService.t('imFeishuEngineProfilesHint').replace('{engine}', feishuEngineLabel(activeFeishuEngineKey))}
+          </div>
+        </div>
+        <span className="rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
+          {feishuEngineLabel(activeFeishuEngineKey)}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        {FEISHU_ENGINE_KEYS.map((engineKey) => {
+          const profile = config.feishu.profiles?.[engineKey];
+          const instanceCount = profile?.instances.length ?? 0;
+          const enabledCount = profile?.instances.filter((instance) => instance.enabled).length ?? 0;
+          const isSelected = selectedFeishuEngineKey === engineKey;
+          const isActive = activeFeishuEngineKey === engineKey;
+          return (
+            <button
+              key={engineKey}
+              type="button"
+              onClick={() => {
+                setSelectedFeishuEngineKey(engineKey);
+                setActiveFeishuInstanceId(null);
+              }}
+              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                isSelected
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border-subtle bg-background text-foreground hover:bg-surface-raised'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-xs font-medium">{feishuEngineLabel(engineKey)}</span>
+                {isActive && (
+                  <span className="rounded-full bg-green-500/15 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">
+                    {i18nService.t('imFeishuEngineProfileActive')}
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 text-[11px] text-secondary">
+                {i18nService.t('imFeishuEngineProfileCount')
+                  .replace('{count}', String(instanceCount))
+                  .replace('{enabled}', String(enabledCount))}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {feishuAppConflicts.length > 0 && (
+        <div className="mt-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700 dark:text-yellow-300">
+          {i18nService.t('imFeishuEngineProfileConflict')}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex h-full gap-4">
       {/* Platform List - Left Side */}
@@ -1155,7 +1271,7 @@ const IMSettings: React.FC = () => {
                 {/* Feishu Instance Sub-items */}
                 {feishuExpanded && (
                   <div className="ml-5 mt-1 space-y-1">
-                    {config.feishu.instances.map((inst) => {
+                    {feishuMultiConfig.instances.map((inst) => {
                       const instStatus = status.feishu?.instances?.find(s => s.instanceId === inst.instanceId);
                       const isSelected = activePlatform === 'feishu' && activeFeishuInstanceId === inst.instanceId;
                       const dotColor = !inst.enabled ? 'bg-gray-400' : (instStatus?.connected ? 'bg-green-500' : 'bg-yellow-500');
@@ -1389,19 +1505,107 @@ const IMSettings: React.FC = () => {
 
         {/* Feishu Settings (multi-instance) */}
         {activePlatform === 'feishu' && !activeFeishuInstanceId && (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <div className="w-full max-w-xl">
+              {renderFeishuEngineTabs()}
+            </div>
+            <div className="w-full max-w-xl mb-5 rounded-xl border border-border-subtle bg-surface px-4 py-3 text-left">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-foreground">
+                    {i18nService.t('imFeishuManagementTitle')}
+                  </div>
+                  <div className="mt-1 text-xs text-secondary leading-relaxed">
+                    {selectedFeishuEngineKey !== FeishuEngineKey.OpenClaw
+                      ? i18nService.t('imFeishuEngineProfileManagedHint').replace('{engine}', feishuEngineLabel(selectedFeishuEngineKey))
+                      : feishuManagementMode === FeishuManagementMode.WesightManaged
+                      ? i18nService.t('imFeishuManagementWesightManagedHint')
+                      : i18nService.t('imFeishuManagementLocalOpenClawHint')}
+                  </div>
+                  {selectedFeishuEngineKey === FeishuEngineKey.OpenClaw && feishuOpenClawLocalStatus?.configured && (
+                    <div className="mt-2 text-xs text-secondary">
+                      {i18nService.t('imFeishuLocalOpenClawDetected')
+                        .replace('{appId}', feishuOpenClawLocalStatus.appIdPreview || '-')
+                        .replace('{state}', feishuOpenClawLocalStatus.running ? i18nService.t('imFeishuLocalOpenClawRunning') : i18nService.t('imFeishuLocalOpenClawConfigured'))}
+                    </div>
+                  )}
+                </div>
+                <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-medium ${
+                  selectedFeishuEngineKey !== FeishuEngineKey.OpenClaw || feishuManagementMode === FeishuManagementMode.WesightManaged
+                    ? 'bg-primary/10 text-primary'
+                    : 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-300'
+                }`}>
+                  {selectedFeishuEngineKey !== FeishuEngineKey.OpenClaw || feishuManagementMode === FeishuManagementMode.WesightManaged
+                    ? i18nService.t('imFeishuManagementModeWesight')
+                    : i18nService.t('imFeishuManagementModeLocalOpenClaw')}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {selectedFeishuEngineKey === FeishuEngineKey.OpenClaw && feishuOpenClawLocalStatus?.canImport && !feishuImportedFromOpenClaw && (
+                  <button
+                    type="button"
+                    disabled={feishuImporting}
+                    onClick={async () => {
+                      setFeishuImporting(true);
+                      const inst = await imService.importOpenClawLocalFeishu();
+                      setFeishuImporting(false);
+                      if (inst) {
+                        setActiveFeishuInstanceId(inst.instanceId);
+                        setFeishuExpanded(true);
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-60 transition-colors"
+                  >
+                    {feishuImporting ? i18nService.t('imFeishuImportingOpenClaw') : i18nService.t('imFeishuImportOpenClaw')}
+                  </button>
+                )}
+                {selectedFeishuEngineKey === FeishuEngineKey.OpenClaw && feishuImportedFromOpenClaw && feishuManagementMode !== FeishuManagementMode.WesightManaged && (
+                  <button
+                    type="button"
+                    disabled={feishuModeSwitching}
+                    onClick={async () => {
+                      setFeishuModeSwitching(true);
+                      await imService.setFeishuManagementMode(FeishuManagementMode.WesightManaged);
+                      setFeishuModeSwitching(false);
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
+                  >
+                    {feishuModeSwitching ? i18nService.t('imFeishuManagementSwitching') : i18nService.t('imFeishuTakeOverByWesight')}
+                  </button>
+                )}
+                {selectedFeishuEngineKey === FeishuEngineKey.OpenClaw && feishuManagementMode === FeishuManagementMode.WesightManaged && (
+                  <button
+                    type="button"
+                    disabled={feishuModeSwitching}
+                    onClick={async () => {
+                      setFeishuModeSwitching(true);
+                      await imService.setFeishuManagementMode(FeishuManagementMode.LocalOpenClaw);
+                      setFeishuModeSwitching(false);
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-surface-raised border border-border-subtle text-foreground hover:bg-surface disabled:opacity-60 transition-colors"
+                  >
+                    {feishuModeSwitching ? i18nService.t('imFeishuManagementSwitching') : i18nService.t('imFeishuReturnToLocalOpenClaw')}
+                  </button>
+                )}
+              </div>
+              {selectedFeishuEngineKey === FeishuEngineKey.OpenClaw && feishuOpenClawLocalStatus?.secretNeedsInput && (
+                <div className="mt-2 text-xs text-yellow-700 dark:text-yellow-300">
+                  {i18nService.t('imFeishuImportSecretNeedsInput')}
+                </div>
+              )}
+            </div>
             <img src={PlatformRegistry.logo('feishu')} alt="Feishu" className="w-12 h-12 object-contain rounded-md mb-4 opacity-50" />
             <p className="text-sm text-secondary mb-4">
-              {config.feishu.instances.length === 0
+              {feishuMultiConfig.instances.length === 0
                 ? (language === 'zh' ? '尚未添加飞书实例，点击下方按钮添加' : 'No Feishu instances yet. Click below to add one.')
                 : (language === 'zh' ? '请在左侧选择一个飞书实例' : 'Select a Feishu instance from the sidebar.')}
             </p>
-            {config.feishu.instances.length < MAX_FEISHU_INSTANCES && (
+            {feishuMultiConfig.instances.length < MAX_FEISHU_INSTANCES && (
               <button
                 type="button"
                 onClick={async (e) => {
                   e.stopPropagation();
-                  const inst = await imService.addFeishuInstance(`Feishu Bot ${config.feishu.instances.length + 1}`);
+                  const inst = await imService.addFeishuInstance(`Feishu Bot ${feishuMultiConfig.instances.length + 1}`, selectedFeishuEngineKey);
                   if (inst) { setActiveFeishuInstanceId(inst.instanceId); setFeishuExpanded(true); }
                 }}
                 className="px-4 py-2 rounded-lg text-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
@@ -1412,49 +1616,65 @@ const IMSettings: React.FC = () => {
           </div>
         )}
         {activePlatform === 'feishu' && activeFeishuInstanceId && (() => {
-          const selectedInstance = config.feishu.instances.find(i => i.instanceId === activeFeishuInstanceId);
+          const selectedInstance = feishuMultiConfig.instances.find(i => i.instanceId === activeFeishuInstanceId);
           if (!selectedInstance) return null;
           const selectedStatus = status.feishu?.instances?.find(s => s.instanceId === activeFeishuInstanceId);
           return (
-            <FeishuInstanceSettings
-              instance={selectedInstance}
-              instanceStatus={selectedStatus}
-              onConfigChange={(update) => {
-                dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: update }));
-              }}
-              onSave={async (override) => {
-                const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                if (selectedInstance.enabled) {
-                  await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, configToSave);
-                } else {
-                  await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, configToSave);
-                }
-              }}
-              onRename={async (newName) => {
-                dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { instanceName: newName } as any }));
-                await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, { instanceName: newName } as any);
-              }}
-              onDelete={async () => {
-                await imService.deleteFeishuInstance(activeFeishuInstanceId);
-                const remaining = config.feishu.instances.filter(i => i.instanceId !== activeFeishuInstanceId);
-                setActiveFeishuInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
-              }}
-              onToggleEnabled={async () => {
-                const newEnabled = !selectedInstance.enabled;
-                if (newEnabled && !(selectedInstance.appId && selectedInstance.appSecret)) return;
-                const success = await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, { enabled: newEnabled });
-                if (success) {
-                  dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { enabled: newEnabled } }));
-                  if (newEnabled) dispatch(clearError());
-                }
-              }}
-              onTestConnectivity={() => {
-                void handleConnectivityTest('feishu');
-              }}
-              testingPlatform={testingPlatform}
-              connectivityResults={connectivityResults}
-              language={language}
-            />
+            <div className="space-y-4">
+              {renderFeishuEngineTabs()}
+              <FeishuInstanceSettings
+                instance={selectedInstance}
+                instanceStatus={selectedStatus}
+                agentEngine={feishuAgentEngine}
+                isAgentEngineSupported={isFeishuAgentEngineSupported}
+                isLocalOpenClawOwned={feishuLocalOpenClawOwned}
+                enabledInstanceCount={enabledFeishuInstanceCount}
+                onConfigChange={(update) => {
+                  dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: update, engineKey: selectedFeishuEngineKey }));
+                }}
+                onSave={async (override) => {
+                  const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
+                  if (selectedInstance.enabled) {
+                    await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, configToSave, selectedFeishuEngineKey);
+                  } else {
+                    await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, configToSave, selectedFeishuEngineKey);
+                  }
+                }}
+                onRename={async (newName) => {
+                  dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { instanceName: newName } as any, engineKey: selectedFeishuEngineKey }));
+                  await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, { instanceName: newName } as any, selectedFeishuEngineKey);
+                }}
+                onDelete={async () => {
+                  await imService.deleteFeishuInstance(activeFeishuInstanceId, selectedFeishuEngineKey);
+                  const remaining = feishuMultiConfig.instances.filter(i => i.instanceId !== activeFeishuInstanceId);
+                  setActiveFeishuInstanceId(remaining.length > 0 ? remaining[0].instanceId : null);
+                }}
+                onToggleEnabled={async () => {
+                  const newEnabled = !selectedInstance.enabled;
+                  if (newEnabled && !(selectedInstance.appId && selectedInstance.appSecret)) return;
+                  if (newEnabled && !isFeishuAgentEngineSupported) return;
+                  if (newEnabled && feishuLocalOpenClawOwned) return;
+                  if (
+                    newEnabled
+                    && feishuAgentEngine === CoworkAgentEngine.Hermes
+                    && feishuMultiConfig.instances.some((instance) => instance.enabled && instance.instanceId !== activeFeishuInstanceId)
+                  ) {
+                    return;
+                  }
+                  const success = await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, { enabled: newEnabled }, selectedFeishuEngineKey);
+                  if (success) {
+                    dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: { enabled: newEnabled }, engineKey: selectedFeishuEngineKey }));
+                    if (newEnabled) dispatch(clearError());
+                  }
+                }}
+                onTestConnectivity={() => {
+                  void handleConnectivityTest('feishu');
+                }}
+                testingPlatform={testingPlatform}
+                connectivityResults={connectivityResults}
+                language={language}
+              />
+            </div>
           );
         })()}
 

@@ -1,15 +1,35 @@
+import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { app, BrowserWindow } from 'electron';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import type { CoworkMessage, CoworkSession, CoworkSessionStatus, CoworkExecutionMode, CoworkStore } from '../../coworkStore';
+
+import type { CoworkExecutionMode, CoworkMessage, CoworkSession, CoworkSessionStatus, CoworkStore } from '../../coworkStore';
+import { t } from '../../i18n';
+import { getCommandDangerLevel,isDeleteCommand } from '../commandSafety';
+import { setCoworkProxySessionId } from '../coworkOpenAICompatProxy';
+import { extractOpenClawAssistantStreamText } from '../openclawAssistantText';
+import {
+  buildManagedSessionKey,
+  isManagedSessionKey,
+  type OpenClawChannelSessionSync,
+  parseChannelSessionKey,
+  parseManagedSessionKey,
+} from '../openclawChannelSessionSync';
+import { OPENCLAW_AGENT_TIMEOUT_SECONDS } from '../openclawConfigSync';
 import {
   OpenClawEngineManager,
   type OpenClawGatewayConnectionInfo,
 } from '../openclawEngineManager';
+import {
+  extractGatewayHistoryEntries,
+  extractGatewayMessageText,
+} from '../openclawHistory';
+import { buildOpenClawLocalTimeContextPrompt } from '../openclawLocalTimeContextPrompt';
+import { buildOpenClawCommandPath, resolveOpenClawSystemRuntime } from '../openclawSystemRuntime';
 import type {
   CoworkContinueOptions,
   CoworkRuntime,
@@ -17,25 +37,13 @@ import type {
   CoworkStartOptions,
   PermissionRequest,
 } from './types';
-import {
-  buildManagedSessionKey,
-  type OpenClawChannelSessionSync,
-  isManagedSessionKey,
-  parseManagedSessionKey,
-  parseChannelSessionKey,
-} from '../openclawChannelSessionSync';
-import {
-  extractGatewayHistoryEntries,
-  extractGatewayMessageText,
-} from '../openclawHistory';
-import { extractOpenClawAssistantStreamText } from '../openclawAssistantText';
-import { buildOpenClawLocalTimeContextPrompt } from '../openclawLocalTimeContextPrompt';
-import { isDeleteCommand, getCommandDangerLevel } from '../commandSafety';
-import { setCoworkProxySessionId } from '../coworkOpenAICompatProxy';
-import { OPENCLAW_AGENT_TIMEOUT_SECONDS } from '../openclawConfigSync';
-import { t } from '../../i18n';
 
 const OPENCLAW_GATEWAY_TOOL_EVENTS_CAP = 'tool-events';
+const OPENCLAW_GATEWAY_OPERATOR_SCOPES = [
+  'operator.read',
+  'operator.write',
+  'operator.approvals',
+] as const;
 const BRIDGE_MAX_MESSAGES = 20;
 const BRIDGE_MAX_MESSAGE_CHARS = 1200;
 const GATEWAY_READY_TIMEOUT_MS = 15_000;
@@ -157,6 +165,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 };
 
+const getString = (value: unknown): string => {
+  return typeof value === 'string' ? value : '';
+};
+
 const isSameChannelHistoryEntry = (
   left: ChannelHistorySyncEntry,
   right: ChannelHistorySyncEntry,
@@ -167,6 +179,24 @@ const isSameChannelHistoryEntry = (
 const truncate = (value: string, maxChars: number): string => {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, maxChars)}...`;
+};
+
+const extractOpenClawPairingRequestId = (error: unknown): string | null => {
+  const details = isRecord(error) ? error.details : null;
+  const requestId = isRecord(details) ? getString(details.requestId).trim() : '';
+  if (requestId) return requestId;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const match = message.match(/\brequestId:\s*([^\s)]+)/i);
+  return match?.[1]?.trim() || null;
+};
+
+const isOpenClawPairingRequiredError = (error: unknown): boolean => {
+  const details = isRecord(error) ? error.details : null;
+  const code = isRecord(details) ? getString(details.code).trim() : '';
+  const reason = isRecord(details) ? getString(details.reason).trim() : '';
+  if (code === 'PAIRING_REQUIRED' || reason.includes('upgrade')) return true;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /pairing required|scope upgrade|role upgrade/i.test(message);
 };
 
 /** Strip Discord mention markup: <@userId>, <@!userId>, <#channelId>, <@&roleId> */
@@ -598,7 +628,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly heartbeatSessionKeys = new Set<string>();
   private channelPollingTimer: ReturnType<typeof setInterval> | null = null;
 
-  private static readonly CHANNEL_POLL_INTERVAL_MS = 10_000;
+  private static readonly CHANNEL_POLL_INTERVAL_MS = 2_000;
   private static readonly FULL_HISTORY_SYNC_LIMIT = 50;
   private browserPrewarmAttempted = false;
 
@@ -629,7 +659,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   /**
    * Server-side agent timeout in seconds (mirrors agents.defaults.timeoutSeconds in openclaw config).
    * Used to set a client-side fallback timer that fires slightly after the server timeout,
-   * so LobsterAI can recover even when the gateway fails to deliver the abort event.
+   * so WeSight can recover even when the gateway fails to deliver the abort event.
    */
   agentTimeoutSeconds = OPENCLAW_AGENT_TIMEOUT_SECONDS;
   private static readonly CLIENT_TIMEOUT_GRACE_MS = 30_000;
@@ -819,7 +849,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * Ensure the gateway WebSocket client is connected.
    * Called when IM channels (e.g. Telegram) are enabled in OpenClaw mode
    * so that channel-originated events can be received without waiting
-   * for a LobsterAI-initiated session.
+   * for a WeSight-initiated session.
    */
   async connectGatewayIfNeeded(): Promise<void> {
     if (this.gatewayClient) {
@@ -1321,9 +1351,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
   private buildSystemPromptPrefix(systemPrompt: string): string {
     return [
-      '[LobsterAI system instructions]',
+      '[WeSight system instructions]',
       'Apply the instructions below as the highest-priority guidance for this session.',
-      'If earlier LobsterAI system instructions exist, replace them with this version.',
+      'If earlier WeSight system instructions exist, replace them with this version.',
       systemPrompt,
     ].join('\n');
   }
@@ -1370,7 +1400,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     });
 
     return [
-      '[Context bridge from previous LobsterAI conversation]',
+      '[Context bridge from previous WeSight conversation]',
       'Use this prior context for continuity. Focus your final answer on the current request.',
       ...lines,
     ].join('\n');
@@ -1420,17 +1450,125 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     }
 
     this.stopGatewayClient();
-    console.log('[ChannelSync] ensureGatewayClientReady: creating gateway client, url=', connection.url);
-    await this.createGatewayClient(connection);
-    console.log('[ChannelSync] ensureGatewayClientReady: createGatewayClient returned, waiting for handshake...');
-    if (this.gatewayReadyPromise) {
-      await waitWithTimeout(this.gatewayReadyPromise, GATEWAY_READY_TIMEOUT_MS);
+    try {
+      await this.createAndWaitGatewayClient(connection);
+    } catch (error) {
+      const approved = await this.approveGatewayPairingIfNeeded(error, connection);
+      if (!approved) {
+        throw error;
+      }
+      this.stopGatewayClient();
+      console.log('[ChannelSync] ensureGatewayClientReady: retrying gateway client after local pairing approval');
+      await this.createAndWaitGatewayClient(connection);
     }
     console.log('[ChannelSync] ensureGatewayClientReady: gateway client created and ready');
 
     // Browser pre-warm disabled: the empty browser window is disruptive.
     // The browser will start on-demand when the AI agent first calls the browser tool.
     // this.prewarmBrowserIfNeeded(connection);
+  }
+
+  private async createAndWaitGatewayClient(connection: OpenClawGatewayConnectionInfo): Promise<void> {
+    console.log('[ChannelSync] ensureGatewayClientReady: creating gateway client, url=', connection.url);
+    await this.createGatewayClient(connection);
+    console.log('[ChannelSync] ensureGatewayClientReady: createGatewayClient returned, waiting for handshake...');
+    if (this.gatewayReadyPromise) {
+      await waitWithTimeout(this.gatewayReadyPromise, GATEWAY_READY_TIMEOUT_MS);
+    }
+  }
+
+  private async approveGatewayPairingIfNeeded(
+    error: unknown,
+    connection: OpenClawGatewayConnectionInfo,
+  ): Promise<boolean> {
+    if (!isOpenClawPairingRequiredError(error)) return false;
+    const requestId = extractOpenClawPairingRequestId(error);
+    if (!requestId || !connection.url || !connection.token) return false;
+    const runtime = resolveOpenClawSystemRuntime();
+    if (!runtime.commandPath) return false;
+
+    const args = [
+      'devices',
+      'approve',
+      requestId,
+      '--json',
+      '--url',
+      connection.url,
+      '--token',
+      connection.token,
+    ];
+    const result = await new Promise<{ ok: boolean; output: string }>((resolve) => {
+      const child = spawn(runtime.commandPath as string, args, {
+        env: {
+          ...process.env,
+          PATH: buildOpenClawCommandPath(),
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let output = '';
+      const timeout = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          // ignore kill failure
+        }
+      }, 10_000);
+      child.stdout?.on('data', (chunk) => {
+        output += String(chunk);
+      });
+      child.stderr?.on('data', (chunk) => {
+        output += String(chunk);
+      });
+      child.on('error', (spawnError) => {
+        clearTimeout(timeout);
+        resolve({ ok: false, output: spawnError.message });
+      });
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        resolve({ ok: code === 0, output });
+      });
+    });
+
+    if (!result.ok) {
+      const approvedLocally = await this.approveGatewayPairingFromLocalState(requestId);
+      if (approvedLocally) return true;
+      console.warn('[OpenClawRuntime] gateway pairing approval failed:', result.output.slice(0, 500));
+      return false;
+    }
+    console.log('[OpenClawRuntime] approved local gateway pairing request for WeSight');
+    return true;
+  }
+
+  private async approveGatewayPairingFromLocalState(requestId: string): Promise<boolean> {
+    const runtime = resolveOpenClawSystemRuntime();
+    if (!runtime.packageRoot) return false;
+    const distDir = path.join(runtime.packageRoot, 'dist');
+    let pairingEntryPath: string | null = null;
+    try {
+      pairingEntryPath = fs.readdirSync(distDir)
+        .find((name) => /^device-pairing-.*\.js$/.test(name))
+        ? path.join(distDir, fs.readdirSync(distDir).find((name) => /^device-pairing-.*\.js$/.test(name)) as string)
+        : null;
+    } catch {
+      pairingEntryPath = null;
+    }
+    if (!pairingEntryPath) return false;
+    try {
+      const moduleUrl = pathToFileURL(pairingEntryPath).href;
+      const mod = await (new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<Record<string, unknown>>)(moduleUrl);
+      const approveDevicePairing = typeof mod.n === 'function' ? mod.n : null;
+      if (!approveDevicePairing) return false;
+      const result = await (approveDevicePairing as (
+        id: string,
+        options: { callerScopes: string[] },
+      ) => Promise<unknown>)(requestId, { callerScopes: ['operator.admin'] });
+      if (!isRecord(result) || result.status !== 'approved') return false;
+      console.log('[OpenClawRuntime] approved local gateway pairing request from OpenClaw state');
+      return true;
+    } catch (localError) {
+      console.warn('[OpenClawRuntime] local gateway pairing approval failed:', localError);
+      return false;
+    }
   }
 
   private async createGatewayClient(connection: OpenClawGatewayConnectionInfo): Promise<void> {
@@ -1459,12 +1597,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const client = new GatewayClient({
       url: connection.url,
       token: connection.token,
-      clientDisplayName: 'LobsterAI',
+      clientName: 'openclaw-macos',
+      clientDisplayName: 'WeSight',
       clientVersion: app.getVersion(),
       mode: 'backend',
       caps: [OPENCLAW_GATEWAY_TOOL_EVENTS_CAP],
       role: 'operator',
-      scopes: ['operator.admin'],
+      scopes: [...OPENCLAW_GATEWAY_OPERATOR_SCOPES],
       onHelloOk: () => {
         console.log('[ChannelSync] GatewayClient: onHelloOk — handshake succeeded');
         // Expose the client only after the connect handshake completes.
@@ -1830,9 +1969,17 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private async loadGatewayClientCtor(clientEntryPath: string): Promise<GatewayClientCtor> {
-    // Use require() with file path directly. TypeScript's CJS output downgrades
-    // dynamic import() to require(), which doesn't support file:// URLs.
-    const loaded = require(clientEntryPath) as Record<string, unknown>;
+    let loaded: Record<string, unknown>;
+    try {
+      loaded = require(clientEntryPath) as Record<string, unknown>;
+    } catch (error) {
+      const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<Record<string, unknown>>;
+      try {
+        loaded = await dynamicImport(pathToFileURL(clientEntryPath).href);
+      } catch {
+        throw error;
+      }
+    }
     const direct = loaded.GatewayClient;
     if (typeof direct === 'function') {
       return direct as GatewayClientCtor;
@@ -2991,7 +3138,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   ): Promise<void> {
     const client = this.gatewayClient;
     if (!client) {
-      console.log('[Reconcile] no gateway client, skipping — sessionId:', sessionId);
+      console.debug(`[Reconcile] skipped because the gateway client is not ready for session ${sessionId}`);
       return;
     }
 
@@ -3011,7 +3158,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         limit,
       });
       if (!Array.isArray(history?.messages) || history.messages.length === 0) {
-        console.log('[Reconcile] empty history — sessionId:', sessionId);
+        console.debug(`[Reconcile] gateway history is empty for session ${sessionId}`);
         this.channelSyncCursor.set(sessionId, 0);
         return;
       }
@@ -3065,7 +3212,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       }
 
       if (authoritativeEntries.length === 0) {
-        console.log('[Reconcile] no user/assistant entries in history — sessionId:', sessionId);
+        console.debug(`[Reconcile] gateway history has no user or assistant messages for session ${sessionId}`);
         this.channelSyncCursor.set(sessionId, 0);
         return;
       }
@@ -3090,16 +3237,12 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         );
 
       if (isInSync) {
-        console.log('[Reconcile] already in sync — sessionId:', sessionId, 'entries:', localEntries.length);
         this.channelSyncCursor.set(sessionId, authoritativeEntries.length);
         return;
       }
 
       // Replace local messages with authoritative ones
-      console.log(
-        '[Reconcile] replacing messages — sessionId:', sessionId,
-        'local:', localEntries.length, '→ authoritative:', authoritativeEntries.length,
-      );
+      console.log(`[Reconcile] refreshed local messages for session ${sessionId} from ${localEntries.length} to ${authoritativeEntries.length} entries`);
       this.store.replaceConversationMessages(sessionId, authoritativeEntries);
       this.channelSyncCursor.set(sessionId, authoritativeEntries.length);
 
@@ -3110,7 +3253,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         }
       }
     } catch (error) {
-      console.warn('[Reconcile] failed — sessionId:', sessionId, 'error:', error);
+      console.warn(`[Reconcile] failed to refresh local messages for session ${sessionId}:`, error);
     }
   }
 
@@ -3433,7 +3576,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   /**
    * Sync user messages from gateway chat.history that haven't been added to the local store yet.
    * Used for channel-originated sessions (e.g. Telegram) where user messages arrive via the
-   * gateway rather than the LobsterAI UI.
+   * gateway rather than the WeSight UI.
    *
    * Called at the start of a new turn (via prefetchChannelUserMessages) so that user messages
    * appear before the assistant's streaming response. Both chat and agent events are buffered

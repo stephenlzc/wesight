@@ -2,8 +2,8 @@ import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import os from 'os';
 
-import type { CliAppType, ExternalAgentEnvironmentSnapshot } from './ccSwitchIntegration';
-import { getExternalAgentEnvironmentSnapshot } from './ccSwitchIntegration';
+import type { CliAppType, ExternalAgentEnvironmentSnapshot } from './externalAgentEnvironment';
+import { getExternalAgentEnvironmentSnapshot } from './externalAgentEnvironment';
 
 export type ExternalAgentCliInstallPhase =
   | 'starting'
@@ -34,7 +34,9 @@ export interface ExternalAgentCliInstallResult {
 
 interface InstallMethod {
   id: string;
-  packageName: string;
+  packageName?: string;
+  scriptUrl?: string;
+  scriptArgs?: string[];
 }
 
 interface InstallTarget {
@@ -70,6 +72,61 @@ const INSTALL_TARGETS: Record<CliAppType, InstallTarget> = {
       },
     ],
   },
+  hermes: {
+    appType: 'hermes',
+    displayName: 'Hermes Agent',
+    command: 'hermes',
+    methods: [
+      {
+        id: 'official-installer',
+        scriptUrl: 'https://hermes-agent.nousresearch.com/install.sh',
+      },
+    ],
+  },
+  openclaw: {
+    appType: 'openclaw',
+    displayName: 'OpenClaw',
+    command: 'openclaw',
+    methods: [
+      {
+        id: 'npm',
+        packageName: 'openclaw',
+      },
+    ],
+  },
+  opencode: {
+    appType: 'opencode',
+    displayName: 'OpenCode',
+    command: 'opencode',
+    methods: [
+      {
+        id: 'npm',
+        packageName: 'opencode-ai',
+      },
+    ],
+  },
+  qwen: {
+    appType: 'qwen',
+    displayName: 'Qwen Code',
+    command: 'qwen',
+    methods: [
+      {
+        id: 'npm',
+        packageName: '@qwen-code/qwen-code',
+      },
+    ],
+  },
+  deepseek_tui: {
+    appType: 'deepseek_tui',
+    displayName: 'DeepSeek-TUI',
+    command: 'deepseek-tui',
+    methods: [
+      {
+        id: 'npm',
+        packageName: 'deepseek-tui',
+      },
+    ],
+  },
 };
 
 const quoteForShell = (value: string): string => {
@@ -89,10 +146,37 @@ const truncateProgressLine = (value: string): string => {
 
 const buildInstallScript = (target: InstallTarget): string => {
   const method = target.methods[0];
+  if (method.id === 'official-installer') {
+    const scriptUrl = method.scriptUrl;
+    if (!scriptUrl) {
+      throw new Error(`Installer script URL is missing for ${target.displayName}.`);
+    }
+    const scriptArgs = (method.scriptArgs ?? []).map(quoteForShell).join(' ');
+    const installCommand = scriptArgs
+      ? `curl -fsSL ${quoteForShell(scriptUrl)} | bash -s -- ${scriptArgs}`
+      : `curl -fsSL ${quoteForShell(scriptUrl)} | bash`;
+    return [
+      'set -e',
+      'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"',
+      `echo "__WESIGHT_INSTALL_METHOD__=${method.id}"`,
+      installCommand,
+      `if command -v ${target.command} >/dev/null 2>&1; then`,
+      `  BINARY_PATH="$(command -v ${target.command})"`,
+      `elif [ -x "$HOME/.local/bin/${target.command}" ]; then`,
+      `  BINARY_PATH="$HOME/.local/bin/${target.command}"`,
+      'else',
+      `  echo "${target.command} command was not found after installation." >&2`,
+      '  exit 127',
+      'fi',
+      'echo "__WESIGHT_BINARY_PATH__=${BINARY_PATH}"',
+      'VERSION_OUTPUT=$({ "$BINARY_PATH" --version 2>&1 || true; } | head -n 1)',
+      'echo "__WESIGHT_VERSION__=${VERSION_OUTPUT}"',
+    ].join('\n');
+  }
 
   return [
     'set -e',
-    'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"',
+    'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"',
     'if [ -x /opt/homebrew/bin/brew ]; then eval "$(/opt/homebrew/bin/brew shellenv)"; fi',
     'if [ -x /usr/local/bin/brew ]; then eval "$(/usr/local/bin/brew shellenv)"; fi',
     'if ! command -v npm >/dev/null 2>&1; then',
@@ -113,7 +197,7 @@ const buildInstallScript = (target: InstallTarget): string => {
     '  exit 127',
     'fi',
     `echo "__WESIGHT_INSTALL_METHOD__=${method.id}"`,
-    `npm install -g ${quoteForShell(method.packageName)}`,
+    `npm install -g ${quoteForShell(method.packageName ?? '')}`,
     'GLOBAL_PREFIX="$(npm prefix -g 2>/dev/null || true)"',
     'BINARY_PATH=""',
     `if [ -n "$GLOBAL_PREFIX" ] && [ -x "$GLOBAL_PREFIX/bin/${target.command}" ]; then`,
@@ -194,7 +278,7 @@ export class ExternalAgentCliInstaller extends EventEmitter {
         env: {
           ...process.env,
           HOMEBREW_NO_ENV_HINTS: '1',
-          PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ''}`,
+          PATH: `${os.homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ''}`,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });

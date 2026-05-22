@@ -60,6 +60,22 @@ const usesLocalCliModelConfig = (config: RootState['cowork']['config']): boolean
     config.agentEngine === CoworkAgentEngine.Codex
     && config.codexConfigSource === ExternalAgentConfigSource.LocalCli
   )
+  || (
+    config.agentEngine === CoworkAgentEngine.Hermes
+    && config.hermesConfigSource === ExternalAgentConfigSource.LocalCli
+  )
+  || (
+    config.agentEngine === CoworkAgentEngine.OpenCode
+    && config.opencodeConfigSource === ExternalAgentConfigSource.LocalCli
+  )
+  || (
+    config.agentEngine === CoworkAgentEngine.QwenCode
+    && config.qwenCodeConfigSource === ExternalAgentConfigSource.LocalCli
+  )
+  || (
+    config.agentEngine === CoworkAgentEngine.DeepSeekTui
+    && config.deepseekTuiConfigSource === ExternalAgentConfigSource.LocalCli
+  )
 );
 
 const shouldRequireWesightModelConfig = (): boolean => (
@@ -140,11 +156,40 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     return status.phase === 'running' || status.phase === 'ready';
   };
 
+  const ensureOpenClawReadyBeforeSend = async (): Promise<boolean> => {
+    if (!isOpenClawEngine) {
+      return true;
+    }
+    if (isOpenClawReadyForSession(openClawStatus)) {
+      return true;
+    }
+
+    setIsRestartingGateway(true);
+    try {
+      const nextStatus = await coworkService.installOpenClawEngine();
+      if (isOpenClawReadyForSession(nextStatus)) {
+        return true;
+      }
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
+      return false;
+    } catch (error) {
+      console.error('[CoworkView] Failed to prepare OpenClaw runtime:', error);
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
+      return false;
+    } finally {
+      setIsRestartingGateway(false);
+    }
+  };
+
   const handleRestartGateway = async () => {
     if (isRestartingGateway) return;
     setIsRestartingGateway(true);
     try {
-      await coworkService.restartOpenClawGateway();
+      if (openClawStatus?.phase === 'not_installed') {
+        await coworkService.installOpenClawEngine();
+      } else {
+        await coworkService.restartOpenClawGateway();
+      }
     } catch (error) {
       console.error('[CoworkView] Failed to restart gateway:', error);
     } finally {
@@ -205,10 +250,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   }, [dispatch]);
 
   const handleStartSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]): Promise<boolean | void> => {
-    if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
-      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
-      return false;
-    }
     // Prevent duplicate submissions
     if (isStartingRef.current) return;
     isStartingRef.current = true;
@@ -227,6 +268,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     };
 
     try {
+      if (!await ensureOpenClawReadyBeforeSend()) {
+        return false;
+      }
+
       if (shouldRequireWesightModelConfig()) {
         try {
           const apiConfig = await coworkService.checkApiConfig();
@@ -359,13 +404,13 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     if (!currentSession) return;
     // Prevent duplicate submissions
     if (isContinuingRef.current) return;
-    if (isOpenClawEngine && openClawStatus && !isOpenClawReadyForSession(openClawStatus)) {
-      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('coworkErrorEngineNotReady') }));
-      return false;
-    }
 
     isContinuingRef.current = true;
     try {
+      if (!await ensureOpenClawReadyBeforeSend()) {
+        return false;
+      }
+
       console.log('[CoworkView] handleContinueSession called', {
         hasImageAttachments: !!imageAttachments,
         imageAttachmentsCount: imageAttachments?.length ?? 0,
@@ -447,6 +492,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         return i18nService.t('coworkAgentEngineClaudeCode');
       case CoworkAgentEngine.Codex:
         return i18nService.t('coworkAgentEngineCodex');
+      case CoworkAgentEngine.OpenCode:
+        return i18nService.t('coworkAgentEngineOpenCode');
+      case CoworkAgentEngine.QwenCode:
+        return i18nService.t('coworkAgentEngineQwenCode');
+      case CoworkAgentEngine.DeepSeekTui:
+        return i18nService.t('coworkAgentEngineDeepSeekTui');
       case CoworkAgentEngine.OpenClaw:
         return i18nService.t('coworkAgentEngineOpenClaw');
       case CoworkAgentEngine.Hermes:
@@ -522,6 +573,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
   const getModelContextLabel = () => {
     if (
+      config.agentEngine === CoworkAgentEngine.OpenClaw
+      && config.openclawConfigSource === ExternalAgentConfigSource.LocalCli
+    ) {
+      return i18nService.t('coworkAgentConfigSourceLocalCli');
+    }
+    if (
       config.agentEngine === CoworkAgentEngine.ClaudeCode
       && config.claudeCodeConfigSource === ExternalAgentConfigSource.LocalCli
     ) {
@@ -530,6 +587,30 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     if (
       config.agentEngine === CoworkAgentEngine.Codex
       && config.codexConfigSource === ExternalAgentConfigSource.LocalCli
+    ) {
+      return i18nService.t('coworkAgentConfigSourceLocalCli');
+    }
+    if (
+      config.agentEngine === CoworkAgentEngine.Hermes
+      && config.hermesConfigSource === ExternalAgentConfigSource.LocalCli
+    ) {
+      return i18nService.t('coworkAgentConfigSourceLocalCli');
+    }
+    if (
+      config.agentEngine === CoworkAgentEngine.OpenCode
+      && config.opencodeConfigSource === ExternalAgentConfigSource.LocalCli
+    ) {
+      return i18nService.t('coworkAgentConfigSourceLocalCli');
+    }
+    if (
+      config.agentEngine === CoworkAgentEngine.QwenCode
+      && config.qwenCodeConfigSource === ExternalAgentConfigSource.LocalCli
+    ) {
+      return i18nService.t('coworkAgentConfigSourceLocalCli');
+    }
+    if (
+      config.agentEngine === CoworkAgentEngine.DeepSeekTui
+      && config.deepseekTuiConfigSource === ExternalAgentConfigSource.LocalCli
     ) {
       return i18nService.t('coworkAgentConfigSourceLocalCli');
     }
@@ -806,13 +887,13 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       <button
         type="button"
         onClick={handleRestartGateway}
-        disabled={isRestartingGateway}
+        disabled={isRestartingGateway || openClawStatus.phase === 'installing'}
         className={`shrink-0 rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isEngineError
           ? 'bg-red-600 text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600'
           : 'bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-700 dark:hover:bg-amber-600'
         }`}
       >
-        {i18nService.t('coworkOpenClawRestartGateway')}
+        {i18nService.t(openClawStatus.phase === 'not_installed' ? 'coworkOpenClawStart' : 'coworkOpenClawRestartGateway')}
       </button>
     </div>
   ) : null;

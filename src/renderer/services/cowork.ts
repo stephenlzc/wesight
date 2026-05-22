@@ -1,5 +1,6 @@
-import { classifyErrorKey } from '../../common/coworkErrorClassify';
 import { CoworkAgentEngine } from '@shared/cowork/constants';
+
+import { classifyErrorKey } from '../../common/coworkErrorClassify';
 import { store } from '../store';
 import {
   addMessage,
@@ -38,6 +39,9 @@ import type {
   ExternalAgentProviderListResult,
   HermesEngineStatus,
   OpenClawEngineStatus,
+  RuntimeCallRecord,
+  RuntimeMetricsFilters,
+  RuntimeMetricsSummary,
 } from '../types/cowork';
 import { i18nService } from './i18n';
 
@@ -174,15 +178,23 @@ class CoworkService {
     });
     this.streamListenerCleanups.push(errorCleanup);
 
-    // Sessions changed listener (new channel sessions discovered by polling)
+    // Sessions changed listener (new channel sessions discovered or updated by polling)
     const sessionsChangedCleanup = cowork.onSessionsChanged(() => {
       const beforeState = store.getState().cowork;
-      console.log('[CoworkService] onSessionsChanged: received IPC event, before sessions:', beforeState.sessions.length, 'sessionIds:', beforeState.sessions.map(s => s.id).slice(0, 5));
-      void this.loadSessions().then(() => {
+      const currentSessionId = beforeState.currentSessionId;
+
+      void this.loadSessions().then(async () => {
         const state = store.getState().cowork;
-        console.log('[CoworkService] onSessionsChanged: loadSessions complete, total sessions:', state.sessions.length, 'sessionIds:', state.sessions.map(s => s.id).slice(0, 5));
+        const currentSessionStillExists = currentSessionId
+          ? state.sessions.some((session) => session.id === currentSessionId)
+          : false;
+        const currentSessionStillSelected = store.getState().cowork.currentSessionId === currentSessionId;
+
+        if (currentSessionId && currentSessionStillExists && currentSessionStillSelected) {
+          await this.loadSession(currentSessionId);
+        }
       }).catch((err) => {
-        console.error('[CoworkService] onSessionsChanged: loadSessions FAILED:', err);
+        console.error('[CoworkService] failed to refresh cowork sessions:', err);
       });
     });
     this.streamListenerCleanups.push(sessionsChangedCleanup);
@@ -587,6 +599,39 @@ class CoworkService {
     return result.snapshot;
   }
 
+  async getRuntimeMetricsSummary(filters: RuntimeMetricsFilters): Promise<RuntimeMetricsSummary | null> {
+    const api = window.electron?.cowork?.getRuntimeMetricsSummary;
+    if (!api) return null;
+    const result = await api(filters);
+    if (!result?.success || !result.summary) {
+      return null;
+    }
+    return result.summary;
+  }
+
+  async listRuntimeCalls(filters: RuntimeMetricsFilters): Promise<{ total: number; calls: RuntimeCallRecord[] }> {
+    const api = window.electron?.cowork?.listRuntimeCalls;
+    if (!api) return { total: 0, calls: [] };
+    const result = await api(filters);
+    if (!result?.success) {
+      return { total: 0, calls: [] };
+    }
+    return {
+      total: result.total ?? 0,
+      calls: result.calls ?? [],
+    };
+  }
+
+  async getRuntimeCallDetail(callId: string): Promise<RuntimeCallRecord | null> {
+    const api = window.electron?.cowork?.getRuntimeCallDetail;
+    if (!api) return null;
+    const result = await api(callId);
+    if (!result?.success) {
+      return null;
+    }
+    return result.call ?? null;
+  }
+
   async installAgentCli(appType: ExternalAgentProviderAppType): Promise<ExternalAgentCliInstallResult> {
     const api = window.electron?.cowork?.installAgentCli;
     if (!api) return { success: false, error: 'Cowork CLI installer API not available' };
@@ -639,6 +684,30 @@ class CoworkService {
     const api = window.electron?.cowork?.importLocalAgentConfigToModelSettings;
     if (!api) return { success: false, error: 'Cowork model import API not available' };
     return api(appType);
+  }
+
+  async syncOpenCodeGlobalConfig(): Promise<ExternalAgentProviderListResult> {
+    const api = window.electron?.cowork?.syncOpenCodeGlobalConfig;
+    if (!api) return { success: false, error: 'Cowork OpenCode sync API not available' };
+    return api();
+  }
+
+  async syncOpenClawGlobalConfig(): Promise<{ success: boolean; changed?: boolean; status?: OpenClawEngineStatus; error?: string }> {
+    const api = window.electron?.cowork?.syncOpenClawGlobalConfig;
+    if (!api) return { success: false, error: 'Cowork OpenClaw sync API not available' };
+    return api();
+  }
+
+  async syncQwenCodeGlobalConfig(): Promise<ExternalAgentProviderListResult> {
+    const api = window.electron?.cowork?.syncQwenCodeGlobalConfig;
+    if (!api) return { success: false, error: 'Cowork Qwen Code sync API not available' };
+    return api();
+  }
+
+  async syncDeepSeekTuiGlobalConfig(): Promise<ExternalAgentProviderListResult> {
+    const api = window.electron?.cowork?.syncDeepSeekTuiGlobalConfig;
+    if (!api) return { success: false, error: 'Cowork DeepSeek-TUI sync API not available' };
+    return api();
   }
 
   async getApiConfig(): Promise<CoworkApiConfig | null> {

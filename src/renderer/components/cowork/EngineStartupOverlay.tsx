@@ -76,7 +76,7 @@ const EngineStartupOverlay: React.FC = () => {
     });
   }, [config.agentEngine, isManagedGatewayEngine]);
 
-  if (!isManagedGatewayEngine || !status || status.phase !== 'starting') {
+  if (!isManagedGatewayEngine || !status || (status.phase !== 'starting' && status.phase !== 'installing')) {
     return null;
   }
 
