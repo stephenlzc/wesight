@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import {
+  ClaudeCodePermissionMode,
   CoworkAgentEngine,
   DeepSeekTuiPermissionMode,
   DefaultCoworkAgentEngine,
@@ -61,6 +62,7 @@ const initialState: CoworkState = {
     agentEngine: DefaultCoworkAgentEngine,
     openclawConfigSource: ExternalAgentConfigSource.LocalCli,
     claudeCodeConfigSource: ExternalAgentConfigSource.WesightModel,
+    claudeCodePermissionMode: ClaudeCodePermissionMode.BypassPermissions,
     codexConfigSource: ExternalAgentConfigSource.WesightModel,
     hermesConfigSource: ExternalAgentConfigSource.WesightModel,
     opencodeConfigSource: ExternalAgentConfigSource.WesightModel,

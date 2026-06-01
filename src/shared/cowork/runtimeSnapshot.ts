@@ -9,5 +9,7 @@ export interface CoworkSessionRuntimeSnapshot {
   modelName: string | null;
   modelLabel: string;
   configSource: string | null;
+  permissionMode?: string | null;
+  permissionModeLabel?: string | null;
   capturedAt: number;
 }

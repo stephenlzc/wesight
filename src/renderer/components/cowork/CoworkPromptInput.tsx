@@ -16,6 +16,7 @@ import { getCompactFolderName } from '../../utils/path';
 import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import { ActiveSkillBadge,SkillsButton } from '../skills';
+import ClaudePermissionModeSelector from './ClaudePermissionModeSelector';
 import CoworkEngineSelector from './CoworkEngineSelector';
 import CoworkModelSelector from './CoworkModelSelector';
 import FolderSelectorPopover from './FolderSelectorPopover';
@@ -817,6 +818,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     || lockedRuntimeSnapshot?.modelName
     || lockedRuntimeSnapshot?.modelId
     || i18nService.t('coworkAgentLocalModelUnknown');
+  const lockedPermissionLabel = lockedRuntimeSnapshot?.permissionMode
+    ? i18nService.t(`coworkAgentClaudeCodePermissionMode_${lockedRuntimeSnapshot.permissionMode}`)
+    : lockedRuntimeSnapshot?.permissionModeLabel;
+  const shouldShowClaudePermissionSelector = !runtimeLocked
+    && selectorEngine === CoworkAgentEngine.ClaudeCode
+    && !remoteManaged;
   const renderRuntimeSelectors = () => {
     if (remoteManaged) return null;
     if (runtimeLocked) {
@@ -830,11 +837,23 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           <span className="max-w-[120px] truncate font-medium">{lockedEngineLabel}</span>
           <span className="text-muted">·</span>
           <span className="max-w-[160px] truncate text-secondary">{lockedModelLabel}</span>
+          {lockedPermissionLabel && (
+            <>
+              <span className="text-muted">·</span>
+              <span className="max-w-[90px] truncate text-secondary">{lockedPermissionLabel}</span>
+            </>
+          )}
         </div>
       );
     }
     return (
       <div className="flex min-w-0 items-center gap-1.5">
+        {shouldShowClaudePermissionSelector && (
+          <ClaudePermissionModeSelector
+            dropdownDirection="up"
+            disabled={disabled || isStreaming}
+          />
+        )}
         {showEngineSelector && (
           <CoworkEngineSelector
             dropdownDirection="up"

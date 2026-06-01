@@ -1,4 +1,5 @@
 import type {
+  ClaudeCodePermissionMode,
   CoworkAgentEngine,
   CoworkSessionKind,
   DeepSeekTuiPermissionMode,
@@ -86,6 +87,7 @@ interface CoworkConfig {
   agentEngine: CoworkAgentEngine;
   openclawConfigSource: ExternalAgentConfigSource;
   claudeCodeConfigSource: ExternalAgentConfigSource;
+  claudeCodePermissionMode: ClaudeCodePermissionMode;
   codexConfigSource: ExternalAgentConfigSource;
   hermesConfigSource: ExternalAgentConfigSource;
   opencodeConfigSource: ExternalAgentConfigSource;
@@ -108,6 +110,7 @@ type CoworkConfigUpdate = Partial<Pick<
   | 'agentEngine'
   | 'openclawConfigSource'
   | 'claudeCodeConfigSource'
+  | 'claudeCodePermissionMode'
   | 'codexConfigSource'
   | 'hermesConfigSource'
   | 'opencodeConfigSource'

@@ -11,10 +11,12 @@ import path from 'path';
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
 import { migrateScheduledTaskRunsToOpenclaw,migrateScheduledTasksToOpenclaw } from '../scheduledTask/migrate';
 import {
+  ClaudeCodePermissionMode,
   CoworkAgentEngine as CoworkAgentEngineValue,
   CoworkIpcChannel,
   CoworkSessionKind,
   ExternalAgentConfigSource,
+  isClaudeCodePermissionMode,
   isCoworkAgentEngine,
   isDeepSeekTuiPermissionMode,
   isExternalAgentConfigSource,
@@ -1183,10 +1185,22 @@ const getEngineSnapshotLabel = (engine: CoworkAgentEngine): string => {
   return 'Cowork';
 };
 
+const getClaudeCodePermissionLabel = (mode: string | null | undefined): string | null => {
+  if (mode === ClaudeCodePermissionMode.BypassPermissions) return 'Auto Execute';
+  if (mode === ClaudeCodePermissionMode.Default) return 'Default';
+  if (mode === ClaudeCodePermissionMode.Plan) return 'Plan';
+  if (mode === ClaudeCodePermissionMode.AcceptEdits) return 'Accept Edits';
+  return null;
+};
+
 const resolveSessionRuntimeSnapshot = (
   engine: CoworkAgentEngine,
 ): CoworkSessionRuntimeSnapshot => {
   const model = resolveRuntimeModelSnapshot(engine);
+  const config = getCoworkStore().getConfig();
+  const permissionMode = engine === CoworkAgentEngineValue.ClaudeCode
+    ? config.claudeCodePermissionMode
+    : null;
   const modelLabel = engine === CoworkAgentEngineValue.CodexApp
     ? 'Codex App Config'
     : [model.providerName, model.modelName || model.modelId]
@@ -1201,6 +1215,8 @@ const resolveSessionRuntimeSnapshot = (
     modelName: model.modelName,
     modelLabel: modelLabel || 'Unknown model',
     configSource: model.configSource,
+    permissionMode,
+    permissionModeLabel: getClaudeCodePermissionLabel(permissionMode),
     capturedAt: Date.now(),
   };
 };
@@ -5305,6 +5321,7 @@ if (!gotTheLock) {
     executionMode?: 'auto' | 'local' | 'sandbox';
     agentEngine?: CoworkAgentEngine;
     claudeCodeConfigSource?: unknown;
+    claudeCodePermissionMode?: unknown;
     codexConfigSource?: unknown;
     hermesConfigSource?: unknown;
     opencodeConfigSource?: unknown;
@@ -5329,6 +5346,9 @@ if (!gotTheLock) {
         : undefined;
       const normalizedClaudeCodeConfigSource = isExternalAgentConfigSource(config.claudeCodeConfigSource)
         ? config.claudeCodeConfigSource
+        : undefined;
+      const normalizedClaudeCodePermissionMode = isClaudeCodePermissionMode(config.claudeCodePermissionMode)
+        ? config.claudeCodePermissionMode
         : undefined;
       const normalizedCodexConfigSource = isExternalAgentConfigSource(config.codexConfigSource)
         ? config.codexConfigSource
@@ -5380,6 +5400,7 @@ if (!gotTheLock) {
         executionMode: normalizedExecutionMode,
         agentEngine: normalizedAgentEngine,
         claudeCodeConfigSource: normalizedClaudeCodeConfigSource,
+        claudeCodePermissionMode: normalizedClaudeCodePermissionMode,
         codexConfigSource: normalizedCodexConfigSource,
         hermesConfigSource: normalizedHermesConfigSource,
         opencodeConfigSource: normalizedOpenCodeConfigSource,
@@ -5402,6 +5423,9 @@ if (!gotTheLock) {
       }
       if (normalizedClaudeCodeConfigSource !== undefined) {
         nextConfigPreview.claudeCodeConfigSource = normalizedClaudeCodeConfigSource;
+      }
+      if (normalizedClaudeCodePermissionMode !== undefined) {
+        nextConfigPreview.claudeCodePermissionMode = normalizedClaudeCodePermissionMode;
       }
       if (normalizedCodexConfigSource !== undefined) {
         nextConfigPreview.codexConfigSource = normalizedCodexConfigSource;

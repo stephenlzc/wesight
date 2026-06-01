@@ -1,6 +1,7 @@
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { ArrowTopRightOnSquareIcon,ChatBubbleLeftIcon, CheckCircleIcon, ClockIcon, Cog6ToothIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, SignalIcon, UserCircleIcon, UserGroupIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import {
+  ClaudeCodePermissionMode as ClaudeCodePermissionModeValue,
   CoworkAgentEngine as CoworkAgentEngineValue,
   DeepSeekTuiPermissionMode as DeepSeekTuiPermissionModeValue,
   ExternalAgentConfigSource as ExternalAgentConfigSourceValue,
@@ -34,6 +35,7 @@ import { themeService } from '../services/theme';
 import { RootState } from '../store';
 import { setAvailableModels } from '../store/slices/modelSlice';
 import type {
+  ClaudeCodePermissionMode,
   CoworkAgentEngine,
   CoworkMemoryStats,
   CoworkUserMemoryEntry,
@@ -843,6 +845,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [claudeCodeConfigSource, setClaudeCodeConfigSource] = useState<ExternalAgentConfigSource>(
     coworkConfig.claudeCodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
   );
+  const [claudeCodePermissionMode, setClaudeCodePermissionMode] = useState<ClaudeCodePermissionMode>(
+    coworkConfig.claudeCodePermissionMode ?? ClaudeCodePermissionModeValue.BypassPermissions,
+  );
   const [codexConfigSource, setCodexConfigSource] = useState<ExternalAgentConfigSource>(
     coworkConfig.codexConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
   );
@@ -901,6 +906,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setCoworkAgentEngine(coworkConfig.agentEngine || CoworkAgentEngineValue.YdCowork);
     setOpenClawConfigSource(coworkConfig.openclawConfigSource ?? ExternalAgentConfigSourceValue.LocalCli);
     setClaudeCodeConfigSource(coworkConfig.claudeCodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
+    setClaudeCodePermissionMode(coworkConfig.claudeCodePermissionMode ?? ClaudeCodePermissionModeValue.BypassPermissions);
     setCodexConfigSource(coworkConfig.codexConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
     setHermesConfigSource(coworkConfig.hermesConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
     setOpenCodeConfigSource(coworkConfig.opencodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
@@ -915,6 +921,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     coworkConfig.agentEngine,
     coworkConfig.openclawConfigSource,
     coworkConfig.claudeCodeConfigSource,
+    coworkConfig.claudeCodePermissionMode,
     coworkConfig.codexConfigSource,
     coworkConfig.hermesConfigSource,
     coworkConfig.opencodeConfigSource,
@@ -1618,6 +1625,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
     || openclawConfigSource !== coworkConfig.openclawConfigSource
     || claudeCodeConfigSource !== coworkConfig.claudeCodeConfigSource
+    || claudeCodePermissionMode !== coworkConfig.claudeCodePermissionMode
     || codexConfigSource !== coworkConfig.codexConfigSource
     || hermesConfigSource !== coworkConfig.hermesConfigSource
     || opencodeConfigSource !== coworkConfig.opencodeConfigSource
@@ -1632,7 +1640,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     || (coworkAgentEngine === CoworkAgentEngineValue.OpenClaw
       && openclawConfigSource !== coworkConfig.openclawConfigSource)
     || (coworkAgentEngine === CoworkAgentEngineValue.ClaudeCode
-      && claudeCodeConfigSource !== coworkConfig.claudeCodeConfigSource)
+      && (claudeCodeConfigSource !== coworkConfig.claudeCodeConfigSource
+        || claudeCodePermissionMode !== coworkConfig.claudeCodePermissionMode))
     || (coworkAgentEngine === CoworkAgentEngineValue.Codex
       && codexConfigSource !== coworkConfig.codexConfigSource)
     || (coworkAgentEngine === CoworkAgentEngineValue.Hermes
@@ -2042,6 +2051,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           agentEngine: coworkAgentEngine,
           openclawConfigSource,
           claudeCodeConfigSource,
+          claudeCodePermissionMode,
           codexConfigSource,
           hermesConfigSource,
           opencodeConfigSource,
@@ -3579,6 +3589,66 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                       checked={checked}
                       disabled={isSaving}
                       onChange={() => setOpenCodePermissionMode(option.value)}
+                      className="mt-1"
+                    />
+                    <span>
+                      <span className="block text-xs font-medium text-foreground">
+                        {i18nService.t(option.labelKey)}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-5 text-secondary">
+                        {i18nService.t(option.hintKey)}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {selectedExternalAgentAppType === 'claude' && (
+          <div className="rounded-xl border border-border px-3 py-3">
+            <div className="text-xs font-medium text-foreground">
+              {i18nService.t('coworkAgentClaudeCodePermissionTitle')}
+            </div>
+            <div className="mt-1 text-[11px] leading-5 text-secondary">
+              {i18nService.t('coworkAgentClaudeCodePermissionHint')}
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {[
+                {
+                  value: ClaudeCodePermissionModeValue.BypassPermissions,
+                  labelKey: 'coworkAgentClaudeCodePermissionAuto',
+                  hintKey: 'coworkAgentClaudeCodePermissionAutoHint',
+                },
+                {
+                  value: ClaudeCodePermissionModeValue.Default,
+                  labelKey: 'coworkAgentClaudeCodePermissionDefault',
+                  hintKey: 'coworkAgentClaudeCodePermissionDefaultHint',
+                },
+                {
+                  value: ClaudeCodePermissionModeValue.Plan,
+                  labelKey: 'coworkAgentClaudeCodePermissionPlan',
+                  hintKey: 'coworkAgentClaudeCodePermissionPlanHint',
+                },
+                {
+                  value: ClaudeCodePermissionModeValue.AcceptEdits,
+                  labelKey: 'coworkAgentClaudeCodePermissionAcceptEdits',
+                  hintKey: 'coworkAgentClaudeCodePermissionAcceptEditsHint',
+                },
+              ].map((option) => {
+                const checked = claudeCodePermissionMode === option.value;
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex gap-3 rounded-lg border px-3 py-2 ${checked ? 'border-primary bg-primary/5' : 'border-border hover:bg-surface-raised'}`}
+                  >
+                    <input
+                      type="radio"
+                      name="claude-code-permission-mode"
+                      checked={checked}
+                      disabled={isSaving}
+                      onChange={() => setClaudeCodePermissionMode(option.value)}
                       className="mt-1"
                     />
                     <span>

@@ -59,6 +59,22 @@ export const ExternalAgentConfigSourceValues = [
   ExternalAgentConfigSource.LocalCli,
 ] as const;
 
+export const ClaudeCodePermissionMode = {
+  BypassPermissions: 'bypassPermissions',
+  Default: 'default',
+  Plan: 'plan',
+  AcceptEdits: 'acceptEdits',
+} as const;
+
+export type ClaudeCodePermissionMode = typeof ClaudeCodePermissionMode[keyof typeof ClaudeCodePermissionMode];
+
+export const ClaudeCodePermissionModeValues = [
+  ClaudeCodePermissionMode.BypassPermissions,
+  ClaudeCodePermissionMode.Default,
+  ClaudeCodePermissionMode.Plan,
+  ClaudeCodePermissionMode.AcceptEdits,
+] as const;
+
 export const OpenCodePermissionMode = {
   Auto: 'auto',
   Conservative: 'conservative',
@@ -103,6 +119,11 @@ export function isCoworkAgentEngine(value: unknown): value is CoworkAgentEngine 
 export function isExternalAgentConfigSource(value: unknown): value is ExternalAgentConfigSource {
   return typeof value === 'string'
     && ExternalAgentConfigSourceValues.includes(value as ExternalAgentConfigSource);
+}
+
+export function isClaudeCodePermissionMode(value: unknown): value is ClaudeCodePermissionMode {
+  return typeof value === 'string'
+    && ClaudeCodePermissionModeValues.includes(value as ClaudeCodePermissionMode);
 }
 
 export function isOpenCodePermissionMode(value: unknown): value is OpenCodePermissionMode {

@@ -75,10 +75,22 @@ const resolveLocalCliAppType = (config: RootState['cowork']['config']): External
   return null;
 };
 
-const getProviderModelLabel = (provider: ExternalAgentProvider | null): string => {
+const compactModelLabel = (label: string): string => {
+  const parts = label.split('·').map(part => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1] : label;
+};
+
+const getProviderModelFullLabel = (provider: ExternalAgentProvider | null): string => {
   if (!provider) return i18nService.t('coworkAgentLocalModelUnknown');
   return provider.summary.model
     ? `${provider.name} · ${provider.summary.model}`
+    : provider.name;
+};
+
+const getProviderModelButtonLabel = (provider: ExternalAgentProvider | null): string => {
+  if (!provider) return i18nService.t('coworkAgentLocalModelUnknown');
+  return provider.summary.model
+    ? compactModelLabel(provider.summary.model)
     : provider.name;
 };
 
@@ -217,11 +229,11 @@ const CoworkModelSelector: React.FC<CoworkModelSelectorProps> = ({
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         disabled={isLoading || Boolean(switchingProviderId)}
-        className={`flex max-w-[260px] items-center gap-2 rounded-xl px-3 py-1.5 text-foreground transition-colors hover:bg-surface-raised disabled:cursor-wait disabled:opacity-70 ${isOpen ? 'bg-surface-raised' : ''}`}
-        title={getProviderModelLabel(currentProvider)}
+        className={`flex min-w-0 max-w-[150px] items-center gap-2 rounded-xl px-3 py-1.5 text-foreground transition-colors hover:bg-surface-raised disabled:cursor-wait disabled:opacity-70 sm:max-w-[180px] ${isOpen ? 'bg-surface-raised' : ''}`}
+        title={getProviderModelFullLabel(currentProvider)}
       >
-        <span className="truncate text-sm font-medium">
-          {getProviderModelLabel(currentProvider)}
+        <span className="min-w-0 truncate text-sm font-medium">
+          {getProviderModelButtonLabel(currentProvider)}
         </span>
         <ChevronDownIcon className="h-4 w-4 shrink-0 text-secondary" />
       </button>

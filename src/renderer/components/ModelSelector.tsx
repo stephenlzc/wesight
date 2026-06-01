@@ -35,6 +35,21 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const selectedModel = controlled ? value ?? null : globalSelectedModel;
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
 
+  const getCompactModelLabel = React.useCallback((model: Model | null): string => {
+    if (!model) return defaultLabel ?? '';
+    const rawName = model.name || model.id;
+    const separatorParts = rawName.split('·').map(part => part.trim()).filter(Boolean);
+    return separatorParts.length > 1 ? separatorParts[separatorParts.length - 1] : rawName;
+  }, [defaultLabel]);
+
+  const getFullModelLabel = React.useCallback((model: Model | null): string => {
+    if (!model) return defaultLabel ?? '';
+    if (model.provider && !model.name.toLowerCase().includes(model.provider.toLowerCase())) {
+      return `${model.provider} · ${model.name}`;
+    }
+    return model.name;
+  }, [defaultLabel]);
+
   // 点击外部区域关闭下拉框
   React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -129,11 +144,13 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   return (
     <div ref={containerRef} className="relative cursor-pointer">
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-surface-raised text-foreground transition-colors cursor-pointer ${isOpen ? 'bg-surface-raised' : ''}`}
+        className={`flex min-w-0 max-w-[150px] items-center gap-2 rounded-xl px-3 py-1.5 text-foreground transition-colors hover:bg-surface-raised sm:max-w-[180px] ${isOpen ? 'bg-surface-raised' : ''}`}
+        title={getFullModelLabel(selectedModel)}
       >
-        <span className="font-medium text-sm">{selectedModel?.name ?? defaultLabel ?? ''}</span>
-        <ChevronDownIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+        <span className="min-w-0 truncate text-sm font-medium">{getCompactModelLabel(selectedModel)}</span>
+        <ChevronDownIcon className="h-4 w-4 shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
       </button>
 
       {isOpen && (

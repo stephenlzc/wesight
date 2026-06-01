@@ -1,4 +1,5 @@
 import type {
+  ClaudeCodePermissionMode,
   CoworkAgentEngine,
   CoworkSessionKind,
   DeepSeekTuiPermissionMode,
@@ -34,7 +35,7 @@ export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
 export type { CoworkAgentEngine, ExternalAgentConfigSource };
 export type { CoworkSessionKind };
-export type { DeepSeekTuiPermissionMode, OpenCodePermissionMode, QwenCodePermissionMode };
+export type { ClaudeCodePermissionMode, DeepSeekTuiPermissionMode, OpenCodePermissionMode, QwenCodePermissionMode };
 
 // Cowork message metadata
 export interface CoworkMessageMetadata {
@@ -91,6 +92,7 @@ export interface CoworkConfig {
   agentEngine: CoworkAgentEngine;
   openclawConfigSource: ExternalAgentConfigSource;
   claudeCodeConfigSource: ExternalAgentConfigSource;
+  claudeCodePermissionMode: ClaudeCodePermissionMode;
   codexConfigSource: ExternalAgentConfigSource;
   hermesConfigSource: ExternalAgentConfigSource;
   opencodeConfigSource: ExternalAgentConfigSource;
@@ -113,6 +115,7 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'agentEngine'
   | 'openclawConfigSource'
   | 'claudeCodeConfigSource'
+  | 'claudeCodePermissionMode'
   | 'codexConfigSource'
   | 'hermesConfigSource'
   | 'opencodeConfigSource'

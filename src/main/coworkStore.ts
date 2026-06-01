@@ -9,6 +9,8 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   AgentTeamWorkflow,
   type AgentTeamWorkflow as AgentTeamWorkflowType,
+  ClaudeCodePermissionMode,
+  type ClaudeCodePermissionMode as ClaudeCodePermissionModeType,
   type CoworkAgentEngine,
   CoworkSessionKind,
   type CoworkSessionKind as CoworkSessionKindType,
@@ -18,6 +20,7 @@ import {
   ExternalAgentConfigSource,
   type ExternalAgentConfigSource as ExternalAgentConfigSourceType,
   isAgentTeamWorkflow,
+  isClaudeCodePermissionMode,
   isCoworkAgentEngine,
   isCoworkSessionKind,
   isDeepSeekTuiPermissionMode,
@@ -63,6 +66,7 @@ const DEFAULT_MEMORY_USER_MEMORIES_MAX_ITEMS = 12;
 const DEFAULT_EXTERNAL_AGENT_CONFIG_SOURCE: ExternalAgentConfigSourceType = ExternalAgentConfigSource.WesightModel;
 const OPENCLAW_GLOBAL_CONFIG_PATH = path.join(os.homedir(), '.openclaw', 'openclaw.json');
 const HERMES_GLOBAL_CONFIG_PATH = path.join(os.homedir(), '.hermes', 'config.yaml');
+const DEFAULT_CLAUDE_CODE_PERMISSION_MODE: ClaudeCodePermissionModeType = ClaudeCodePermissionMode.BypassPermissions;
 const DEFAULT_OPENCODE_PERMISSION_MODE: OpenCodePermissionModeType = OpenCodePermissionMode.Auto;
 const DEFAULT_QWEN_CODE_PERMISSION_MODE: QwenCodePermissionModeType = QwenCodePermissionMode.Auto;
 const DEFAULT_DEEPSEEK_TUI_PERMISSION_MODE: DeepSeekTuiPermissionModeType = DeepSeekTuiPermissionMode.Auto;
@@ -416,6 +420,8 @@ const parseRuntimeSnapshot = (
         ? parsed.modelLabel
         : parsed.modelName || parsed.modelId || '',
       configSource: typeof parsed.configSource === 'string' ? parsed.configSource : null,
+      permissionMode: typeof parsed.permissionMode === 'string' ? parsed.permissionMode : null,
+      permissionModeLabel: typeof parsed.permissionModeLabel === 'string' ? parsed.permissionModeLabel : null,
       capturedAt: typeof parsed.capturedAt === 'number' ? parsed.capturedAt : Date.now(),
     };
   } catch {
@@ -486,6 +492,13 @@ function normalizeOpenCodePermissionMode(value?: string | null): OpenCodePermiss
     return value;
   }
   return DEFAULT_OPENCODE_PERMISSION_MODE;
+}
+
+function normalizeClaudeCodePermissionMode(value?: string | null): ClaudeCodePermissionModeType {
+  if (isClaudeCodePermissionMode(value)) {
+    return value;
+  }
+  return DEFAULT_CLAUDE_CODE_PERMISSION_MODE;
 }
 
 function normalizeQwenCodePermissionMode(value?: string | null): QwenCodePermissionModeType {
@@ -641,6 +654,7 @@ export interface CoworkConfig {
   agentEngine: CoworkAgentEngine;
   openclawConfigSource: ExternalAgentConfigSourceType;
   claudeCodeConfigSource: ExternalAgentConfigSourceType;
+  claudeCodePermissionMode: ClaudeCodePermissionModeType;
   codexConfigSource: ExternalAgentConfigSourceType;
   hermesConfigSource: ExternalAgentConfigSourceType;
   opencodeConfigSource: ExternalAgentConfigSourceType;
@@ -663,6 +677,7 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'agentEngine'
   | 'openclawConfigSource'
   | 'claudeCodeConfigSource'
+  | 'claudeCodePermissionMode'
   | 'codexConfigSource'
   | 'hermesConfigSource'
   | 'opencodeConfigSource'
@@ -1512,6 +1527,7 @@ export class CoworkStore {
       'agentEngine',
       'openclawConfigSource',
       'claudeCodeConfigSource',
+      'claudeCodePermissionMode',
       'codexConfigSource',
       'hermesConfigSource',
       'opencodeConfigSource',
@@ -1539,6 +1555,7 @@ export class CoworkStore {
       agentEngine: normalizeCoworkAgentEngineValue(cfg.get('agentEngine')),
       openclawConfigSource: normalizeOpenClawConfigSource(cfg.get('openclawConfigSource')),
       claudeCodeConfigSource: normalizeExternalAgentConfigSource(cfg.get('claudeCodeConfigSource')),
+      claudeCodePermissionMode: normalizeClaudeCodePermissionMode(cfg.get('claudeCodePermissionMode')),
       codexConfigSource: normalizeExternalAgentConfigSource(cfg.get('codexConfigSource')),
       hermesConfigSource: normalizeHermesConfigSource(cfg.get('hermesConfigSource')),
       opencodeConfigSource: normalizeExternalAgentConfigSource(cfg.get('opencodeConfigSource')),
@@ -1635,6 +1652,20 @@ export class CoworkStore {
       `,
         )
         .run(normalizeExternalAgentConfigSource(config.claudeCodeConfigSource), now);
+    }
+
+    if (config.claudeCodePermissionMode !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('claudeCodePermissionMode', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeClaudeCodePermissionMode(config.claudeCodePermissionMode), now);
     }
 
     if (config.codexConfigSource !== undefined) {

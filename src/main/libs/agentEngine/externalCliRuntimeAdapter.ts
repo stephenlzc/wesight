@@ -7,9 +7,11 @@ import os from 'os';
 import path from 'path';
 
 import {
+  ClaudeCodePermissionMode,
   type CliCoworkAgentEngine,
   CoworkAgentEngine,
   ExternalAgentConfigSource,
+  isClaudeCodePermissionMode,
   OpenCodePermissionMode,
   QwenCodePermissionMode,
 } from '../../../shared/cowork/constants';
@@ -260,7 +262,8 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       return;
     }
     const systemPrompt = options.systemPrompt ?? currentSession?.systemPrompt ?? '';
-    const effectivePrompt = this.buildEffectivePrompt(sessionId, prompt, systemPrompt);
+    const claudeCodePermissionMode = this.resolveClaudeCodePermissionMode(options.runtimeSnapshot);
+    const effectivePrompt = this.buildEffectivePrompt(sessionId, prompt, systemPrompt, claudeCodePermissionMode);
     const imagePaths = this.materializeImageAttachments(sessionId, options.imageAttachments);
     const apiConfigOverride = getApiOverrideFromRuntimeSnapshot(options.runtimeSnapshot);
     const env = await getEnhancedEnvWithTmpdir(cwd, 'local', {
@@ -290,6 +293,7 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       currentSession?.title ?? session.title,
       currentSession?.claudeSessionId ?? null,
       apiConfigOverride,
+      claudeCodePermissionMode,
     );
     const child = spawn(command, args, {
       cwd,
@@ -436,6 +440,7 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     sessionTitle: string,
     cliSessionId: string | null,
     apiConfigOverride?: ApiConfigOverride,
+    claudeCodePermissionMode: ClaudeCodePermissionMode = ClaudeCodePermissionMode.BypassPermissions,
   ): string[] {
     if (this.engine === CoworkAgentEngine.ClaudeCode) {
       const args = [
@@ -445,7 +450,7 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
         '--verbose',
         '--include-partial-messages',
         '--permission-mode',
-        'auto',
+        claudeCodePermissionMode,
       ];
       args.push(prompt);
       return args;
@@ -707,7 +712,26 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     return typeof value === 'string' ? value.trim() : '';
   }
 
-  private buildEffectivePrompt(sessionId: string, prompt: string, systemPrompt: string): string {
+  private resolveClaudeCodePermissionMode(
+    snapshot?: CoworkSessionRuntimeSnapshot | null,
+  ): ClaudeCodePermissionMode {
+    const snapshotMode = snapshot?.permissionMode;
+    if (isClaudeCodePermissionMode(snapshotMode)) {
+      return snapshotMode;
+    }
+    const configMode = this.store.getConfig().claudeCodePermissionMode;
+    if (isClaudeCodePermissionMode(configMode)) {
+      return configMode;
+    }
+    return ClaudeCodePermissionMode.BypassPermissions;
+  }
+
+  private buildEffectivePrompt(
+    sessionId: string,
+    prompt: string,
+    systemPrompt: string,
+    claudeCodePermissionMode: ClaudeCodePermissionMode,
+  ): string {
     const history = this.buildHistoryContext(sessionId, prompt);
     const runtimeNoteLines = [
       'Runtime note:',
@@ -717,11 +741,17 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       '- Create memory files only when the user explicitly asks to remember or persist information.',
     ];
     if (this.engine === CoworkAgentEngine.ClaudeCode) {
-      runtimeNoteLines.push(
-        '- WeSight runs Claude Code as a graphical task executor. Do not enter planning-only flows or wait for plan approval.',
-        '- For build, edit, debug, or create requests, perform the work directly and report concrete results.',
-        '- Do not stop after writing a plan file. Create or modify the requested files and verify the result when possible.',
-      );
+      if (claudeCodePermissionMode === ClaudeCodePermissionMode.Plan) {
+        runtimeNoteLines.push(
+          '- WeSight runs Claude Code in plan mode. Present the plan clearly and wait for the CLI plan flow.',
+        );
+      } else {
+        runtimeNoteLines.push(
+          '- WeSight runs Claude Code as a graphical task executor. Do not enter planning-only flows or wait for plan approval.',
+          '- For build, edit, debug, or create requests, perform the work directly and report concrete results.',
+          '- Do not stop after writing a plan file. Create or modify the requested files and verify the result when possible.',
+        );
+      }
     }
     const runtimeNote = runtimeNoteLines.join('\n');
     return [

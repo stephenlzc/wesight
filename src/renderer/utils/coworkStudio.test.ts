@@ -1,4 +1,4 @@
-import { CoworkAgentEngine, ExternalAgentConfigSource } from '@shared/cowork/constants';
+import { ClaudeCodePermissionMode, CoworkAgentEngine, ExternalAgentConfigSource } from '@shared/cowork/constants';
 import {
   type CoworkFileActivity,
   CoworkFileActivitySource,
@@ -44,6 +44,7 @@ const makeConfig = (agentEngine: CoworkAgentEngine): CoworkConfig => ({
   agentEngine,
   openclawConfigSource: ExternalAgentConfigSource.LocalCli,
   claudeCodeConfigSource: ExternalAgentConfigSource.WesightModel,
+  claudeCodePermissionMode: ClaudeCodePermissionMode.BypassPermissions,
   codexConfigSource: ExternalAgentConfigSource.LocalCli,
   hermesConfigSource: ExternalAgentConfigSource.WesightModel,
   opencodeConfigSource: ExternalAgentConfigSource.WesightModel,
