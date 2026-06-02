@@ -47,6 +47,9 @@ const PROGRESS_THROTTLE_MS = 200;
 /** Abort download if no data received for this duration (ms). */
 const DOWNLOAD_INACTIVITY_TIMEOUT_MS = 60_000;
 
+const EXPECTED_MAC_APP_BUNDLE = 'WeSight.app';
+const EXPECTED_MAC_BUNDLE_IDENTIFIER = 'ai.wesight.app';
+
 export async function downloadUpdate(
   url: string,
   onProgress: (progress: AppUpdateDownloadProgress) => void,
@@ -135,7 +138,7 @@ export async function downloadUpdate(
     await fs.promises.mkdir(path.dirname(downloadPath), { recursive: true });
     writeStream = fs.createWriteStream(downloadPath);
 
-    const nodeStream = Readable.fromWeb(response.body as any);
+    const nodeStream = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
 
     // Start inactivity timer
     resetInactivityTimer();
@@ -264,15 +267,21 @@ async function installMacDmg(dmgPath: string): Promise<void> {
     mountPoint = mountMatch[1];
     console.log(`[AppUpdate] Mounted at: ${mountPoint}`);
 
-    // Find .app bundle in mount point
+    // Find the expected .app bundle in mount point.
     const entries = await fs.promises.readdir(mountPoint);
-    const appBundle = entries.find((e) => e.endsWith('.app'));
+    const appBundle = entries.find((entry) => entry === EXPECTED_MAC_APP_BUNDLE);
     if (!appBundle) {
-      throw new Error('No .app bundle found in DMG');
+      const foundApps = entries.filter((entry) => entry.endsWith('.app'));
+      throw new Error(`No ${EXPECTED_MAC_APP_BUNDLE} bundle found in DMG. Found: ${foundApps.join(', ') || 'none'}`);
     }
 
     const sourceApp = path.join(mountPoint, appBundle);
     console.log(`[AppUpdate] Source app: ${sourceApp}`);
+
+    const sourceBundleId = await readMacBundleIdentifier(sourceApp);
+    if (sourceBundleId !== EXPECTED_MAC_BUNDLE_IDENTIFIER) {
+      throw new Error(`Unexpected app bundle identifier: ${sourceBundleId || 'unknown'}`);
+    }
 
     // Determine target path: current running app location
     // process.resourcesPath is .app/Contents/Resources, go up 3 levels
@@ -283,7 +292,7 @@ async function installMacDmg(dmgPath: string): Promise<void> {
       targetApp = currentAppPath;
     } else {
       // Fallback to /Applications
-      targetApp = `/Applications/${appBundle}`;
+      targetApp = `/Applications/${EXPECTED_MAC_APP_BUNDLE}`;
     }
     console.log(`[AppUpdate] Target app: ${targetApp}`);
 
@@ -355,6 +364,14 @@ async function installMacDmg(dmgPath: string): Promise<void> {
     }
     throw error;
   }
+}
+
+async function readMacBundleIdentifier(appPath: string): Promise<string> {
+  const infoPlistPath = path.join(appPath, 'Contents', 'Info.plist');
+  return execAsync(
+    `/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' ${shellEscape(infoPlistPath)}`,
+    30_000,
+  );
 }
 
 async function installWindowsNsis(exePath: string): Promise<void> {

@@ -1,4 +1,4 @@
-import { getFallbackDownloadUrl,getManualUpdateCheckUrl, getUpdateCheckUrl } from './endpoints';
+import { getManualUpdateCheckUrl, getUpdateCheckUrl } from './endpoints';
 
 export const UPDATE_POLL_INTERVAL_MS = 12 * 60 * 60 * 1000;
 export const UPDATE_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
@@ -58,6 +58,20 @@ export interface AppUpdateInfo {
   url: string;
 }
 
+const WESIGHT_ASSET_NAME_PATTERN = /^wesight(?:[-_.\s]|$)/i;
+const UPDATE_METADATA_ASSET_PATTERN = /(?:latest-mac\.yml|\.blockmap$|shasums?256|sha256|checksum)/i;
+
+const hasDownloadUrl = (asset: GitHubReleaseAsset): asset is GitHubReleaseAsset & { browser_download_url: string } => (
+  typeof asset.browser_download_url === 'string' && asset.browser_download_url.trim().length > 0
+);
+
+const isWeSightInstallerAsset = (asset: GitHubReleaseAsset): boolean => {
+  const name = asset.name?.trim() || '';
+  return hasDownloadUrl(asset)
+    && WESIGHT_ASSET_NAME_PATTERN.test(name)
+    && !UPDATE_METADATA_ASSET_PATTERN.test(name);
+};
+
 const toVersionParts = (version: string): number[] => (
   version
     .split('.')
@@ -88,23 +102,24 @@ const isNewerVersion = (latestVersion: string, currentVersion: string): boolean 
 
 type UpdateValue = NonNullable<NonNullable<UpdateApiResponse['data']>['value']>;
 
-const getPlatformDownloadUrl = (value: UpdateValue | undefined): string => {
+const getPlatformDownloadUrl = (value: UpdateValue | undefined): string | null => {
   const { platform, arch } = window.electron;
 
   if (platform === 'darwin') {
     const download = arch === 'arm64' ? value?.macArm : value?.macIntel;
-    return download?.url?.trim() || getFallbackDownloadUrl();
+    return download?.url?.trim() || null;
   }
 
   if (platform === 'win32') {
-    return value?.windowsX64?.url?.trim() || getFallbackDownloadUrl();
+    return value?.windowsX64?.url?.trim() || null;
   }
 
-  return getFallbackDownloadUrl();
+  return null;
 };
 
-const getGitHubDownloadUrl = (release: GitHubReleaseResponse): string => {
-  const assets = Array.isArray(release.assets) ? release.assets : [];
+const getGitHubDownloadUrl = (release: GitHubReleaseResponse): string | null => {
+  const assets = (Array.isArray(release.assets) ? release.assets : [])
+    .filter(isWeSightInstallerAsset);
   const { platform, arch } = window.electron;
   const matches = (asset: GitHubReleaseAsset, patterns: RegExp[]) => {
     const name = asset.name || '';
@@ -124,7 +139,7 @@ const getGitHubDownloadUrl = (release: GitHubReleaseResponse): string => {
     asset = assets.find((item) => matches(item, [/appimage|\.deb|\.rpm|\.tar\.gz$/i]));
   }
 
-  return asset?.browser_download_url?.trim() || getFallbackDownloadUrl();
+  return asset?.browser_download_url?.trim() || null;
 };
 
 const parseGitHubReleaseUpdate = (
@@ -145,12 +160,17 @@ const parseGitHubReleaseUpdate = (
   const title = payload.name?.trim() || payload.tag_name?.trim() || latestVersion;
   const date = payload.published_at?.slice(0, 10) || '';
   const entry = { title, content: bodyLines };
+  const downloadUrl = getGitHubDownloadUrl(payload);
+  if (!downloadUrl) {
+    console.warn(`[AppUpdate] release ${latestVersion} has no valid WeSight installer for ${window.electron.platform}/${window.electron.arch}`);
+    return null;
+  }
 
   const result: AppUpdateInfo = {
     latestVersion,
     date,
     changeLog: { zh: entry, en: entry },
-    url: getGitHubDownloadUrl(payload),
+    url: downloadUrl,
   };
   console.log(`[AppUpdate] update available: ${currentVersion} -> ${latestVersion}, downloadUrl=${result.url}`);
   return result;
@@ -196,6 +216,11 @@ export const checkForAppUpdate = async (currentVersion: string, manual?: boolean
     console.log(`[AppUpdate] no update available, latestVersion=${latestVersion || 'N/A'}, currentVersion=${currentVersion}`);
     return null;
   }
+  const downloadUrl = getPlatformDownloadUrl(value);
+  if (!downloadUrl) {
+    console.warn(`[AppUpdate] update ${latestVersion} has no valid installer for ${window.electron.platform}/${window.electron.arch}`);
+    return null;
+  }
 
   const toEntry = (log?: ChangeLogLang): ChangeLogEntry => ({
     title: typeof log?.title === 'string' ? log.title : '',
@@ -209,7 +234,7 @@ export const checkForAppUpdate = async (currentVersion: string, manual?: boolean
       zh: toEntry(value?.changeLog?.ch),
       en: toEntry(value?.changeLog?.en),
     },
-    url: getPlatformDownloadUrl(value),
+    url: downloadUrl,
   };
   console.log(`[AppUpdate] update available: ${currentVersion} -> ${latestVersion}, downloadUrl=${result.url}`);
   return result;
