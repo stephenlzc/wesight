@@ -36,7 +36,7 @@ export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
 export type { CoworkAgentEngine, ExternalAgentConfigSource };
 export type { CoworkSessionKind };
-export type { ClaudeCodePermissionMode, DeepSeekTuiPermissionMode, OpenCodePermissionMode, QwenCodePermissionMode };
+export type { ClaudeCodePermissionMode, DeepSeekTuiPermissionMode, KimiCliPermissionMode, OpenCodePermissionMode, QwenCodePermissionMode };
 
 // Cowork message metadata
 export interface CoworkMessageMetadata {

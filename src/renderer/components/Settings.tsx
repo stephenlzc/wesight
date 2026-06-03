@@ -5,6 +5,7 @@ import {
   CoworkAgentEngine as CoworkAgentEngineValue,
   DeepSeekTuiPermissionMode as DeepSeekTuiPermissionModeValue,
   ExternalAgentConfigSource as ExternalAgentConfigSourceValue,
+  KimiCliPermissionMode as KimiCliPermissionModeValue,
   OpenCodePermissionMode as OpenCodePermissionModeValue,
   QwenCodePermissionMode as QwenCodePermissionModeValue,
 } from '@shared/cowork/constants';
@@ -47,6 +48,7 @@ import type {
   ExternalAgentProviderAppType,
   ExternalAgentProviderListResult,
   HermesEngineStatus,
+  KimiCliPermissionMode,
   OpenClawEngineStatus,
   OpenCodePermissionMode,
   QwenCodePermissionMode,
@@ -877,6 +879,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [deepseekTuiPermissionMode, setDeepSeekTuiPermissionMode] = useState<DeepSeekTuiPermissionMode>(
     coworkConfig.deepseekTuiPermissionMode ?? DeepSeekTuiPermissionModeValue.Auto,
   );
+  const [kimiCliConfigSource, setKimiCliConfigSource] = useState<ExternalAgentConfigSource>(
+    coworkConfig.kimiCliConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
+  );
+  const [kimiCliPermissionMode, setKimiCliPermissionMode] = useState<KimiCliPermissionMode>(
+    coworkConfig.kimiCliPermissionMode ?? KimiCliPermissionModeValue.Auto,
+  );
   const [agentConfigImportingAppType, setAgentConfigImportingAppType] = useState<ExternalAgentProviderAppType | null>(null);
   const [openclawGlobalSyncing, setOpenClawGlobalSyncing] = useState(false);
   const [opencodeGlobalSyncing, setOpenCodeGlobalSyncing] = useState(false);
@@ -905,6 +913,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     if (coworkAgentEngine === CoworkAgentEngineValue.OpenCode) return 'opencode';
     if (coworkAgentEngine === CoworkAgentEngineValue.QwenCode) return 'qwen';
     if (coworkAgentEngine === CoworkAgentEngineValue.DeepSeekTui) return 'deepseek_tui';
+    if (coworkAgentEngine === CoworkAgentEngineValue.KimiCli) return 'kimi';
     return null;
   }, [coworkAgentEngine]);
 
@@ -921,6 +930,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setQwenCodePermissionMode(coworkConfig.qwenCodePermissionMode ?? QwenCodePermissionModeValue.Auto);
     setDeepSeekTuiConfigSource(coworkConfig.deepseekTuiConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
     setDeepSeekTuiPermissionMode(coworkConfig.deepseekTuiPermissionMode ?? DeepSeekTuiPermissionModeValue.Auto);
+    setKimiCliConfigSource(coworkConfig.kimiCliConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
+    setKimiCliPermissionMode(coworkConfig.kimiCliPermissionMode ?? KimiCliPermissionModeValue.Auto);
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
   }, [
@@ -1640,6 +1651,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     || qwenCodePermissionMode !== coworkConfig.qwenCodePermissionMode
     || deepseekTuiConfigSource !== coworkConfig.deepseekTuiConfigSource
     || deepseekTuiPermissionMode !== coworkConfig.deepseekTuiPermissionMode
+    || kimiCliConfigSource !== coworkConfig.kimiCliConfigSource
+    || kimiCliPermissionMode !== coworkConfig.kimiCliPermissionMode
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled;
   const hasCoworkAgentEngineApplyChanges = coworkAgentEngine !== coworkConfig.agentEngine
@@ -2066,6 +2079,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           qwenCodePermissionMode,
           deepseekTuiConfigSource,
           deepseekTuiPermissionMode,
+          kimiCliConfigSource,
+          kimiCliPermissionMode,
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
         });
@@ -3270,12 +3285,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     if (selectedExternalAgentAppType === 'opencode') return opencodeConfigSource;
     if (selectedExternalAgentAppType === 'qwen') return qwenCodeConfigSource;
     if (selectedExternalAgentAppType === 'deepseek_tui') return deepseekTuiConfigSource;
+    if (selectedExternalAgentAppType === 'kimi') return kimiCliConfigSource;
     return null;
   }, [
     claudeCodeConfigSource,
     codexConfigSource,
     deepseekTuiConfigSource,
     hermesConfigSource,
+    kimiCliConfigSource,
     opencodeConfigSource,
     qwenCodeConfigSource,
     selectedExternalAgentAppType,
@@ -3305,6 +3322,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     }
     if (selectedExternalAgentAppType === 'deepseek_tui') {
       setDeepSeekTuiConfigSource(source);
+      return;
+    }
+    if (selectedExternalAgentAppType === 'kimi') {
+      setKimiCliConfigSource(source);
     }
   };
 
