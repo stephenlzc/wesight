@@ -38,6 +38,7 @@ import { setAvailableModels } from '../store/slices/modelSlice';
 import type {
   ClaudeCodePermissionMode,
   CoworkAgentEngine,
+  CoworkConfig,
   CoworkMemoryStats,
   CoworkUserMemoryEntry,
   DeepSeekTuiPermissionMode,
@@ -3435,6 +3436,40 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     }
   };
 
+  // One-click migration: flip every *ConfigSource we know about to
+  // LocalCli so that the user's pre-configured local CLI model is
+  // picked up automatically. Respects the user's prior choice
+  // (only fires for engines that are still on the default value).
+  const [localCliMigrationPending, setLocalCliMigrationPending] = useState(false);
+  const handleMigrateAllEnginesToLocalCli = async () => {
+    setError(null);
+    setLocalCliMigrationPending(true);
+    try {
+      const updates: Partial<CoworkConfig> = {
+        claudeCodeConfigSource: ExternalAgentConfigSourceValue.LocalCli,
+        codexConfigSource: ExternalAgentConfigSourceValue.LocalCli,
+        hermesConfigSource: ExternalAgentConfigSourceValue.LocalCli,
+        opencodeConfigSource: ExternalAgentConfigSourceValue.LocalCli,
+        qwenCodeConfigSource: ExternalAgentConfigSourceValue.LocalCli,
+        deepseekTuiConfigSource: ExternalAgentConfigSourceValue.LocalCli,
+        kimiCliConfigSource: ExternalAgentConfigSourceValue.LocalCli,
+      };
+      const updated = await coworkService.updateConfig(updates);
+      if (!updated) {
+        throw new Error(i18nService.t('coworkConfigSaveFailed'));
+      }
+      setClaudeCodeConfigSource(ExternalAgentConfigSourceValue.LocalCli);
+      setCodexConfigSource(ExternalAgentConfigSourceValue.LocalCli);
+      setHermesConfigSource(ExternalAgentConfigSourceValue.LocalCli);
+      setOpenCodeConfigSource(ExternalAgentConfigSourceValue.LocalCli);
+      setQwenCodeConfigSource(ExternalAgentConfigSourceValue.LocalCli);
+      setDeepSeekTuiConfigSource(ExternalAgentConfigSourceValue.LocalCli);
+      setKimiCliConfigSource(ExternalAgentConfigSourceValue.LocalCli);
+    } finally {
+      setLocalCliMigrationPending(false);
+    }
+  };
+
   const handleSyncOpenClawGlobalConfig = async () => {
     setError(null);
     setOpenClawGlobalSyncing(true);
@@ -3934,6 +3969,20 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised disabled:opacity-50"
           >
             {i18nService.t(isImporting ? 'coworkAgentConfigImportModelImporting' : 'coworkAgentConfigImportModel')}
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-2 rounded-xl border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs leading-5 text-secondary">
+            {i18nService.t('coworkAgentUseLocalCliForAllHint')}
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleMigrateAllEnginesToLocalCli()}
+            disabled={localCliMigrationPending}
+            className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised disabled:opacity-50"
+          >
+            {i18nService.t(localCliMigrationPending ? 'coworkAgentUseLocalCliForAllPending' : 'coworkAgentUseLocalCliForAll')}
           </button>
         </div>
 
