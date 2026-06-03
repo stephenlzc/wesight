@@ -5587,6 +5587,12 @@ if (!gotTheLock) {
       }
       return { success: true };
     } catch (error) {
+      // Log full error to main-process stderr so it shows up in
+      // DevTools console next time the user tries to switch.
+      console.error('[CoworkConfig] update failed:', error);
+      if (error instanceof Error && error.stack) {
+        console.error('[CoworkConfig] stack:', error.stack);
+      }
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to set config',
