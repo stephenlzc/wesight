@@ -84,6 +84,7 @@ import {
   DeepSeekTuiRuntimeAdapter,
   ExternalCliRuntimeAdapter,
   HermesRuntimeAdapter,
+  KimiCliRuntimeAdapter,
   OpenClawRuntimeAdapter,
 } from './libs/agentEngine';
 import { cancelActiveDownload,downloadUpdate, installUpdate } from './libs/appUpdateInstaller';
@@ -735,6 +736,7 @@ let openCodeRuntimeAdapter: ExternalCliRuntimeAdapter | null = null;
 let grokBuildRuntimeAdapter: ExternalCliRuntimeAdapter | null = null;
 let qwenCodeRuntimeAdapter: ExternalCliRuntimeAdapter | null = null;
 let deepSeekTuiRuntimeManager: DeepSeekTuiRuntimeManager | null = null;
+let kimiCliRuntimeAdapter: KimiCliRuntimeAdapter | null = null;
 let deepSeekTuiRuntimeAdapter: DeepSeekTuiRuntimeAdapter | null = null;
 let coworkEngineRouter: CoworkEngineRouter | null = null;
 let skillManager: SkillManager | null = null;
@@ -2097,6 +2099,9 @@ const getCoworkEngineRouter = () => {
         ensureRunning: ensureHermesRunningForCowork,
       });
     }
+    if (!kimiCliRuntimeAdapter) {
+      kimiCliRuntimeAdapter = new KimiCliRuntimeAdapter();
+    }
     coworkEngineRouter = new CoworkEngineRouter({
       getCurrentEngine: resolveCoworkAgentEngine,
       openclawRuntime: openClawRuntimeAdapter,
@@ -2109,6 +2114,7 @@ const getCoworkEngineRouter = () => {
       grokBuildRuntime: grokBuildRuntimeAdapter,
       qwenCodeRuntime: qwenCodeRuntimeAdapter,
       deepSeekTuiRuntime: deepSeekTuiRuntimeAdapter,
+      kimiCliRuntime: kimiCliRuntimeAdapter,
       telemetryTracker: getRuntimeTelemetryTracker(),
     });
   }

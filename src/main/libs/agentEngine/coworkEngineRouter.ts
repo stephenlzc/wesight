@@ -28,6 +28,7 @@ type RouterDeps = {
   grokBuildRuntime: CoworkRuntime;
   qwenCodeRuntime: CoworkRuntime;
   deepSeekTuiRuntime: CoworkRuntime;
+  kimiCliRuntime: CoworkRuntime;
   telemetryTracker?: RuntimeTelemetryTracker;
 };
 
@@ -54,6 +55,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
       [CoworkAgentEngineValue.GrokBuild]: deps.grokBuildRuntime,
       [CoworkAgentEngineValue.QwenCode]: deps.qwenCodeRuntime,
       [CoworkAgentEngineValue.DeepSeekTui]: deps.deepSeekTuiRuntime,
+      [CoworkAgentEngineValue.KimiCli]: deps.kimiCliRuntime,
     };
     this.currentEngine = this.safeResolveEngine();
     this.telemetryTracker = deps.telemetryTracker;
@@ -68,6 +70,7 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     this.bindRuntimeEvents(CoworkAgentEngineValue.GrokBuild, deps.grokBuildRuntime);
     this.bindRuntimeEvents(CoworkAgentEngineValue.QwenCode, deps.qwenCodeRuntime);
     this.bindRuntimeEvents(CoworkAgentEngineValue.DeepSeekTui, deps.deepSeekTuiRuntime);
+    this.bindRuntimeEvents(CoworkAgentEngineValue.KimiCli, deps.kimiCliRuntime);
   }
 
   override on<U extends keyof CoworkRuntimeEvents>(

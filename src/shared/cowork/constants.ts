@@ -15,6 +15,7 @@ export const CoworkAgentEngine = {
   GrokBuild: 'grok_build',
   QwenCode: 'qwen_code',
   DeepSeekTui: 'deepseek_tui',
+  KimiCli: 'kimi_cli',
 } as const;
 
 export type CoworkAgentEngine = typeof CoworkAgentEngine[keyof typeof CoworkAgentEngine];
@@ -32,6 +33,7 @@ export const CoworkAgentEngineValues = [
   CoworkAgentEngine.GrokBuild,
   CoworkAgentEngine.QwenCode,
   CoworkAgentEngine.DeepSeekTui,
+  CoworkAgentEngine.KimiCli,
 ] as const;
 
 export const CliCoworkAgentEngines = [
@@ -43,6 +45,7 @@ export const CliCoworkAgentEngines = [
   CoworkAgentEngine.GrokBuild,
   CoworkAgentEngine.QwenCode,
   CoworkAgentEngine.DeepSeekTui,
+  CoworkAgentEngine.KimiCli,
 ] as const;
 
 export type CliCoworkAgentEngine = typeof CliCoworkAgentEngines[number];
@@ -111,6 +114,18 @@ export const DeepSeekTuiPermissionModeValues = [
   DeepSeekTuiPermissionMode.Conservative,
 ] as const;
 
+export const KimiCliPermissionMode = {
+  Auto: 'auto',
+  Conservative: 'conservative',
+} as const;
+
+export type KimiCliPermissionMode = typeof KimiCliPermissionMode[keyof typeof KimiCliPermissionMode];
+
+export const KimiCliPermissionModeValues = [
+  KimiCliPermissionMode.Auto,
+  KimiCliPermissionMode.Conservative,
+] as const;
+
 export function isCoworkAgentEngine(value: unknown): value is CoworkAgentEngine {
   return typeof value === 'string'
     && CoworkAgentEngineValues.includes(value as CoworkAgentEngine);
@@ -139,6 +154,11 @@ export function isQwenCodePermissionMode(value: unknown): value is QwenCodePermi
 export function isDeepSeekTuiPermissionMode(value: unknown): value is DeepSeekTuiPermissionMode {
   return typeof value === 'string'
     && DeepSeekTuiPermissionModeValues.includes(value as DeepSeekTuiPermissionMode);
+}
+
+export function isKimiCliPermissionMode(value: unknown): value is KimiCliPermissionMode {
+  return typeof value === 'string'
+    && KimiCliPermissionModeValues.includes(value as KimiCliPermissionMode);
 }
 
 export function isCliCoworkAgentEngine(value: unknown): value is CliCoworkAgentEngine {
