@@ -118,6 +118,15 @@ const engineAvatarManifest: Record<CoworkAgentEngine, CoworkStudioAvatar> = {
     faceColor: 0xbfdbfe,
     prop: 'tui',
   },
+  [CoworkAgentEngine.KimiCli]: {
+    id: 'kimi_cli',
+    nameTag: 'Kimi',
+    primaryColor: 0x7c3aed,
+    secondaryColor: 0x4c1d95,
+    accentColor: 0xc4b5fd,
+    faceColor: 0xede9fe,
+    prop: 'terminal',
+  },
   [CoworkAgentEngine.YdCowork]: {
     id: 'yd_cowork',
     nameTag: 'WeSight',
@@ -151,6 +160,11 @@ const getConfigSource = (config: CoworkConfig): ExternalAgentConfigSource | null
   if (config.agentEngine === CoworkAgentEngine.GrokBuild) return ExternalAgentConfigSource.LocalCli;
   if (config.agentEngine === CoworkAgentEngine.QwenCode) return config.qwenCodeConfigSource;
   if (config.agentEngine === CoworkAgentEngine.DeepSeekTui) return config.deepseekTuiConfigSource;
+  if (config.agentEngine === CoworkAgentEngine.KimiCli) {
+    // TODO(issue #34): introduce config.kimiCliConfigSource once Kimi CLI
+    // supports a WeSight-model / local-~/.kimi/config.toml source toggle.
+    return null;
+  }
   if (config.agentEngine === CoworkAgentEngine.OpenClaw) return config.openclawConfigSource;
   return null;
 };
