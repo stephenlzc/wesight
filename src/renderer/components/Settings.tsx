@@ -3972,20 +3972,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           </button>
         </div>
 
-        <div className="flex flex-col gap-2 rounded-xl border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-xs leading-5 text-secondary">
-            {i18nService.t('coworkAgentUseLocalCliForAllHint')}
-          </div>
-          <button
-            type="button"
-            onClick={() => void handleMigrateAllEnginesToLocalCli()}
-            disabled={localCliMigrationPending}
-            className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised disabled:opacity-50"
-          >
-            {i18nService.t(localCliMigrationPending ? 'coworkAgentUseLocalCliForAllPending' : 'coworkAgentUseLocalCliForAll')}
-          </button>
-        </div>
-
         {configPaths.length > 0 && (
           <div className="space-y-1 text-[11px] text-secondary">
             <div>{i18nService.t('coworkAgentConfigLocalPath')}</div>
@@ -4467,6 +4453,19 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             {expandedCoworkAgentEngine !== coworkAgentEngine && renderCoworkAgentApplyProgress()}
             <div className="space-y-3">
               {COWORK_AGENT_ENGINE_OPTIONS.map(renderAgentEngineOption)}
+            </div>
+            <div className="flex flex-col gap-2 rounded-xl border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs leading-5 text-secondary">
+                {i18nService.t('coworkAgentUseLocalCliForAllHint')}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleMigrateAllEnginesToLocalCli()}
+                disabled={localCliMigrationPending}
+                className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs text-foreground hover:bg-surface-raised disabled:opacity-50"
+              >
+                {i18nService.t(localCliMigrationPending ? 'coworkAgentUseLocalCliForAllPending' : 'coworkAgentUseLocalCliForAll')}
+              </button>
             </div>
           </div>
         );
