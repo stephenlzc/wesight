@@ -126,7 +126,7 @@ type CoworkConfigUpdate = Partial<Pick<
   | 'memoryUserMemoriesMaxItems'
 >>;
 
-type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui';
+type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui' | 'kimi';
 
 interface CliAppConfigSnapshot {
   appType: CliAppType;

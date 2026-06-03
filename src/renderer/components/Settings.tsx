@@ -892,6 +892,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     grok: '',
     qwen: '',
     deepseek_tui: '',
+    kimi: '',
   });
   const [agentProviderLists, setAgentProviderLists] = useState<Partial<Record<ExternalAgentProviderAppType, ExternalAgentProviderListResult>>>({});
   const [agentProviderLoadingAppType, setAgentProviderLoadingAppType] = useState<ExternalAgentProviderAppType | null>(null);

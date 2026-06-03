@@ -263,7 +263,7 @@ export interface CoworkConfigResult {
   error?: string;
 }
 
-export type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui';
+export type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui' | 'kimi';
 
 export interface CliAppConfigSnapshot {
   appType: CliAppType;

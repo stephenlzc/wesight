@@ -106,6 +106,14 @@ const AGENT_SETUP_TARGETS: AgentSetupTarget[] = [
     primary: false,
     recommended: false,
   },
+  {
+    engine: CoworkAgentEngine.KimiCli,
+    appType: 'kimi',
+    labelKey: 'coworkAgentEngineKimiCli',
+    hintKey: 'coworkAgentEngineKimiCliHint',
+    primary: false,
+    recommended: false,
+  },
 ];
 
 const RECOMMENDED_APP_TYPES = AGENT_SETUP_TARGETS
