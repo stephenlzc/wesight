@@ -142,13 +142,10 @@ const INSTALL_TARGETS: Record<CliAppType, InstallTarget> = {
     appType: 'kimi',
     displayName: 'Kimi CLI',
     command: 'kimi',
-    // TODO(issue #34): wire `pip install kimi-cli` (or `uv tool install
-    // kimi-cli`) once the install runner supports a pip-style method. For
-    // now users install Kimi CLI manually via `pip install kimi-cli`; the
-    // "Install CLI" button will surface a "not yet implemented" error.
     methods: [
       {
         id: 'pip',
+        packageName: 'kimi-cli',
       },
     ],
   },
@@ -172,15 +169,52 @@ const truncateProgressLine = (value: string): string => {
 const buildInstallScript = (target: InstallTarget): string => {
   const method = target.methods[0];
   if (method.id === 'pip') {
-    // TODO(issue #34): implement `pip install kimi-cli` (or `uv tool install
-    // kimi-cli`) with proper pip/uv bootstrap. Until then, surface a clear
-    // "not implemented" so the Install CLI button doesn't silently misrun
-    // an npm command.
+    // Kimi CLI is a PyPI package (`kimi-cli`). We bootstrap pip3 from
+    // python3 (macOS ships python3 with ensurepip) and install into the
+    // user site so the binary lands at `~/.local/bin/kimi`, which the
+    // PATH line below already exports. We prefer `uv tool install` when
+    // uv is available (the modern, fast path) and fall back to
+    // `python3 -m pip install --user` for systems without uv.
+    const packageName = method.packageName ?? 'kimi-cli';
     return [
       'set -e',
-      `echo "Auto-install for ${target.displayName} is not implemented yet." >&2`,
-      `echo "Install it manually with: pip install kimi-cli  (or: uv tool install kimi-cli)" >&2`,
-      'exit 64',
+      'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"',
+      'if [ -x /opt/homebrew/bin/brew ]; then eval "$(/opt/homebrew/bin/brew shellenv)"; fi',
+      'if [ -x /usr/local/bin/brew ]; then eval "$(/usr/local/bin/brew shellenv)"; fi',
+      `echo "__WESIGHT_INSTALL_METHOD__=${method.id}"`,
+      // Ensure python3 is available — macOS ships it, but explicit guard
+      // catches stripped-down environments.
+      'if ! command -v python3 >/dev/null 2>&1; then',
+      `  echo "python3 not found; please install Python 3.10+ to use ${target.displayName}." >&2`,
+      '  exit 65',
+      'fi',
+      // Prefer uv tool install when uv is already present (much faster,
+      // uses an isolated venv managed by uv). If uv is missing, fall
+      // through to the pip path which bootstraps via ensurepip.
+      'if command -v uv >/dev/null 2>&1; then',
+      `  echo "Installing ${target.displayName} via uv tool install..."`,
+      `  uv tool install ${quoteForShell(packageName)}`,
+      `  echo "__WESIGHT_INSTALL_METHOD__=uv-tool"`,
+      'else',
+      `  echo "Installing ${target.displayName} via python3 -m pip install --user..."`,
+      '  python3 -m pip install --user --upgrade pip 2>/dev/null || true',
+      `  python3 -m pip install --user ${quoteForShell(packageName)}`,
+      `  echo "__WESIGHT_INSTALL_METHOD__=pip"`,
+      'fi',
+      // Both paths place the binary in ~/.local/bin/ on macOS / Linux.
+      // Re-export PATH in case the user shell hasn't picked it up.
+      'export PATH="$HOME/.local/bin:$PATH"',
+      `if command -v ${target.command} >/dev/null 2>&1; then`,
+      `  BINARY_PATH="$(command -v ${target.command})"`,
+      `elif [ -x "$HOME/.local/bin/${target.command}" ]; then`,
+      `  BINARY_PATH="$HOME/.local/bin/${target.command}"`,
+      'else',
+      `  echo "${target.command} command was not found after installation." >&2`,
+      '  exit 127',
+      'fi',
+      'echo "__WESIGHT_BINARY_PATH__=${BINARY_PATH}"',
+      'VERSION_OUTPUT=$({ "$BINARY_PATH" --version 2>&1 || true; } | head -n 1)',
+      'echo "__WESIGHT_VERSION__=${VERSION_OUTPUT}"',
     ].join('\n');
   }
   if (method.id === 'official-installer') {
