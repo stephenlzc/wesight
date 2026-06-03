@@ -2500,6 +2500,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           return i18nService.t('coworkAgentEngineQwenCode');
         case CoworkAgentEngine.DeepSeekTui:
           return i18nService.t('coworkAgentEngineDeepSeekTui');
+        case CoworkAgentEngine.KimiCli:
+          return i18nService.t('coworkAgentEngineKimiCli');
         case CoworkAgentEngine.OpenClaw:
           return i18nService.t('coworkAgentEngineOpenClaw');
         case CoworkAgentEngine.Hermes:
@@ -2524,6 +2526,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         return i18nService.t('coworkAgentEngineQwenCode');
       case CoworkAgentEngine.DeepSeekTui:
         return i18nService.t('coworkAgentEngineDeepSeekTui');
+      case CoworkAgentEngine.KimiCli:
+        return i18nService.t('coworkAgentEngineKimiCli');
       case CoworkAgentEngine.OpenClaw:
         return i18nService.t('coworkAgentEngineOpenClaw');
       case CoworkAgentEngine.Hermes:

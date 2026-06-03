@@ -149,6 +149,7 @@ const getEngineLabel = (engine: string): string => {
   if (engine === CoworkAgentEngine.GrokBuild) return i18nService.t('coworkAgentEngineGrokBuild');
   if (engine === CoworkAgentEngine.QwenCode) return i18nService.t('coworkAgentEngineQwenCode');
   if (engine === CoworkAgentEngine.DeepSeekTui) return i18nService.t('coworkAgentEngineDeepSeekTui');
+  if (engine === CoworkAgentEngine.KimiCli) return i18nService.t('coworkAgentEngineKimiCli');
   return i18nService.t('coworkAgentEngineClaudeLegacy');
 };
 

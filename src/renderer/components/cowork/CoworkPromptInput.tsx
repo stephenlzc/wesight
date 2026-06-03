@@ -938,7 +938,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                       ? 'coworkSlashCommandsQwenCode'
                       : agentEngine === CoworkAgentEngine.DeepSeekTui
                         ? 'coworkSlashCommandsDeepSeekTui'
-                        : 'coworkSlashCommandsWesight'
+                        : agentEngine === CoworkAgentEngine.KimiCli
+                          ? 'coworkSlashCommandsKimiCli'
+                          : 'coworkSlashCommandsWesight'
               )}
             </div>
             <div className="max-h-72 overflow-y-auto p-1">

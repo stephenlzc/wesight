@@ -77,6 +77,11 @@ const ENGINE_OPTIONS: Array<{
     labelKey: 'coworkAgentEngineDeepSeekTui',
     hintKey: 'coworkAgentEngineDeepSeekTuiHint',
   },
+  {
+    engine: CoworkAgentEngine.KimiCli,
+    labelKey: 'coworkAgentEngineKimiCli',
+    hintKey: 'coworkAgentEngineKimiCliHint',
+  },
 ];
 
 const isCliEngine = (engine: CoworkAgentEngineType): boolean => {
@@ -85,7 +90,8 @@ const isCliEngine = (engine: CoworkAgentEngineType): boolean => {
     || engine === CoworkAgentEngine.OpenCode
     || engine === CoworkAgentEngine.GrokBuild
     || engine === CoworkAgentEngine.QwenCode
-    || engine === CoworkAgentEngine.DeepSeekTui;
+    || engine === CoworkAgentEngine.DeepSeekTui
+    || engine === CoworkAgentEngine.KimiCli;
 };
 
 const CoworkEngineSelector: React.FC<CoworkEngineSelectorProps> = ({

@@ -115,6 +115,7 @@ const getEngineLabelKey = (engine: CoworkAgentEngine): string => {
   if (engine === CoworkAgentEngine.GrokBuild) return 'coworkAgentEngineGrokBuild';
   if (engine === CoworkAgentEngine.QwenCode) return 'coworkAgentEngineQwenCode';
   if (engine === CoworkAgentEngine.DeepSeekTui) return 'coworkAgentEngineDeepSeekTui';
+  if (engine === CoworkAgentEngine.KimiCli) return 'coworkAgentEngineKimiCli';
   if (engine === CoworkAgentEngine.CodexApp) return 'coworkAgentEngineCodexApp';
   return 'coworkAgentEngineClaudeLegacy';
 };
@@ -598,6 +599,8 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         return i18nService.t('coworkAgentEngineQwenCode');
       case CoworkAgentEngine.DeepSeekTui:
         return i18nService.t('coworkAgentEngineDeepSeekTui');
+      case CoworkAgentEngine.KimiCli:
+        return i18nService.t('coworkAgentEngineKimiCli');
       case CoworkAgentEngine.OpenClaw:
         return i18nService.t('coworkAgentEngineOpenClaw');
       case CoworkAgentEngine.Hermes:

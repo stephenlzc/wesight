@@ -14,6 +14,7 @@ const ENGINE_OPTIONS: CoworkAgentEngineType[] = [
   CoworkAgentEngine.GrokBuild,
   CoworkAgentEngine.QwenCode,
   CoworkAgentEngine.DeepSeekTui,
+  CoworkAgentEngine.KimiCli,
 ];
 
 export const getAgentEngineLabel = (engine: CoworkAgentEngineType): string => {
@@ -36,6 +37,8 @@ export const getAgentEngineLabel = (engine: CoworkAgentEngineType): string => {
       return i18nService.t('coworkAgentEngineQwenCode');
     case CoworkAgentEngine.DeepSeekTui:
       return i18nService.t('coworkAgentEngineDeepSeekTui');
+    case CoworkAgentEngine.KimiCli:
+      return i18nService.t('coworkAgentEngineKimiCli');
     case CoworkAgentEngine.YdCowork:
     default:
       return i18nService.t('coworkAgentEngineClaudeLegacy');
