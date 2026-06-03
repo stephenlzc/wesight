@@ -48,6 +48,7 @@ import {
   settingsConfigFromQwenCodeRecord,
   summarizeQwenCodeSettingsConfig,
 } from './qwenCodeConfig';
+import { readKimiCliLocalConfig } from './kimiCliConfigReader';
 
 export type ExternalAgentProviderAppType = CliAppType;
 
@@ -119,6 +120,7 @@ const OPENCLAW_APP_TYPE: ExternalAgentProviderAppType = 'openclaw';
 const OPENCODE_APP_TYPE: ExternalAgentProviderAppType = 'opencode';
 const GROK_APP_TYPE: ExternalAgentProviderAppType = 'grok';
 const QWEN_APP_TYPE: ExternalAgentProviderAppType = 'qwen';
+const KIMI_APP_TYPE: ExternalAgentProviderAppType = 'kimi';
 const DEEPSEEK_TUI_APP_TYPE: ExternalAgentProviderAppType = 'deepseek_tui';
 const INTERNAL_META_KEY = '__wesightProviderMeta';
 
@@ -512,6 +514,7 @@ export const appTypeFromEngine = (engine: string): ExternalAgentProviderAppType 
   if (engine === 'grok_build') return GROK_APP_TYPE;
   if (engine === 'qwen_code') return QWEN_APP_TYPE;
   if (engine === 'deepseek_tui') return DEEPSEEK_TUI_APP_TYPE;
+  if (engine === 'kimi_cli') return KIMI_APP_TYPE;
   return null;
 };
 
@@ -921,6 +924,10 @@ export class ExternalAgentProviderStore {
       this.syncDeepSeekTuiLiveProviders();
       return;
     }
+    if (appType === KIMI_APP_TYPE) {
+      this.syncKimiLiveProviders();
+      return;
+    }
     if (appType === GROK_APP_TYPE) {
       this.importLiveProviderIfEmpty(appType);
       return;
@@ -1122,6 +1129,82 @@ export class ExternalAgentProviderStore {
       this.db
         .prepare('UPDATE external_agent_providers SET is_current = 1 WHERE app_type = ? AND id = ?')
         .run(QWEN_APP_TYPE, records[0].id);
+    }
+  }
+
+  private syncKimiLiveProviders(): void {
+    const local = readKimiCliLocalConfig();
+    if (!local.exists) {
+      this.importLiveProviderIfEmpty(KIMI_APP_TYPE);
+      return;
+    }
+    // Build one provider per `models.<name>` entry. If no `[models]`
+    // table is present, fall back to a single provider seeded from
+    // `default_model` (or the engine's hard-coded default).
+    type KimiRecord = { id: string; name: string; model: string; isCurrent: boolean; settingsConfig: Record<string, unknown> };
+    const records: KimiRecord[] = local.models.length > 0
+      ? local.models.map((m, idx) => {
+          const id = `kimi-${m.name.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}`;
+          const displayName = m.displayName ?? m.name;
+          const modelId = m.model ?? m.name;
+          return {
+            id,
+            name: displayName,
+            model: modelId,
+            isCurrent: m.name === local.defaultModel,
+            settingsConfig: {
+              type: 'kimi',
+              provider: m.provider ?? undefined,
+              model: modelId,
+            } as Record<string, unknown>,
+          };
+        })
+      : (() => {
+          const fallbackId = `kimi-${(local.defaultModel ?? 'kimi-k2.5').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}`;
+          return [{
+            id: fallbackId,
+            name: local.defaultModel ?? 'kimi-k2.5',
+            model: local.defaultModel ?? 'kimi-k2.5',
+            isCurrent: true,
+            settingsConfig: { type: 'kimi', model: local.defaultModel ?? 'kimi-k2.5' } as Record<string, unknown>,
+          }];
+        })();
+
+    this.db
+      .prepare('DELETE FROM external_agent_providers WHERE app_type = ? AND category = ?')
+      .run(KIMI_APP_TYPE, 'local');
+    const now = Date.now();
+    for (const record of records) {
+      this.db
+        .prepare(
+          `
+          INSERT INTO external_agent_providers (
+            id, app_type, name, settings_config, category, is_current, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id, app_type) DO UPDATE SET
+            name = excluded.name,
+            settings_config = excluded.settings_config,
+            category = excluded.category,
+            is_current = excluded.is_current,
+            updated_at = excluded.updated_at
+        `,
+        )
+        .run(
+          record.id,
+          KIMI_APP_TYPE,
+          record.name,
+          JSON.stringify(record.settingsConfig),
+          'local',
+          record.isCurrent ? 1 : 0,
+          now,
+          now,
+        );
+    }
+    if (!records.some((record) => record.isCurrent) && records[0]) {
+      this.db
+        .prepare('UPDATE external_agent_providers SET is_current = 1 WHERE app_type = ? AND id = ?')
+        .run(KIMI_APP_TYPE, records[0].id);
     }
   }
 

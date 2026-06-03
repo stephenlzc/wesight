@@ -4,6 +4,7 @@ import type {
   CoworkSessionKind,
   DeepSeekTuiPermissionMode,
   ExternalAgentConfigSource,
+  KimiCliPermissionMode,
   OpenCodePermissionMode,
   QwenCodePermissionMode,
 } from '@shared/cowork/constants';
@@ -96,6 +97,8 @@ interface CoworkConfig {
   qwenCodePermissionMode: QwenCodePermissionMode;
   deepseekTuiConfigSource: ExternalAgentConfigSource;
   deepseekTuiPermissionMode: DeepSeekTuiPermissionMode;
+  kimiCliConfigSource: ExternalAgentConfigSource;
+  kimiCliPermissionMode: KimiCliPermissionMode;
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;

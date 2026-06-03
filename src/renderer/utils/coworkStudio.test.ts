@@ -53,6 +53,8 @@ const makeConfig = (agentEngine: CoworkAgentEngine): CoworkConfig => ({
   qwenCodePermissionMode: 'auto',
   deepseekTuiConfigSource: ExternalAgentConfigSource.WesightModel,
   deepseekTuiPermissionMode: 'auto',
+  kimiCliConfigSource: ExternalAgentConfigSource.WesightModel,
+  kimiCliPermissionMode: 'auto',
   memoryEnabled: true,
   memoryImplicitUpdateEnabled: true,
   memoryLlmJudgeEnabled: false,

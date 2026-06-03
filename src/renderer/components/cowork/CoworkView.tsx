@@ -103,6 +103,7 @@ const getCliAppTypeForEngine = (engine: CoworkAgentEngine): ExternalAgentProvide
   if (engine === CoworkAgentEngine.GrokBuild) return 'grok';
   if (engine === CoworkAgentEngine.QwenCode) return 'qwen';
   if (engine === CoworkAgentEngine.DeepSeekTui) return 'deepseek_tui';
+  if (engine === CoworkAgentEngine.KimiCli) return 'kimi';
   return null;
 };
 
@@ -781,6 +782,12 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     if (
       selectedRuntimeEngine === CoworkAgentEngine.DeepSeekTui
       && config.deepseekTuiConfigSource === ExternalAgentConfigSource.LocalCli
+    ) {
+      return i18nService.t('coworkAgentConfigSourceLocalCli');
+    }
+    if (
+      selectedRuntimeEngine === CoworkAgentEngine.KimiCli
+      && config.kimiCliConfigSource === ExternalAgentConfigSource.LocalCli
     ) {
       return i18nService.t('coworkAgentConfigSourceLocalCli');
     }

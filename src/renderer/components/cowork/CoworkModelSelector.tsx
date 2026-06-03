@@ -72,6 +72,12 @@ const resolveLocalCliAppType = (config: RootState['cowork']['config']): External
   ) {
     return 'deepseek_tui';
   }
+  if (
+    config.agentEngine === CoworkAgentEngine.KimiCli
+    && config.kimiCliConfigSource === ExternalAgentConfigSource.LocalCli
+  ) {
+    return 'kimi';
+  }
   return null;
 };
 

@@ -25,8 +25,11 @@ import {
   isCoworkSessionKind,
   isDeepSeekTuiPermissionMode,
   isExternalAgentConfigSource,
+  isKimiCliPermissionMode,
   isOpenCodePermissionMode,
   isQwenCodePermissionMode,
+  KimiCliPermissionMode,
+  type KimiCliPermissionMode as KimiCliPermissionModeType,
   OpenCodePermissionMode,
   type OpenCodePermissionMode as OpenCodePermissionModeType,
   QwenCodePermissionMode,
@@ -64,12 +67,20 @@ const DEFAULT_MEMORY_LLM_JUDGE_ENABLED = false;
 const DEFAULT_MEMORY_GUARD_LEVEL: CoworkMemoryGuardLevel = 'strict';
 const DEFAULT_MEMORY_USER_MEMORIES_MAX_ITEMS = 12;
 const DEFAULT_EXTERNAL_AGENT_CONFIG_SOURCE: ExternalAgentConfigSourceType = ExternalAgentConfigSource.WesightModel;
+// Used when a *ConfigSource row is missing entirely from SQLite
+// (i.e. fresh install, or an engine the user has never touched in
+// Settings). Distinct from the stored-value-fallback above so we can
+// respect existing user choices while making the no-config default
+// "use the local CLI you've already configured" — see issue #34.
+const DEFAULT_EXTERNAL_AGENT_CONFIG_SOURCE_FOR_NEW_INSTALL: ExternalAgentConfigSourceType = ExternalAgentConfigSource.LocalCli;
 const OPENCLAW_GLOBAL_CONFIG_PATH = path.join(os.homedir(), '.openclaw', 'openclaw.json');
 const HERMES_GLOBAL_CONFIG_PATH = path.join(os.homedir(), '.hermes', 'config.yaml');
 const DEFAULT_CLAUDE_CODE_PERMISSION_MODE: ClaudeCodePermissionModeType = ClaudeCodePermissionMode.BypassPermissions;
 const DEFAULT_OPENCODE_PERMISSION_MODE: OpenCodePermissionModeType = OpenCodePermissionMode.Auto;
 const DEFAULT_QWEN_CODE_PERMISSION_MODE: QwenCodePermissionModeType = QwenCodePermissionMode.Auto;
 const DEFAULT_DEEPSEEK_TUI_PERMISSION_MODE: DeepSeekTuiPermissionModeType = DeepSeekTuiPermissionMode.Auto;
+const DEFAULT_KIMI_CLI_PERMISSION_MODE: KimiCliPermissionModeType = KimiCliPermissionMode.Auto;
+const DEFAULT_KIMI_CLI_CONFIG_SOURCE: ExternalAgentConfigSourceType = ExternalAgentConfigSource.LocalCli;
 const MIN_MEMORY_USER_MEMORIES_MAX_ITEMS = 1;
 const MAX_MEMORY_USER_MEMORIES_MAX_ITEMS = 60;
 const MEMORY_NEAR_DUPLICATE_MIN_SCORE = 0.82;
@@ -515,6 +526,20 @@ function normalizeDeepSeekTuiPermissionMode(value?: string | null): DeepSeekTuiP
   return DEFAULT_DEEPSEEK_TUI_PERMISSION_MODE;
 }
 
+function normalizeKimiCliPermissionMode(value?: string | null): KimiCliPermissionModeType {
+  if (isKimiCliPermissionMode(value)) {
+    return value;
+  }
+  return DEFAULT_KIMI_CLI_PERMISSION_MODE;
+}
+
+function normalizeKimiCliConfigSource(value?: string | null): ExternalAgentConfigSourceType {
+  if (isExternalAgentConfigSource(value)) {
+    return value;
+  }
+  return DEFAULT_KIMI_CLI_CONFIG_SOURCE;
+}
+
 export interface CoworkMessageMetadata {
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -663,6 +688,8 @@ export interface CoworkConfig {
   qwenCodePermissionMode: QwenCodePermissionModeType;
   deepseekTuiConfigSource: ExternalAgentConfigSourceType;
   deepseekTuiPermissionMode: DeepSeekTuiPermissionModeType;
+  kimiCliConfigSource: ExternalAgentConfigSourceType;
+  kimiCliPermissionMode: KimiCliPermissionModeType;
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
@@ -686,6 +713,8 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'qwenCodePermissionMode'
   | 'deepseekTuiConfigSource'
   | 'deepseekTuiPermissionMode'
+  | 'kimiCliConfigSource'
+  | 'kimiCliPermissionMode'
   | 'memoryEnabled'
   | 'memoryImplicitUpdateEnabled'
   | 'memoryLlmJudgeEnabled'
@@ -1536,6 +1565,8 @@ export class CoworkStore {
       'qwenCodePermissionMode',
       'deepseekTuiConfigSource',
       'deepseekTuiPermissionMode',
+      'kimiCliConfigSource',
+      'kimiCliPermissionMode',
       'memoryEnabled',
       'memoryImplicitUpdateEnabled',
       'memoryLlmJudgeEnabled',
@@ -1548,22 +1579,37 @@ export class CoworkStore {
     );
     const cfg = new Map(configRows.map(r => [r.key, r.value]));
 
+    // *ConfigSource fields: if the SQLite row is missing entirely (fresh
+    // install, or the user has never touched Settings for this engine)
+    // we fall back to LocalCli so that the user does not have to flip a
+    // toggle to get their pre-configured local CLI model picked up.
+    // If the row IS present, even with an empty string, we respect the
+    // stored value (normalized) — that is the explicit user choice.
+    const readStoredConfigSource = (
+      key: string,
+    ): ExternalAgentConfigSourceType => {
+      if (!cfg.has(key)) return DEFAULT_EXTERNAL_AGENT_CONFIG_SOURCE_FOR_NEW_INSTALL;
+      return normalizeExternalAgentConfigSource(cfg.get(key));
+    };
+
     return {
       workingDirectory: cfg.get('workingDirectory') || getDefaultWorkingDirectory(),
       systemPrompt: getDefaultSystemPrompt(),
       executionMode: 'local' as CoworkExecutionMode,
       agentEngine: normalizeCoworkAgentEngineValue(cfg.get('agentEngine')),
       openclawConfigSource: normalizeOpenClawConfigSource(cfg.get('openclawConfigSource')),
-      claudeCodeConfigSource: normalizeExternalAgentConfigSource(cfg.get('claudeCodeConfigSource')),
+      claudeCodeConfigSource: readStoredConfigSource('claudeCodeConfigSource'),
       claudeCodePermissionMode: normalizeClaudeCodePermissionMode(cfg.get('claudeCodePermissionMode')),
-      codexConfigSource: normalizeExternalAgentConfigSource(cfg.get('codexConfigSource')),
+      codexConfigSource: readStoredConfigSource('codexConfigSource'),
       hermesConfigSource: normalizeHermesConfigSource(cfg.get('hermesConfigSource')),
-      opencodeConfigSource: normalizeExternalAgentConfigSource(cfg.get('opencodeConfigSource')),
+      opencodeConfigSource: readStoredConfigSource('opencodeConfigSource'),
       opencodePermissionMode: normalizeOpenCodePermissionMode(cfg.get('opencodePermissionMode')),
-      qwenCodeConfigSource: normalizeExternalAgentConfigSource(cfg.get('qwenCodeConfigSource')),
+      qwenCodeConfigSource: readStoredConfigSource('qwenCodeConfigSource'),
       qwenCodePermissionMode: normalizeQwenCodePermissionMode(cfg.get('qwenCodePermissionMode')),
-      deepseekTuiConfigSource: normalizeExternalAgentConfigSource(cfg.get('deepseekTuiConfigSource')),
+      deepseekTuiConfigSource: readStoredConfigSource('deepseekTuiConfigSource'),
       deepseekTuiPermissionMode: normalizeDeepSeekTuiPermissionMode(cfg.get('deepseekTuiPermissionMode')),
+      kimiCliConfigSource: readStoredConfigSource('kimiCliConfigSource'),
+      kimiCliPermissionMode: normalizeKimiCliPermissionMode(cfg.get('kimiCliPermissionMode')),
       memoryEnabled: parseBooleanConfig(cfg.get('memoryEnabled'), DEFAULT_MEMORY_ENABLED),
       memoryImplicitUpdateEnabled: parseBooleanConfig(
         cfg.get('memoryImplicitUpdateEnabled'),
@@ -1778,6 +1824,34 @@ export class CoworkStore {
       `,
         )
         .run(normalizeDeepSeekTuiPermissionMode(config.deepseekTuiPermissionMode), now);
+    }
+
+    if (config.kimiCliConfigSource !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('kimiCliConfigSource', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeKimiCliConfigSource(config.kimiCliConfigSource), now);
+    }
+
+    if (config.kimiCliPermissionMode !== undefined) {
+      this.db
+        .prepare(
+          `
+        INSERT INTO cowork_config (key, value, updated_at)
+        VALUES ('kimiCliPermissionMode', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+        )
+        .run(normalizeKimiCliPermissionMode(config.kimiCliPermissionMode), now);
     }
 
     if (config.memoryEnabled !== undefined) {

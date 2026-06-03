@@ -5,6 +5,7 @@ import {
   DeepSeekTuiPermissionMode,
   DefaultCoworkAgentEngine,
   ExternalAgentConfigSource,
+  KimiCliPermissionMode,
   OpenCodePermissionMode,
   QwenCodePermissionMode,
 } from '@shared/cowork/constants';
@@ -61,16 +62,22 @@ const initialState: CoworkState = {
     executionMode: 'local',
     agentEngine: DefaultCoworkAgentEngine,
     openclawConfigSource: ExternalAgentConfigSource.LocalCli,
-    claudeCodeConfigSource: ExternalAgentConfigSource.WesightModel,
+    // Default all CLI engines to LocalCli so that pre-configured
+    // local CLI models are picked up automatically (issue #34).
+    // main's getConfig() will overwrite these with stored values
+    // for any user who has already picked a source.
+    claudeCodeConfigSource: ExternalAgentConfigSource.LocalCli,
     claudeCodePermissionMode: ClaudeCodePermissionMode.BypassPermissions,
-    codexConfigSource: ExternalAgentConfigSource.WesightModel,
-    hermesConfigSource: ExternalAgentConfigSource.WesightModel,
-    opencodeConfigSource: ExternalAgentConfigSource.WesightModel,
+    codexConfigSource: ExternalAgentConfigSource.LocalCli,
+    hermesConfigSource: ExternalAgentConfigSource.LocalCli,
+    opencodeConfigSource: ExternalAgentConfigSource.LocalCli,
     opencodePermissionMode: OpenCodePermissionMode.Auto,
-    qwenCodeConfigSource: ExternalAgentConfigSource.WesightModel,
+    qwenCodeConfigSource: ExternalAgentConfigSource.LocalCli,
     qwenCodePermissionMode: QwenCodePermissionMode.Auto,
-    deepseekTuiConfigSource: ExternalAgentConfigSource.WesightModel,
+    deepseekTuiConfigSource: ExternalAgentConfigSource.LocalCli,
     deepseekTuiPermissionMode: DeepSeekTuiPermissionMode.Auto,
+    kimiCliConfigSource: ExternalAgentConfigSource.LocalCli,
+    kimiCliPermissionMode: KimiCliPermissionMode.Auto,
     memoryEnabled: true,
     memoryImplicitUpdateEnabled: true,
     memoryLlmJudgeEnabled: false,

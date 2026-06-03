@@ -1530,6 +1530,10 @@ const applyExternalAgentConfigSourceForEngine = (engine: CoworkAgentEngine): voi
   }
   if (engine === CoworkAgentEngineValue.DeepSeekTui) {
     applyExternalAgentConfigForEngine(engine, config.deepseekTuiConfigSource);
+    return;
+  }
+  if (engine === CoworkAgentEngineValue.KimiCli) {
+    applyExternalAgentConfigForEngine(engine, config.kimiCliConfigSource);
   }
 };
 
@@ -1598,6 +1602,7 @@ const isExternalAgentProviderAppType = (value: unknown): value is ExternalAgentP
   || value === 'grok'
   || value === 'qwen'
   || value === 'deepseek_tui'
+  || value === 'kimi'
 );
 
 const getMergedExternalAgentEnvironmentSnapshot = () => {

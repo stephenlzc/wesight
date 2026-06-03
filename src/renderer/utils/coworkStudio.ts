@@ -160,11 +160,7 @@ const getConfigSource = (config: CoworkConfig): ExternalAgentConfigSource | null
   if (config.agentEngine === CoworkAgentEngine.GrokBuild) return ExternalAgentConfigSource.LocalCli;
   if (config.agentEngine === CoworkAgentEngine.QwenCode) return config.qwenCodeConfigSource;
   if (config.agentEngine === CoworkAgentEngine.DeepSeekTui) return config.deepseekTuiConfigSource;
-  if (config.agentEngine === CoworkAgentEngine.KimiCli) {
-    // TODO(issue #34): introduce config.kimiCliConfigSource once Kimi CLI
-    // supports a WeSight-model / local-~/.kimi/config.toml source toggle.
-    return null;
-  }
+  if (config.agentEngine === CoworkAgentEngine.KimiCli) return config.kimiCliConfigSource;
   if (config.agentEngine === CoworkAgentEngine.OpenClaw) return config.openclawConfigSource;
   return null;
 };

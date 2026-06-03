@@ -4,6 +4,7 @@ import type {
   CoworkSessionKind,
   DeepSeekTuiPermissionMode,
   ExternalAgentConfigSource,
+  KimiCliPermissionMode,
   OpenCodePermissionMode,
   QwenCodePermissionMode,
 } from '@shared/cowork/constants';
@@ -101,6 +102,8 @@ export interface CoworkConfig {
   qwenCodePermissionMode: QwenCodePermissionMode;
   deepseekTuiConfigSource: ExternalAgentConfigSource;
   deepseekTuiPermissionMode: DeepSeekTuiPermissionMode;
+  kimiCliConfigSource: ExternalAgentConfigSource;
+  kimiCliPermissionMode: KimiCliPermissionMode;
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
@@ -124,6 +127,8 @@ export type CoworkConfigUpdate = Partial<Pick<
   | 'qwenCodePermissionMode'
   | 'deepseekTuiConfigSource'
   | 'deepseekTuiPermissionMode'
+  | 'kimiCliConfigSource'
+  | 'kimiCliPermissionMode'
   | 'memoryEnabled'
   | 'memoryImplicitUpdateEnabled'
   | 'memoryLlmJudgeEnabled'

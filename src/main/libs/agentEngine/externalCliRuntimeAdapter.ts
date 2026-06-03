@@ -12,6 +12,7 @@ import {
   CoworkAgentEngine,
   ExternalAgentConfigSource,
   isClaudeCodePermissionMode,
+  KimiCliPermissionMode,
   OpenCodePermissionMode,
   QwenCodePermissionMode,
 } from '../../../shared/cowork/constants';
@@ -36,6 +37,8 @@ import { normalizeOpenCodeCliEvent } from '../openCodeCliEvent';
 import { buildOpenCodeRuntimeConfigContent } from '../openCodeConfig';
 import { normalizeQwenCodeCliEvent } from '../qwenCodeCliEvent';
 import { buildQwenCodeRuntimeEnv, qwenAuthTypeForCoworkConfig } from '../qwenCodeConfig';
+import { parseKimiCliJsonLine } from '../kimiCliCliEvent';
+import { buildKimiCliRuntimeEnv } from '../kimiCliConfig';
 import type {
   CoworkContinueOptions,
   CoworkRuntime,
@@ -284,6 +287,9 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     if (this.engine === CoworkAgentEngine.QwenCode && this.getConfigSource() === ExternalAgentConfigSource.WesightModel) {
       this.applyQwenCodeRuntimeConfig(env, apiConfigOverride);
     }
+    if (this.engine === CoworkAgentEngine.KimiCli && this.getConfigSource() === ExternalAgentConfigSource.WesightModel) {
+      this.applyKimiCliRuntimeConfig(env, apiConfigOverride);
+    }
     const command = this.getCommandName();
     const args = this.buildCommandArgs(
       cwd,
@@ -518,6 +524,36 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       return args;
     }
 
+    if (this.engine === CoworkAgentEngine.KimiCli) {
+      const kimiConfig = this.store.getConfig();
+      const permissionMode = kimiConfig.kimiCliPermissionMode;
+      const args: string[] = [
+        '--print',
+        '--output-format', 'stream-json',
+        '--work-dir', cwd,
+      ];
+      if (permissionMode === KimiCliPermissionMode.Auto) {
+        args.push('--yolo');
+      } else {
+        args.push('--plan');
+      }
+      let model: string | null = null;
+      if (this.getConfigSource() === ExternalAgentConfigSource.WesightModel) {
+        const resolved = resolveRawApiConfig(apiConfigOverride);
+        if (resolved.config) {
+          model = resolved.config.model;
+        }
+      } else {
+        const providerModel = selectedProvider?.summary.model?.trim();
+        if (providerModel) model = providerModel;
+      }
+      if (model) {
+        args.push('--model', model);
+      }
+      args.push('--prompt', prompt);
+      return args;
+    }
+
     if (this.engine === CoworkAgentEngine.GrokBuild) {
       const promptWithFiles = imagePaths.length > 0
         ? `${prompt}\n\nAttached local files:\n${imagePaths.map((imagePath) => imagePath).join('\n')}`
@@ -598,6 +634,9 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     if (this.engine === CoworkAgentEngine.QwenCode) {
       return config.qwenCodeConfigSource;
     }
+    if (this.engine === CoworkAgentEngine.KimiCli) {
+      return config.kimiCliConfigSource;
+    }
     if (this.engine === CoworkAgentEngine.GrokBuild) {
       return ExternalAgentConfigSource.LocalCli;
     }
@@ -619,6 +658,9 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     }
     if (this.engine === CoworkAgentEngine.QwenCode) {
       return this.getCurrentProvider?.('qwen') ?? null;
+    }
+    if (this.engine === CoworkAgentEngine.KimiCli) {
+      return this.getCurrentProvider?.('kimi') ?? null;
     }
     if (this.engine === CoworkAgentEngine.GrokBuild) {
       return this.getCurrentProvider?.('grok') ?? null;
@@ -647,11 +689,21 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     Object.assign(env, buildQwenCodeRuntimeEnv(resolved.config));
   }
 
+  private applyKimiCliRuntimeConfig(
+    env: Record<string, string | undefined>,
+    apiConfigOverride?: ApiConfigOverride,
+  ): void {
+    const resolved = resolveRawApiConfig(apiConfigOverride);
+    if (!resolved.config) return;
+    Object.assign(env, buildKimiCliRuntimeEnv(resolved.config));
+  }
+
   private getCommandName(): string {
     if (this.engine === CoworkAgentEngine.ClaudeCode) return 'claude';
     if (this.engine === CoworkAgentEngine.Codex) return 'codex';
     if (this.engine === CoworkAgentEngine.OpenCode) return 'opencode';
     if (this.engine === CoworkAgentEngine.GrokBuild) return 'grok';
+    if (this.engine === CoworkAgentEngine.KimiCli) return 'kimi';
     return 'qwen';
   }
 
@@ -902,6 +954,8 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
         this.handleGrokBuildEvent(active, event);
       } else if (this.engine === CoworkAgentEngine.QwenCode) {
         this.handleQwenCodeEvent(active, event);
+      } else if (this.engine === CoworkAgentEngine.KimiCli) {
+        this.handleKimiCliEvent(active, event);
       } else {
         this.handleClaudeCliEvent(active, event);
       }
@@ -1234,6 +1288,67 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
         break;
       case 'error':
         this.handleError(active.sessionId, normalized.message);
+        break;
+      case 'none':
+        break;
+    }
+  }
+
+  private handleKimiCliEvent(active: ActiveCliSession, event: unknown): void {
+    // Kimi CLI stream-json is a superset of Claude Code's; we feed
+    // raw JSON objects through normalizeKimiCliCliEvent. The current
+    // normalizer handles `result` and a flat `text/content/message/
+    // delta` field; richer Claude-Code-style tool_use /
+    // content_block_delta events land in `none` for now and are
+    // tracked under issue #34.
+    const normalized = (() => {
+      if (typeof event === 'string') {
+        return parseKimiCliJsonLine(event) ?? { kind: 'none' as const, sessionId: null };
+      }
+      return null;
+    })();
+    this.applyKimiNormalizedEvent(active, normalized);
+  }
+
+  private applyKimiNormalizedEvent(
+    active: ActiveCliSession,
+    normalized: { kind: string; sessionId: string | null; text?: string; replace?: boolean; toolName?: string; input?: Record<string, unknown>; output?: string; isError?: boolean; message?: string },
+  ): void {
+    if (normalized.sessionId) {
+      active.cliSessionId = normalized.sessionId;
+      this.store.updateSession(active.sessionId, { claudeSessionId: normalized.sessionId });
+    }
+    switch (normalized.kind) {
+      case 'assistant_text':
+        if (normalized.replace) {
+          this.replaceAssistant(active, normalized.text ?? '', true);
+        } else {
+          this.appendAssistant(active, normalized.text ?? '');
+        }
+        break;
+      case 'tool_use':
+        this.addToolMessage(active.sessionId, {
+          type: 'tool_use',
+          content: `Using tool: ${normalized.toolName ?? 'unknown'}`,
+          metadata: {
+            toolName: normalized.toolName,
+            toolInput: normalized.input,
+          },
+        });
+        break;
+      case 'tool_result':
+        this.addToolMessage(active.sessionId, {
+          type: 'tool_result',
+          content: normalized.output ?? '',
+          metadata: {
+            toolName: normalized.toolName,
+            toolResult: normalized.output,
+            isError: normalized.isError ?? false,
+          },
+        });
+        break;
+      case 'error':
+        this.handleError(active.sessionId, normalized.message ?? 'Kimi CLI error');
         break;
       case 'none':
         break;
