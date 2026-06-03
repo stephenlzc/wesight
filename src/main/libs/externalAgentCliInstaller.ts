@@ -138,6 +138,20 @@ const INSTALL_TARGETS: Record<CliAppType, InstallTarget> = {
       },
     ],
   },
+  kimi: {
+    appType: 'kimi',
+    displayName: 'Kimi CLI',
+    command: 'kimi',
+    // TODO(issue #34): wire `pip install kimi-cli` (or `uv tool install
+    // kimi-cli`) once the install runner supports a pip-style method. For
+    // now users install Kimi CLI manually via `pip install kimi-cli`; the
+    // "Install CLI" button will surface a "not yet implemented" error.
+    methods: [
+      {
+        id: 'pip',
+      },
+    ],
+  },
 };
 
 const quoteForShell = (value: string): string => {
@@ -157,6 +171,18 @@ const truncateProgressLine = (value: string): string => {
 
 const buildInstallScript = (target: InstallTarget): string => {
   const method = target.methods[0];
+  if (method.id === 'pip') {
+    // TODO(issue #34): implement `pip install kimi-cli` (or `uv tool install
+    // kimi-cli`) with proper pip/uv bootstrap. Until then, surface a clear
+    // "not implemented" so the Install CLI button doesn't silently misrun
+    // an npm command.
+    return [
+      'set -e',
+      `echo "Auto-install for ${target.displayName} is not implemented yet." >&2`,
+      `echo "Install it manually with: pip install kimi-cli  (or: uv tool install kimi-cli)" >&2`,
+      'exit 64',
+    ].join('\n');
+  }
   if (method.id === 'official-installer') {
     const scriptUrl = method.scriptUrl;
     if (!scriptUrl) {

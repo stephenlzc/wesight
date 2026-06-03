@@ -24,7 +24,7 @@ import {
 import { readOpenClawGlobalConfig, summarizeOpenClawConfig } from './openclawSystemRuntime';
 import { resolveUserShellPath } from './coworkUtil';
 
-export type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui';
+export type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui' | 'kimi';
 
 export interface CliAppConfigSnapshot {
   appType: CliAppType;
@@ -560,6 +560,7 @@ export function getExternalAgentEnvironmentSnapshot(): ExternalAgentEnvironmentS
       buildCommandStatus(CoworkAgentEngine.GrokBuild, 'grok', 'grok', settings, dbPath),
       buildCommandStatus(CoworkAgentEngine.QwenCode, 'qwen', 'qwen', settings, dbPath),
       buildCommandStatus(CoworkAgentEngine.DeepSeekTui, 'deepseek_tui', 'deepseek-tui', settings, dbPath),
+      buildCommandStatus(CoworkAgentEngine.KimiCli, 'kimi', 'kimi', settings, dbPath),
     ],
   };
 }

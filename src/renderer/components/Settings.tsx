@@ -142,6 +142,11 @@ const COWORK_AGENT_ENGINE_OPTIONS: Array<{
     labelKey: 'coworkAgentEngineDeepSeekTui',
     hintKey: 'coworkAgentEngineDeepSeekTuiHint',
   },
+  {
+    value: CoworkAgentEngineValue.KimiCli,
+    labelKey: 'coworkAgentEngineKimiCli',
+    hintKey: 'coworkAgentEngineKimiCliHint',
+  },
 ];
 
 const PET_VARIANT_OPTIONS: Array<{
@@ -3178,6 +3183,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       || engine === CoworkAgentEngineValue.GrokBuild
       || engine === CoworkAgentEngineValue.QwenCode
       || engine === CoworkAgentEngineValue.DeepSeekTui
+      || engine === CoworkAgentEngineValue.KimiCli
     ) {
       return (
         <div className="mt-4 space-y-4">
