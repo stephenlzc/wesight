@@ -62,6 +62,20 @@ export const ExternalAgentConfigSourceValues = [
   ExternalAgentConfigSource.LocalCli,
 ] as const;
 
+export const CliAppType = {
+  Claude: 'claude',
+  Codex: 'codex',
+  Hermes: 'hermes',
+  OpenClaw: 'openclaw',
+  OpenCode: 'opencode',
+  Grok: 'grok',
+  Qwen: 'qwen',
+  DeepSeekTui: 'deepseek_tui',
+  Kimi: 'kimi',
+} as const;
+
+export type CliAppType = typeof CliAppType[keyof typeof CliAppType];
+
 export const ClaudeCodePermissionMode = {
   BypassPermissions: 'bypassPermissions',
   Default: 'default',

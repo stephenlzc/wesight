@@ -10,6 +10,7 @@ import type {
 } from '@shared/cowork/constants';
 export type { CoworkFileActivity } from '@shared/cowork/fileActivity';
 import type { CoworkSessionRuntimeSnapshot } from '@shared/cowork/runtimeSnapshot';
+import type { CliAppType as SharedCliAppType } from '@shared/cowork/constants';
 export type {
   RuntimeCallRecord,
   RuntimeMetricsDetailResult,
@@ -268,7 +269,7 @@ export interface CoworkConfigResult {
   error?: string;
 }
 
-export type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui' | 'kimi';
+export type CliAppType = SharedCliAppType;
 
 export interface CliAppConfigSnapshot {
   appType: CliAppType;

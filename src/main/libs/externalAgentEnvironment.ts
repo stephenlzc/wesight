@@ -3,6 +3,7 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import type { CliAppType as SharedCliAppType } from '../../shared/cowork/constants';
 
 import {
   type CliCoworkAgentEngine,
@@ -24,7 +25,7 @@ import {
 import { readOpenClawGlobalConfig, summarizeOpenClawConfig } from './openclawSystemRuntime';
 import { resolveUserShellPath } from './coworkUtil';
 
-export type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui' | 'kimi';
+export type CliAppType = SharedCliAppType;
 
 export interface CliAppConfigSnapshot {
   appType: CliAppType;

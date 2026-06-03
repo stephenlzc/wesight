@@ -1,5 +1,6 @@
 import type {
   ClaudeCodePermissionMode,
+  type CliAppType,
   CoworkAgentEngine,
   CoworkSessionKind,
   DeepSeekTuiPermissionMode,
@@ -129,7 +130,10 @@ type CoworkConfigUpdate = Partial<Pick<
   | 'memoryUserMemoriesMaxItems'
 >>;
 
-type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui' | 'kimi';
+// CliAppType is now sourced from @shared/cowork/constants — see the
+// `import type` block at the top of this file. The 3-way duplication
+// between main, renderer/types/cowork.ts, and this file was consolidated
+// in PR #36 (follow-up #3).
 
 interface CliAppConfigSnapshot {
   appType: CliAppType;
