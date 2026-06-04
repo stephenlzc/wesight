@@ -1,11 +1,15 @@
 import Database from 'better-sqlite3';
-import { expect,test } from 'vitest';
+import { expect, test } from 'vitest';
 
 import {
-BindingKind, DeliveryChannel,
-  DeliveryMode,   OriginKind, PayloadKind,
-ScheduleKind, } from './constants';
-import { makeModel,makeTask } from './fixtures';
+  BindingKind,
+  DeliveryChannel,
+  DeliveryMode,
+  OriginKind,
+  PayloadKind,
+  ScheduleKind,
+} from './constants';
+import { makeModel, makeTask } from './fixtures';
 import { ScheduledTaskMetaStore } from './metaStore';
 import { TaskModelMapper } from './modelMapper';
 import { taskPolicyRegistry } from './policies/registry';

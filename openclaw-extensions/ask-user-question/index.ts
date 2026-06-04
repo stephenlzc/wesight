@@ -142,7 +142,8 @@ const plugin = {
       // IM channel sessions (dingtalk, qqbot, weixin, feishu, wecom, etc.) should not have this tool
       // so the model executes delete commands directly without confirmation on IM.
       const sessionKey = ctx.sessionKey ?? '';
-      const isLocalDesktop = sessionKey.startsWith('agent:main:wesight:');
+      const isLocalDesktop = sessionKey.startsWith('agent:main:wesight:')
+        || sessionKey.startsWith('agent:main:lobsterai:');
       if (!isLocalDesktop) {
         return null;
       }

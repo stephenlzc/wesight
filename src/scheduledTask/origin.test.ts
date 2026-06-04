@@ -1,8 +1,11 @@
-import { expect,test } from 'vitest';
+import { expect, test } from 'vitest';
 
 import {
-BindingKind, DeliveryChannel,
-DeliveryMode,   OriginKind, } from './constants';
+  BindingKind,
+  DeliveryChannel,
+  DeliveryMode,
+  OriginKind,
+} from './constants';
 import { makeTask } from './fixtures';
 import { inferOriginAndBinding } from './origin';
 

@@ -14,8 +14,14 @@ import type { IMStore } from '../im/imStore';
 import type { Platform } from '../im/types';
 
 const MANAGED_SESSION_NAMESPACE = 'wesight';
+const LEGACY_MANAGED_SESSION_NAMESPACES = ['lobsterai'] as const;
+const MANAGED_SESSION_NAMESPACES = [MANAGED_SESSION_NAMESPACE, ...LEGACY_MANAGED_SESSION_NAMESPACES] as const;
 const WESIGHT_SESSION_PREFIX = `${MANAGED_SESSION_NAMESPACE}:`;
 export const DEFAULT_MANAGED_AGENT_ID = 'main';
+
+function isManagedSessionNamespace(value: string | undefined): boolean {
+  return MANAGED_SESSION_NAMESPACES.includes(value as typeof MANAGED_SESSION_NAMESPACES[number]);
+}
 
 export interface ManagedSessionKey {
   agentId: string | null;
@@ -48,7 +54,7 @@ export function parseManagedSessionKey(sessionKey: string | undefined | null): M
   if (
     parts.length < 4
     || parts[0] !== 'agent'
-    || parts[2] !== MANAGED_SESSION_NAMESPACE
+    || !isManagedSessionNamespace(parts[2])
   ) {
     return null;
   }

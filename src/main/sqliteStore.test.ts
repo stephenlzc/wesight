@@ -1,8 +1,7 @@
+import BetterSqlite3 from 'better-sqlite3';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-
-import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, expect, test, vi } from 'vitest';
 
 import { ExternalAgentConfigSource } from '../shared/cowork/constants';
