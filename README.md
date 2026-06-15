@@ -13,16 +13,16 @@
   <a href="https://github.com/freestylefly/wesight/network/members"><img src="https://img.shields.io/github/forks/freestylefly/wesight?style=flat-square&color=14b8a6" alt="GitHub forks"></a>
   <a href="https://github.com/freestylefly/wesight/releases/latest"><img src="https://img.shields.io/github/v/release/freestylefly/wesight?style=flat-square&color=f59e0b" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/freestylefly/wesight?style=flat-square&color=64748b" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-111827?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon">
+  <img src="https://img.shields.io/badge/platform-macOS%20Apple%20Silicon%20%2B%20Intel-111827?style=flat-square&logo=apple&logoColor=white" alt="macOS Apple Silicon and Intel">
 </p>
 
 <p align="center">
   <strong>English</strong> | <a href="README_zh.md">简体中文</a>
 </p>
 
-WeSight is an open-source desktop control console for local AI agents. It helps you install or reuse Claude Code, Codex, OpenClaw, Hermes Agent, OpenCode, Qwen Code, DeepSeek-TUI, and the built-in agent runtime, then gives them a visual workspace for chat, tools, files, IM channels, skills, model providers, runtime metrics, and desktop companion workflows.
+WeSight is an open-source desktop control console for local AI agents. It helps you install or reuse Claude Code, Codex, Kimi Code, OpenClaw, Hermes Agent, OpenCode, Qwen Code, DeepSeek-TUI, and the built-in agent runtime, then gives them a visual workspace for chat, tools, files, IM channels, skills, model providers, runtime metrics, and desktop companion workflows.
 
-> Early public releases ship macOS Apple Silicon first. If WeSight helps your agent workflow, a Star makes the project easier for more builders to discover.
+> Early public releases ship macOS Apple Silicon and Intel builds. If WeSight helps your agent workflow, a Star makes the project easier for more builders to discover.
 
 ## Quick Links
 
@@ -31,6 +31,7 @@ WeSight is an open-source desktop control console for local AI agents. It helps 
 - Screenshots: [Screenshots](#screenshots)
 - Core features: [Core Features](#core-features)
 - Agent engines: [Agent Engines](#agent-engines)
+- Product roadmap: [Product Roadmap](https://github.com/users/freestylefly/projects/1)
 - Development: [Quick Start](#quick-start)
 
 ## Why WeSight
@@ -56,7 +57,7 @@ Terminal-native coding agents are powerful, while their setup, model routing, pe
   </tr>
   <tr>
     <td><strong>Cowork Chat</strong><br>Run local coding agents as a desktop chat with engine and model controls.</td>
-    <td><strong>Agent Engines</strong><br>Configure Claude Code, Codex, OpenClaw, Hermes Agent, OpenCode, Qwen Code, DeepSeek-TUI, and the built-in runtime.</td>
+    <td><strong>Agent Engines</strong><br>Configure Claude Code, Codex, Kimi Code, OpenClaw, Hermes Agent, OpenCode, Qwen Code, DeepSeek-TUI, and the built-in runtime.</td>
   </tr>
   <tr>
     <td width="50%">
@@ -86,10 +87,10 @@ Terminal-native coding agents are powerful, while their setup, model routing, pe
 
 ## Core Features
 
-- **Agent Engines** - Run Claude Code, Codex, OpenClaw, Hermes Agent, OpenCode, Qwen Code, DeepSeek-TUI, or the built-in runtime from the same workspace.
+- **Agent Engines** - Run Claude Code, Codex, Kimi Code, OpenClaw, Hermes Agent, OpenCode, Qwen Code, DeepSeek-TUI, or the built-in runtime from the same workspace.
 - **One-click setup** - On macOS, WeSight can install supported local CLIs or detect the ones already present on the machine.
 - **Unified model providers** - Configure official OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Qwen, Moonshot, Ollama, OpenRouter, GitHub Copilot, and custom OpenAI-compatible endpoints.
-- **Local CLI configuration** - Use existing Claude Code, Codex, OpenClaw, Hermes Agent, OpenCode, Qwen Code, or DeepSeek-TUI accounts and config when you already have a working terminal setup.
+- **Local CLI configuration** - Use existing Claude Code, Codex, Kimi Code, OpenClaw, Hermes Agent, OpenCode, Qwen Code, or DeepSeek-TUI accounts and config when you already have a working terminal setup.
 - **Graphical tool execution** - View commands, files, permissions, slash commands, outputs, generated images, and tool results inside the chat flow.
 - **IM Agent Hub** - Route Feishu messages into OpenClaw, Hermes Agent, Claude Code, or Codex, with per-engine bot profiles.
 - **AI Runtime Dashboard** - Measure calls by engine, model, source, status, tokens, completion time, TTFT, output-phase TPS, estimated model TPS, tool latency, and agent steps.
@@ -115,6 +116,7 @@ Terminal-native coding agents are powerful, while their setup, model routing, pe
 | Built-in runtime | General desktop cowork sessions and skills                  | Included in WeSight                             |
 | Claude Code      | Claude Code workflows with a graphical chat surface         | One-click install or existing local CLI config  |
 | Codex            | Codex CLI workflows, local task execution, and IM control   | One-click install or existing local CLI config  |
+| Kimi Code        | Kimi Code workflows with local login, Skills, and MCP       | Official installer or existing local CLI config |
 | OpenClaw         | Runtime gateway, IM channels, sandbox-style agent work      | Local runtime/CLI reuse or WeSight setup flow   |
 | Hermes Agent     | Local Hermes Agent gateway and IM-style runtime experiments | Official installer or existing local CLI config |
 | OpenCode         | OpenCode terminal agent workflows                           | One-click install or existing local CLI config  |
@@ -138,13 +140,13 @@ Public desktop builds are published through GitHub Releases:
 - Website: [wesight.ai](https://wesight.ai/)
 - Latest release: [github.com/freestylefly/wesight/releases/latest](https://github.com/freestylefly/wesight/releases/latest)
 
-Early public releases currently ship macOS Apple Silicon builds first. Release assets are intended for end users. CI artifacts are short-lived build outputs for maintainers to test before a release is published.
+Early public releases currently ship macOS Apple Silicon and Intel builds. Release assets are intended for end users. CI artifacts are short-lived build outputs for maintainers to test before a release is published.
 
 ## Download And Install
 
 ### 1. Download the DMG
 
-Download `WeSight-*-arm64.dmg` from the [latest release](https://github.com/freestylefly/wesight/releases/latest), open it, and drag `WeSight.app` into the `Applications` folder.
+Download the matching macOS DMG from the [latest release](https://github.com/freestylefly/wesight/releases/latest): `WeSight-*-mac-arm64.dmg` for Apple Silicon or `WeSight-*-mac-x64.dmg` for Intel. Open it and drag `WeSight.app` into the `Applications` folder.
 
 <p align="center">
   <img src="public/readme/tutorial/install-dmg.svg" alt="WeSight DMG install guide" width="760">
@@ -236,9 +238,13 @@ npm run lint
 ```bash
 # macOS
 npm run dist:mac
+
+# macOS single-architecture packages
 npm run dist:mac:x64
 npm run dist:mac:arm64
-npm run dist:mac:universal
+
+# Do not use npm run dist:mac:universal until native modules have an
+# explicit merge strategy for both macOS architectures.
 
 # Windows
 npm run dist:win
@@ -322,18 +328,13 @@ Skills can be installed, enabled, disabled, deleted, and routed from the desktop
 - Local data is stored in SQLite under the app data directory.
 - Runtime folders, build artifacts, generated assets, and local secrets are ignored by Git.
 
-## Roadmap Ideas
+## Product Roadmap
 
-- More engine adapters and runtime profiles
-- Better local configuration import and provider sync flows
-- Richer IM agent profiles and message formats
-- Shareable task templates
-- More visual inspection tools for long-running agent tasks
-- Skill marketplace updates, reviews, and version management
+Check out the [WeSight Product Roadmap](https://github.com/users/freestylefly/projects/1) for current priorities, planned features, and larger product directions. Feel free to [open an issue](https://github.com/freestylefly/wesight/issues) if there is something you want to see.
 
 ## Community WeChat Group
 
-Scan the QR code below to join the WeSight WeChat group and talk with other builders. The QR code is valid until June 8, 2026; if it expires, follow the official account below to get the latest invite.
+Scan the QR code below to join the WeSight WeChat group and talk with other builders. The QR code is valid until June 13, 2026; if it expires, follow the official account below to get the latest invite.
 
 <p align="center">
   <img src="public/readme/community/wechat-group.jpg" alt="WeSight WeChat Group" width="320">
@@ -348,7 +349,7 @@ Scan the QR code below to join the WeSight WeChat group and talk with other buil
 Search **苍何** on WeChat or scan the QR code below to follow Canghe's original WeChat official account. Reply with **AI** to get more AI prompt and agent workflow resources.
 
 <p align="center">
-  <img src="public/wechat-official-account.png" alt="Canghe WeChat Official Account" width="280">
+  <img src="public/wechat-official-account.png" alt="Canghe WeChat Official Account" width="760">
 </p>
 
 ## Acknowledgements
@@ -360,8 +361,18 @@ WeSight is shaped by many excellent open-source projects and agent community pra
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) for local agent runtime, gateway, and model configuration ideas.
 - [Star-Office-UI](https://github.com/ringhyacinth/Star-Office-UI) for the pixel-style AI studio inspiration.
 - [SkillHub](https://skillhub.lol/skills) for ideas around skill discovery, installation, and marketplace flows.
-- The terminal-agent ecosystem around Claude Code, Codex, OpenCode, Qwen Code, DeepSeek-TUI, and the builders pushing local AI agent workflows forward.
+- The terminal-agent ecosystem around Claude Code, Codex, Kimi Code, OpenCode, Qwen Code, DeepSeek-TUI, and the builders pushing local AI agent workflows forward.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Thank You to Our Contributors
+
+Thanks to everyone who has contributed PRs to WeSight. This wall updates automatically from GitHub contributors data after new contributions are merged.
+
+<div align="center">
+
+[![WeSight Contributors](https://contrib.rocks/image?repo=freestylefly/wesight)](https://github.com/freestylefly/wesight/graphs/contributors)
+
+</div>

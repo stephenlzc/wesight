@@ -52,10 +52,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     externalCliClaudeNoOutputTimeout: 'Claude Code CLI 已加载本机配置（{provider}），但 {seconds} 秒内没有返回内容。请在终端运行 claude -p "只回复 OK" 检查本机 CLI 的非交互模式。',
     externalCliClaudeNoVisibleOutput: 'Claude Code CLI 已完成任务，但没有返回可显示内容。请检查本机 Claude Code 会话或重新发送消息。',
     externalCliClaudeLocalConfigUnknown: '本机 CLI 配置',
+    externalCliClaudeWesightModelConfig: 'WeSight 模型配置',
     externalCliCodexGeneratedImage: 'Codex 已生成图片。',
     externalCliCodexGeneratedImageAlt: 'Codex 生成的图片',
     externalCliCodexOpenImage: '打开图片',
     externalCliCodexNoVisibleOutput: 'Codex CLI 已完成任务，但没有返回可显示内容。请检查本机 Codex 会话或重新发送消息。',
+    hermesNoVisibleOutput: 'Hermes Agent 超过 {seconds} 秒未产生可显示内容。请检查 Hermes Agent 网关与模型提供方配置。',
 
     // Feishu bot install
     feishuVerifyCredentialsFailed: '凭证验证失败，请检查 App ID 和 App Secret 是否正确',
@@ -196,6 +198,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinConfigReady: '微信配置已就绪。',
     imWeixinOpenClawHint: '微信通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
     imWeixinConfigReadyOpenClaw: '微信配置已就绪，通过 OpenClaw 运行。',
+    imWeixinQrRequired: '微信尚未扫码连接。',
+    imWeixinScanSuggestion: '请点击扫码连接微信，完成后 WeSight 会接管收发消息。',
+    imWeixinNativeReady: '微信账号 {accountId} 已连接。',
+    imWeixinNativeRunning: '微信由 WeSight 管理，原生网关正在运行。',
+    imWeixinNativeManagedHint: '微信由 WeSight 管理，扫码后会直接通过 WeSight 收发消息。',
 
     // NIM
     imNimFillCredentials: '请补全 AppKey、Account 和 Token 后重新测试连通性。',
@@ -253,10 +260,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
     externalCliClaudeNoOutputTimeout: 'Claude Code CLI loaded local config ({provider}), but returned no content within {seconds} seconds. Run claude -p "reply OK only" in Terminal to check the local CLI non-interactive mode.',
     externalCliClaudeNoVisibleOutput: 'Claude Code CLI completed the task, but returned no visible content. Check the local Claude Code session or send the message again.',
     externalCliClaudeLocalConfigUnknown: 'local CLI config',
+    externalCliClaudeWesightModelConfig: 'WeSight model settings',
     externalCliCodexGeneratedImage: 'Codex generated an image.',
     externalCliCodexGeneratedImageAlt: 'Codex generated image',
     externalCliCodexOpenImage: 'Open image',
     externalCliCodexNoVisibleOutput: 'Codex CLI completed the task, but returned no visible content. Check the local Codex session or send the message again.',
+    hermesNoVisibleOutput: 'Hermes Agent did not produce any visible output after {seconds} seconds. Check the Hermes Agent gateway and model provider configuration.',
 
     // Feishu bot install
     feishuVerifyCredentialsFailed: 'Credential validation failed. Please check your App ID and App Secret.',
@@ -397,6 +406,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     imWeixinConfigReady: 'WeChat configuration is ready.',
     imWeixinOpenClawHint: 'WeChat runs via OpenClaw runtime. The bot will connect automatically when OpenClaw Gateway starts.',
     imWeixinConfigReadyOpenClaw: 'WeChat configuration is ready, running via OpenClaw.',
+    imWeixinQrRequired: 'WeChat is not connected yet.',
+    imWeixinScanSuggestion: 'Click scan to connect WeChat. WeSight will manage inbound and outbound messages after login.',
+    imWeixinNativeReady: 'WeChat account {accountId} is connected.',
+    imWeixinNativeRunning: 'WeChat is managed by WeSight, and the native gateway is running.',
+    imWeixinNativeManagedHint: 'WeChat is managed by WeSight. After QR login, WeSight will send and receive messages directly.',
 
     // NIM
     imNimFillCredentials: 'Please provide the AppKey, Account, and Token and test connectivity again.',

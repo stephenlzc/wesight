@@ -4,7 +4,9 @@ import type {
   CoworkSessionKind,
   DeepSeekTuiPermissionMode,
   ExternalAgentConfigSource,
+  KimiCodePermissionMode,
   OpenCodePermissionMode,
+  OpenSquillaPermissionMode,
   QwenCodePermissionMode,
 } from '@shared/cowork/constants';
 import type { CoworkFileActivity } from '@shared/cowork/fileActivity';
@@ -13,9 +15,9 @@ import type {
   RuntimeMetricsFilters,
   RuntimeMetricsSummary,
 } from '@shared/cowork/runtimeMetrics';
-import type { CoworkSessionRuntimeSnapshot } from '@shared/cowork/runtimeSnapshot';
+import type { CoworkModelOverride, CoworkSessionRuntimeSnapshot } from '@shared/cowork/runtimeSnapshot';
 import type { CoworkStudioAssetsResult } from '@shared/cowork/studioAssets';
-import type { FeishuEngineKeyType, FeishuManagementModeType, FeishuRuntimeOwnershipType } from '@shared/im/constants';
+import type { FeishuEngineKeyType, FeishuManagementModeType, FeishuRuntimeOwnershipType, WeixinOwnershipType } from '@shared/im/constants';
 import type { DesktopPetTaskSnapshot, PetConfig, PetPosition } from '@shared/pet/constants';
 import type { SkillMarketplaceSort, SkillMarketplaceSourceType } from '@shared/skills/constants';
 
@@ -111,6 +113,10 @@ interface CoworkConfig {
   qwenCodePermissionMode: QwenCodePermissionMode;
   deepseekTuiConfigSource: ExternalAgentConfigSource;
   deepseekTuiPermissionMode: DeepSeekTuiPermissionMode;
+  opensquillaConfigSource: ExternalAgentConfigSource;
+  opensquillaPermissionMode: OpenSquillaPermissionMode;
+  kimiCodeConfigSource: ExternalAgentConfigSource;
+  kimiCodePermissionMode: KimiCodePermissionMode;
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
@@ -134,6 +140,10 @@ type CoworkConfigUpdate = Partial<Pick<
   | 'qwenCodePermissionMode'
   | 'deepseekTuiConfigSource'
   | 'deepseekTuiPermissionMode'
+  | 'opensquillaConfigSource'
+  | 'opensquillaPermissionMode'
+  | 'kimiCodeConfigSource'
+  | 'kimiCodePermissionMode'
   | 'memoryEnabled'
   | 'memoryImplicitUpdateEnabled'
   | 'memoryLlmJudgeEnabled'
@@ -141,7 +151,7 @@ type CoworkConfigUpdate = Partial<Pick<
   | 'memoryUserMemoriesMaxItems'
 >>;
 
-type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui';
+type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui' | 'opensquilla' | 'kimi';
 type CliAuthStatus = 'unknown' | 'logged_out' | 'logged_in' | 'expired' | 'unconfigured';
 
 interface CliAppConfigSnapshot {
@@ -156,7 +166,7 @@ interface CliAppConfigSnapshot {
 }
 
 interface CliCommandStatus {
-  engine: Extract<CoworkAgentEngine, 'openclaw' | 'claude_code' | 'codex' | 'hermes' | 'opencode' | 'grok_build' | 'qwen_code' | 'deepseek_tui'>;
+  engine: Extract<CoworkAgentEngine, 'openclaw' | 'claude_code' | 'codex' | 'hermes' | 'opencode' | 'grok_build' | 'qwen_code' | 'deepseek_tui' | 'opensquilla'>;
   appType: CliAppType;
   command: string;
   found: boolean;
@@ -660,8 +670,8 @@ interface IElectronAPI {
     onStateChanged: (callback: (state: WindowState) => void) => () => void;
   };
   cowork: {
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; agentId?: string; teamId?: string; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }>;
-    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }>;
+    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; agentId?: string; teamId?: string; modelOverride?: CoworkModelOverride | null; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }>;
+    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; modelOverride?: CoworkModelOverride | null; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) => Promise<{ success: boolean; session?: CoworkSession; error?: string; code?: string; engineStatus?: OpenClawEngineStatus }>;
     stopSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
     deleteSessions: (sessionIds: string[]) => Promise<{ success: boolean; error?: string }>;
@@ -695,7 +705,7 @@ interface IElectronAPI {
     respondToPermission: (options: { requestId: string; result: CoworkPermissionResult }) => Promise<{ success: boolean; error?: string }>;
     getConfig: () => Promise<{ success: boolean; config?: CoworkConfig; error?: string }>;
     setConfig: (config: CoworkConfigUpdate) => Promise<{ success: boolean; error?: string }>;
-    listAgentEngines: (input?: { forceRefresh?: boolean }) => Promise<CoworkAgentEngineListResult>;
+    listAgentEngines: (input?: { forceRefresh?: boolean; appTypes?: ExternalAgentProviderAppType[] }) => Promise<CoworkAgentEngineListResult>;
     getRuntimeMetricsSummary: (filters: RuntimeMetricsFilters) => Promise<{ success: boolean; summary?: RuntimeMetricsSummary; error?: string }>;
     listRuntimeCalls: (filters: RuntimeMetricsFilters) => Promise<{ success: boolean; total?: number; calls?: RuntimeCallRecord[]; error?: string }>;
     getRuntimeCallDetail: (callId: string) => Promise<{ success: boolean; call?: RuntimeCallRecord | null; error?: string }>;
@@ -777,6 +787,15 @@ interface IElectronAPI {
     openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
     showItemInFolder: (filePath: string) => Promise<{ success: boolean; error?: string }>;
     openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+  };
+  openSquillaControl: {
+    probe: () => Promise<{ reachable: boolean; status?: number; url: string; error?: string; frameBlocked?: boolean }>;
+  };
+  openSquillaGateway: {
+    status: () => Promise<{ success: boolean; action: string; payload?: Record<string, unknown> | null; error?: string }>;
+    start: () => Promise<{ success: boolean; action: string; payload?: Record<string, unknown> | null; error?: string }>;
+    restart: () => Promise<{ success: boolean; action: string; payload?: Record<string, unknown> | null; error?: string }>;
+    stop: () => Promise<{ success: boolean; action: string; payload?: Record<string, unknown> | null; error?: string }>;
   };
   autoLaunch: {
     get: () => Promise<{ enabled: boolean }>;
@@ -931,6 +950,7 @@ interface IElectronAPI {
     applyPreview: (config: Partial<PetConfig>) => Promise<PetConfig>;
     getBounds: () => Promise<{ x: number; y: number; width: number; height: number } | null>;
     setPosition: (position: PetPosition & { persist?: boolean }) => Promise<{ x: number; y: number; width: number; height: number } | null>;
+    setMouseInteractive: (interactive: boolean) => Promise<boolean>;
     openMainWindow: () => Promise<boolean>;
     getTaskSnapshot: () => Promise<DesktopPetTaskSnapshot | null>;
     openTask: (sessionId: string) => Promise<boolean>;
@@ -1314,6 +1334,8 @@ interface IMSettings {
   skillsEnabled: boolean;
   feishuManagementMode?: FeishuManagementModeType;
   feishuOwnershipByEngine?: Partial<Record<FeishuEngineKeyType, FeishuRuntimeOwnershipType>>;
+  weixinOwnership?: WeixinOwnershipType;
+  platformAgentBindings?: Record<string, string>;
 }
 
 interface IMGatewayStatus {
@@ -1447,6 +1469,8 @@ interface WeixinGatewayStatus {
   lastError: string | null;
   lastInboundAt: number | null;
   lastOutboundAt: number | null;
+  ownership?: WeixinOwnershipType;
+  accountId?: string | null;
 }
 
 interface IMMessage {

@@ -5,8 +5,9 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 
-import { CoworkAgentEngine, DefaultCoworkAgentEngine } from '../shared/cowork/constants';
+import { CoworkAgentEngine, DefaultCoworkAgentEngine, ExternalAgentConfigSource } from '../shared/cowork/constants';
 import { DB_FILENAME } from './appConstants';
+import { ensureCoworkEventSchema } from './coworkEventStore';
 
 type ChangePayload<T = unknown> = {
   key: string;
@@ -15,6 +16,7 @@ type ChangePayload<T = unknown> = {
 };
 
 const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
+const CODEX_CONFIG_SOURCE_DEFAULT_MIGRATION_KEY = 'cowork.codexConfigSource.defaultLocalCli.v1.completed';
 const DEFAULT_AGENT_DB_NAME = 'Default Agent';
 const DEFAULT_AGENT_ENGINE = DefaultCoworkAgentEngine;
 
@@ -101,29 +103,7 @@ export class SqliteStore {
       ON cowork_messages(session_id, sequence);
     `);
 
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS cowork_events (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        source TEXT NOT NULL,
-        source_event_id TEXT,
-        type TEXT NOT NULL,
-        payload_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES cowork_sessions(id) ON DELETE CASCADE,
-        UNIQUE (source, source_event_id)
-      );
-    `);
-
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_cowork_events_session_created
-      ON cowork_events(session_id, created_at, id);
-    `);
-
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_cowork_events_type_created
-      ON cowork_events(type, created_at);
-    `);
+    ensureCoworkEventSchema(this.db);
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS cowork_runtime_calls (
@@ -472,6 +452,7 @@ export class SqliteStore {
       console.warn('Failed to migrate cowork execution mode:', error);
     }
 
+    this.migrateCodexConfigSourceDefault();
     this.migrateLegacyMemoryFileToUserMemories();
     this.migrateFromElectronStore(basePath);
   }
@@ -580,6 +561,28 @@ export class SqliteStore {
       .replace(/\s+/g, ' ')
       .trim();
     return crypto.createHash('sha1').update(normalized).digest('hex');
+  }
+
+  private migrateCodexConfigSourceDefault(): void {
+    if (this.get<string>(CODEX_CONFIG_SOURCE_DEFAULT_MIGRATION_KEY) === '1') {
+      return;
+    }
+
+    try {
+      const now = Date.now();
+      this.db
+        .prepare(`
+          UPDATE cowork_config
+          SET value = ?, updated_at = ?
+          WHERE key = 'codexConfigSource' AND value = ?
+        `)
+        .run(ExternalAgentConfigSource.LocalCli, now, ExternalAgentConfigSource.WesightModel);
+      this.db
+        .prepare('INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)')
+        .run(CODEX_CONFIG_SOURCE_DEFAULT_MIGRATION_KEY, JSON.stringify('1'), now);
+    } catch (error) {
+      console.warn('Failed to migrate Codex config source default:', error);
+    }
   }
 
   private migrateLegacyMemoryFileToUserMemories(): void {

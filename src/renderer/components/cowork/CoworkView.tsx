@@ -1,5 +1,7 @@
 import { ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { AgentRunTargetType, CoworkAgentEngine, DefaultAgent, ExternalAgentConfigSource } from '@shared/cowork/constants';
+import type { CoworkModelOverride } from '@shared/cowork/runtimeSnapshot';
+import { buildFallbackSessionTitle } from '@shared/cowork/sessionTitle';
 import React, { useEffect, useRef,useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 
@@ -85,6 +87,14 @@ const usesLocalCliModelConfigForEngine = (
     engine === CoworkAgentEngine.DeepSeekTui
     && config.deepseekTuiConfigSource === ExternalAgentConfigSource.LocalCli
   )
+  || (
+    engine === CoworkAgentEngine.OpenSquilla
+    && config.opensquillaConfigSource === ExternalAgentConfigSource.LocalCli
+  )
+  || (
+    engine === CoworkAgentEngine.KimiCode
+    && config.kimiCodeConfigSource === ExternalAgentConfigSource.LocalCli
+  )
 );
 
 const shouldRequireWesightModelConfig = (engine?: CoworkAgentEngine): boolean => (
@@ -103,7 +113,21 @@ const getCliAppTypeForEngine = (engine: CoworkAgentEngine): ExternalAgentProvide
   if (engine === CoworkAgentEngine.GrokBuild) return 'grok';
   if (engine === CoworkAgentEngine.QwenCode) return 'qwen';
   if (engine === CoworkAgentEngine.DeepSeekTui) return 'deepseek_tui';
+  if (engine === CoworkAgentEngine.OpenSquilla) return 'opensquilla';
+  if (engine === CoworkAgentEngine.KimiCode) return 'kimi';
   return null;
+};
+
+const buildSelectedModelOverride = (
+  model: RootState['model']['selectedModel'] | null | undefined,
+): CoworkModelOverride | null => {
+  if (!model?.id) return null;
+  return {
+    modelId: model.id,
+    modelName: model.name || model.id,
+    providerKey: model.providerKey ?? null,
+    providerName: model.provider ?? null,
+  };
 };
 
 const getEngineLabelKey = (engine: CoworkAgentEngine): string => {
@@ -115,6 +139,8 @@ const getEngineLabelKey = (engine: CoworkAgentEngine): string => {
   if (engine === CoworkAgentEngine.GrokBuild) return 'coworkAgentEngineGrokBuild';
   if (engine === CoworkAgentEngine.QwenCode) return 'coworkAgentEngineQwenCode';
   if (engine === CoworkAgentEngine.DeepSeekTui) return 'coworkAgentEngineDeepSeekTui';
+  if (engine === CoworkAgentEngine.OpenSquilla) return 'coworkAgentEngineOpenSquilla';
+  if (engine === CoworkAgentEngine.KimiCode) return 'coworkAgentEngineKimiCode';
   if (engine === CoworkAgentEngine.CodexApp) return 'coworkAgentEngineCodexApp';
   return 'coworkAgentEngineClaudeLegacy';
 };
@@ -246,7 +272,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     const appType = getCliAppTypeForEngine(selectedRuntimeEngine);
     if (!appType) return true;
     try {
-      const snapshot = await coworkService.getAgentEngineSnapshot();
+      const snapshot = await coworkService.getAgentEngineSnapshot({ appTypes: [appType] });
       const status = snapshot?.engines.find((item) => item.appType === appType);
       if (status?.found) {
         return true;
@@ -331,7 +357,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
       unsubscribe();
       unsubscribeOpenClawStatus();
     };
-  }, [dispatch]);
+  }, [dispatch, onRequestAppSettings, selectedRuntimeEngine]);
 
   const handleStartSession = async (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]): Promise<boolean | void> => {
     // Prevent duplicate submissions
@@ -378,7 +404,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
       // Create a temporary session with user message to show immediately
       const tempSessionId = `temp-${Date.now()}`;
-      const fallbackTitle = prompt.split('\n')[0].slice(0, 50) || i18nService.t('coworkNewSession');
+      const fallbackTitle = buildFallbackSessionTitle(prompt, i18nService.t('coworkNewSession'));
       const now = Date.now();
 
       // Capture active skill IDs before clearing them
@@ -447,6 +473,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         activeSkillIds: sessionSkillIds,
         agentId: currentAgentId,
         teamId: currentTargetType === AgentRunTargetType.Team && currentTeamId ? currentTeamId : undefined,
+        modelOverride: buildSelectedModelOverride(selectedModel),
         imageAttachments,
       });
 
@@ -537,6 +564,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         prompt,
         systemPrompt: combinedSystemPrompt,
         activeSkillIds: sessionSkillIds.length > 0 ? sessionSkillIds : undefined,
+        modelOverride: buildSelectedModelOverride(selectedModel),
         imageAttachments,
       });
     } finally {
@@ -597,6 +625,10 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         return i18nService.t('coworkAgentEngineQwenCode');
       case CoworkAgentEngine.DeepSeekTui:
         return i18nService.t('coworkAgentEngineDeepSeekTui');
+      case CoworkAgentEngine.OpenSquilla:
+        return i18nService.t('coworkAgentEngineOpenSquilla');
+      case CoworkAgentEngine.KimiCode:
+        return i18nService.t('coworkAgentEngineKimiCode');
       case CoworkAgentEngine.OpenClaw:
         return i18nService.t('coworkAgentEngineOpenClaw');
       case CoworkAgentEngine.Hermes:
@@ -681,17 +713,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     const normalizedCommand = command.toLowerCase();
     switch (normalizedCommand) {
       case '/model':
-        if (currentSession) {
-          const runtime = currentSession.runtimeSnapshot;
-          showSlashToast(
-            runtime
-              ? i18nService.t('coworkRuntimeLockedToast')
-                .replace('{engine}', runtime.engineLabel)
-                .replace('{model}', runtime.modelLabel || runtime.modelName || runtime.modelId || '-')
-              : i18nService.t('coworkRuntimeLocked'),
-          );
-          return true;
-        }
         openModelSelector();
         return true;
       case '/context':
@@ -777,6 +798,18 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     if (
       selectedRuntimeEngine === CoworkAgentEngine.DeepSeekTui
       && config.deepseekTuiConfigSource === ExternalAgentConfigSource.LocalCli
+    ) {
+      return i18nService.t('coworkAgentConfigSourceLocalCli');
+    }
+    if (
+      selectedRuntimeEngine === CoworkAgentEngine.OpenSquilla
+      && config.opensquillaConfigSource === ExternalAgentConfigSource.LocalCli
+    ) {
+      return i18nService.t('coworkAgentConfigSourceLocalCli');
+    }
+    if (
+      selectedRuntimeEngine === CoworkAgentEngine.KimiCode
+      && config.kimiCodeConfigSource === ExternalAgentConfigSource.LocalCli
     ) {
       return i18nService.t('coworkAgentConfigSourceLocalCli');
     }
@@ -942,7 +975,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
         dispatch(clearSelection());
       }
     }
-  }, [activeSkillIds]);
+  }, [activeSkillIds, dispatch, quickActions, selectedActionId]);
 
   // Handle prompt selection from QuickAction
   const handleQuickActionPromptSelect = (prompt: string) => {
@@ -978,7 +1011,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     return () => {
       window.removeEventListener('focus', handleWindowFocus);
     };
-  }, [currentSession?.id, currentSession?.status, isOpenClawEngine]);
+  }, [currentSession, currentSession?.id, currentSession?.status, isOpenClawEngine]);
 
   if (!isInitialized) {
     return (
@@ -1130,6 +1163,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
                 engineSelectorReadOnly={!canSelectRuntimeEngine}
                 showModelSelector={true}
                 modelSelectorReadOnly={!canSelectRuntimeEngine}
+                runtimeSelectorDropdownDirection="down"
                 onManageSkills={() => onShowSkills?.()}
               />
             </div>

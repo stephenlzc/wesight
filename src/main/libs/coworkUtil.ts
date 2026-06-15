@@ -3,6 +3,12 @@ import { app } from 'electron';
 import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
 
+import {
+  buildFallbackSessionTitle,
+  buildSessionTitleContext,
+  buildSessionTitlePrompt,
+  normalizeSessionTitleToPlainText,
+} from '../../shared/cowork/sessionTitle';
 import { type ApiConfigOverride,buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig, resolveRawApiConfig } from './claudeSettings';
 import { coworkLog } from './coworkLogger';
 import {
@@ -187,22 +193,28 @@ export function resolveUserShellPath(): string | null {
  */
 let cachedWindowsRegistryPath: string | null | undefined;
 
-function readWindowsRegistryPathValue(registryKey: string): string {
+function queryWindowsRegistryValue(registryKey: string, valueName: string, timeout = 8000): string {
   try {
-    const output = execSync(`reg query "${registryKey}" /v Path`, {
+    const result = spawnSync('reg', ['query', registryKey, '/v', valueName], {
       encoding: 'utf-8',
-      timeout: 8000,
+      timeout,
+      stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
     });
-
-    for (const line of output.split(/\r?\n/)) {
-      const match = line.match(/^\s*Path\s+REG_\w+\s+(.+)$/i);
-      if (match?.[1]) {
-        return match[1].trim();
-      }
-    }
+    return result.status === 0 && typeof result.stdout === 'string' ? result.stdout : '';
   } catch {
-    // Ignore missing keys or access-denied errors.
+    return '';
+  }
+}
+
+function readWindowsRegistryPathValue(registryKey: string): string {
+  const output = queryWindowsRegistryValue(registryKey, 'Path');
+
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^\s*Path\s+REG_\w+\s+(.+)$/i);
+    if (match?.[1]) {
+      return match[1].trim();
+    }
   }
 
   return '';
@@ -331,17 +343,13 @@ function listGitInstallPathsFromRegistry(): string[] {
   const installRoots: string[] = [];
 
   for (const key of registryKeys) {
-    try {
-      const output = execSync(`reg query "${key}" /v InstallPath`, { encoding: 'utf-8', timeout: 5000 });
-      for (const line of output.split(/\r?\n/)) {
-        const match = line.match(/InstallPath\s+REG_\w+\s+(.+)$/i);
-        const root = normalizeWindowsPath(match?.[1]);
-        if (root) {
-          installRoots.push(root);
-        }
+    const output = queryWindowsRegistryValue(key, 'InstallPath', 5000);
+    for (const line of output.split(/\r?\n/)) {
+      const match = line.match(/InstallPath\s+REG_\w+\s+(.+)$/i);
+      const root = normalizeWindowsPath(match?.[1]);
+      if (root) {
+        installRoots.push(root);
       }
-    } catch {
-      // registry key might not exist
     }
   }
 
@@ -488,11 +496,11 @@ export function ensureElectronNodeShim(electronPath: string, npmBinDir?: string)
     const nodeSh = join(shimDir, 'node');
     const nodeShContent = [
       '#!/usr/bin/env bash',
-      'if [ -z "${LOBSTERAI_ELECTRON_PATH:-}" ]; then',
-      '  echo "LOBSTERAI_ELECTRON_PATH is not set" >&2',
+      'if [ -z "${WESIGHT_ELECTRON_PATH:-}" ]; then',
+      '  echo "WESIGHT_ELECTRON_PATH is not set" >&2',
       '  exit 127',
       'fi',
-      'exec env ELECTRON_RUN_AS_NODE=1 "${LOBSTERAI_ELECTRON_PATH}" "$@"',
+      'exec env ELECTRON_RUN_AS_NODE=1 "${WESIGHT_ELECTRON_PATH}" "$@"',
       '',
     ].join('\n');
 
@@ -509,12 +517,12 @@ export function ensureElectronNodeShim(electronPath: string, npmBinDir?: string)
       const nodeCmd = join(shimDir, 'node.cmd');
       const nodeCmdContent = [
         '@echo off',
-        'if "%LOBSTERAI_ELECTRON_PATH%"=="" (',
-        '  echo LOBSTERAI_ELECTRON_PATH is not set 1>&2',
+        'if "%WESIGHT_ELECTRON_PATH%"=="" (',
+        '  echo WESIGHT_ELECTRON_PATH is not set 1>&2',
         '  exit /b 127',
         ')',
         'set ELECTRON_RUN_AS_NODE=1',
-        '"%LOBSTERAI_ELECTRON_PATH%" %*',
+        '"%WESIGHT_ELECTRON_PATH%" %*',
         '',
       ].join('\r\n');
       writeFileSync(nodeCmd, nodeCmdContent, 'utf8');
@@ -548,17 +556,17 @@ export function ensureElectronNodeShim(electronPath: string, npmBinDir?: string)
         try { chmodSync(npxSh, 0o755); } catch { /* ignore */ }
         coworkLog('INFO', 'resolveNodeShim', `Created npx bash shim: ${npxSh} -> ${npxCliJsPosix}`);
 
-        // npx.cmd for Windows — uses %LOBSTERAI_NPM_BIN_DIR% env var to avoid
+        // npx.cmd for Windows — uses %WESIGHT_NPM_BIN_DIR% env var to avoid
         // hardcoding paths that may contain non-ASCII chars (breaks GBK cmd.exe).
         if (process.platform === 'win32') {
           const npxCmd = join(shimDir, 'npx.cmd');
           const npxCmdContent = [
             '@echo off',
-            '"%~dp0node.cmd" "%LOBSTERAI_NPM_BIN_DIR%\\npx-cli.js" %*',
+            '"%~dp0node.cmd" "%WESIGHT_NPM_BIN_DIR%\\npx-cli.js" %*',
             '',
           ].join('\r\n');
           writeFileSync(npxCmd, npxCmdContent, 'utf8');
-          coworkLog('INFO', 'resolveNodeShim', `Created npx.cmd shim: ${npxCmd} (using env var LOBSTERAI_NPM_BIN_DIR)`);
+          coworkLog('INFO', 'resolveNodeShim', `Created npx.cmd shim: ${npxCmd} (using env var WESIGHT_NPM_BIN_DIR)`);
         }
       } else {
         coworkLog('WARN', 'resolveNodeShim', `npx-cli.js not found at: ${npxCliJs}`);
@@ -577,17 +585,17 @@ export function ensureElectronNodeShim(electronPath: string, npmBinDir?: string)
         try { chmodSync(npmSh, 0o755); } catch { /* ignore */ }
         coworkLog('INFO', 'resolveNodeShim', `Created npm bash shim: ${npmSh} -> ${npmCliJsPosix}`);
 
-        // npm.cmd for Windows — uses %LOBSTERAI_NPM_BIN_DIR% env var to avoid
+        // npm.cmd for Windows — uses %WESIGHT_NPM_BIN_DIR% env var to avoid
         // hardcoding paths that may contain non-ASCII chars (breaks GBK cmd.exe).
         if (process.platform === 'win32') {
           const npmCmd = join(shimDir, 'npm.cmd');
           const npmCmdContent = [
             '@echo off',
-            '"%~dp0node.cmd" "%LOBSTERAI_NPM_BIN_DIR%\\npm-cli.js" %*',
+            '"%~dp0node.cmd" "%WESIGHT_NPM_BIN_DIR%\\npm-cli.js" %*',
             '',
           ].join('\r\n');
           writeFileSync(npmCmd, npmCmdContent, 'utf8');
-          coworkLog('INFO', 'resolveNodeShim', `Created npm.cmd shim: ${npmCmd} (using env var LOBSTERAI_NPM_BIN_DIR)`);
+          coworkLog('INFO', 'resolveNodeShim', `Created npm.cmd shim: ${npmCmd} (using env var WESIGHT_NPM_BIN_DIR)`);
         }
       } else {
         coworkLog('WARN', 'resolveNodeShim', `npm-cli.js not found at: ${npmCliJs}`);
@@ -991,13 +999,13 @@ function ensureWindowsBashUtf8InitScript(): string | null {
 function applyPackagedEnvOverrides(env: Record<string, string | undefined>): void {
   const electronNodeRuntimePath = getElectronNodeRuntimePath();
 
-  if (app.isPackaged && !env.LOBSTERAI_ELECTRON_PATH) {
-    env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+  if (app.isPackaged && !env.WESIGHT_ELECTRON_PATH) {
+    env.WESIGHT_ELECTRON_PATH = electronNodeRuntimePath;
   }
 
   // On Windows, resolve git-bash and ensure Git toolchain directories are available in PATH.
   if (process.platform === 'win32') {
-    env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+    env.WESIGHT_ELECTRON_PATH = electronNodeRuntimePath;
 
     // Force UTF-8 encoding for MSYS2/git-bash.
     //
@@ -1086,7 +1094,7 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
           const diagnostic = truncateDiagnostic(
             `Configured bash is unhealthy (${configuredBashPath}): ${configuredHealth.reason || 'unknown reason'}`
           );
-          env.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR = diagnostic;
+          env.WESIGHT_GIT_BASH_RESOLUTION_ERROR = diagnostic;
           coworkLog('WARN', 'resolveGitBash', diagnostic);
           bashPath = null;
         }
@@ -1095,7 +1103,7 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
 
     if (bashPath) {
       env.CLAUDE_CODE_GIT_BASH_PATH = bashPath;
-      delete env.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR;
+      delete env.WESIGHT_GIT_BASH_RESOLUTION_ERROR;
       coworkLog('INFO', 'resolveGitBash', `Using Windows git-bash: ${bashPath}`);
       const gitToolDirs = getWindowsGitToolDirs(bashPath);
       env.PATH = appendEnvPath(env.PATH, gitToolDirs);
@@ -1103,7 +1111,7 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
       ensureWindowsBashBootstrapPath(env);
     } else {
       const diagnostic = cachedGitBashResolutionError || 'git-bash not found or failed health checks';
-      env.LOBSTERAI_GIT_BASH_RESOLUTION_ERROR = truncateDiagnostic(diagnostic);
+      env.WESIGHT_GIT_BASH_RESOLUTION_ERROR = truncateDiagnostic(diagnostic);
     }
 
     appendPythonRuntimeToEnv(env);
@@ -1188,7 +1196,7 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
 
   // Set env var so .cmd shims can reference npmBinDir without hardcoding
   // non-ASCII characters (which break on Windows when cmd.exe uses GBK code page).
-  env.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
+  env.WESIGHT_NPM_BIN_DIR = npmBinDir;
 
   const hasSystemNode = hasCommandInEnv('node', env);
   const hasSystemNpx = hasCommandInEnv('npx', env);
@@ -1201,7 +1209,7 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
     const shimDir = ensureElectronNodeShim(electronNodeRuntimePath, npmBinDir);
     if (shimDir) {
       env.PATH = [shimDir, env.PATH].filter(Boolean).join(delimiter);
-      env.LOBSTERAI_NODE_SHIM_ACTIVE = '1';
+      env.WESIGHT_NODE_SHIM_ACTIVE = '1';
       coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node/npx/npm shim PATH entry: ${shimDir}`);
       if (shouldForcePackagedDarwinShim) {
         coworkLog('INFO', 'resolveNodeShim', 'Packaged macOS build: forcing bundled Electron node/npx/npm shims to avoid stale system Node versions');
@@ -1214,7 +1222,7 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
       }
     }
   } else {
-    delete env.LOBSTERAI_NODE_SHIM_ACTIVE;
+    delete env.WESIGHT_NODE_SHIM_ACTIVE;
     coworkLog('INFO', 'resolveNodeShim', 'System node/npx/npm detected; skipped Electron node shim injection');
   }
 
@@ -1274,7 +1282,7 @@ function verifyNodeEnvironment(env: Record<string, string | undefined>): void {
           try {
             let execTarget = resolvedForExec;
             if (process.platform === 'win32' && /\.cmd$/i.test(resolvedForExec)) {
-              execTarget = env.LOBSTERAI_ELECTRON_PATH || process.execPath;
+              execTarget = env.WESIGHT_ELECTRON_PATH || process.execPath;
             }
             const versionResult = spawnSync(execTarget, ['--version'], {
               env: { ...env, ELECTRON_RUN_AS_NODE: '1' } as NodeJS.ProcessEnv,
@@ -1303,8 +1311,8 @@ function verifyNodeEnvironment(env: Record<string, string | undefined>): void {
 
   // Log key env vars
   coworkLog('INFO', tag, `NODE_PATH=${env.NODE_PATH || '(not set)'}`);
-  coworkLog('INFO', tag, `LOBSTERAI_ELECTRON_PATH=${env.LOBSTERAI_ELECTRON_PATH || '(not set)'}`);
-  coworkLog('INFO', tag, `LOBSTERAI_NPM_BIN_DIR=${env.LOBSTERAI_NPM_BIN_DIR || '(not set)'}`);
+  coworkLog('INFO', tag, `WESIGHT_ELECTRON_PATH=${env.WESIGHT_ELECTRON_PATH || '(not set)'}`);
+  coworkLog('INFO', tag, `WESIGHT_NPM_BIN_DIR=${env.WESIGHT_NPM_BIN_DIR || '(not set)'}`);
   coworkLog('INFO', tag, `HOME=${env.HOME || '(not set)'}`);
 }
 
@@ -1319,7 +1327,7 @@ export function getSkillsRoot(): string {
 
   // In development, __dirname can vary with bundling output (e.g. dist-electron/ or dist-electron/libs/).
   // Resolve from several stable anchors and pick the first existing SKILLs directory.
-  const envRoots = [process.env.LOBSTERAI_SKILLS_ROOT, process.env.SKILLS_ROOT]
+  const envRoots = [process.env.WESIGHT_SKILLS_ROOT, process.env.SKILLS_ROOT]
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value));
   const candidates = [
@@ -1347,6 +1355,7 @@ export function getSkillsRoot(): string {
 type EnhancedEnvOptions = {
   injectCoworkModelConfig?: boolean;
   apiConfigOverride?: ApiConfigOverride;
+  proxyProbeUrl?: string;
 };
 
 const COWORK_MODEL_ENV_KEYS = [
@@ -1392,15 +1401,15 @@ export async function getEnhancedEnv(
   // backslashes as escape characters).
   const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
   env.SKILLS_ROOT = skillsRoot;
-  env.LOBSTERAI_SKILLS_ROOT = skillsRoot; // Alternative name for clarity
-  if (process.platform === 'win32' || env.LOBSTERAI_NODE_SHIM_ACTIVE === '1') {
-    env.LOBSTERAI_ELECTRON_PATH = getElectronNodeRuntimePath().replace(/\\/g, '/');
+  env.WESIGHT_SKILLS_ROOT = skillsRoot; // Alternative name for clarity
+  if (process.platform === 'win32' || env.WESIGHT_NODE_SHIM_ACTIVE === '1') {
+    env.WESIGHT_ELECTRON_PATH = getElectronNodeRuntimePath().replace(/\\/g, '/');
   } else {
-    delete env.LOBSTERAI_ELECTRON_PATH;
+    delete env.WESIGHT_ELECTRON_PATH;
   }
 
   // Skip system proxy resolution if proxy env vars already exist
-  if (env.http_proxy || env.HTTP_PROXY || env.https_proxy || env.HTTPS_PROXY) {
+  if (env.http_proxy || env.HTTP_PROXY || env.https_proxy || env.HTTPS_PROXY || env.all_proxy || env.ALL_PROXY) {
     return env;
   }
 
@@ -1410,12 +1419,14 @@ export async function getEnhancedEnv(
   }
 
   // Resolve proxy from system settings
-  const proxyUrl = await resolveSystemProxyUrl('https://openrouter.ai');
+  const proxyUrl = await resolveSystemProxyUrl(options.proxyProbeUrl || 'https://openrouter.ai');
   if (proxyUrl) {
     env.http_proxy = proxyUrl;
     env.https_proxy = proxyUrl;
     env.HTTP_PROXY = proxyUrl;
     env.HTTPS_PROXY = proxyUrl;
+    env.all_proxy = proxyUrl;
+    env.ALL_PROXY = proxyUrl;
     console.log('Injected system proxy for subprocess:', proxyUrl);
   }
 
@@ -1464,9 +1475,54 @@ export async function getEnhancedEnvWithTmpdir(
 }
 
 const SESSION_TITLE_FALLBACK = 'New Session';
-const SESSION_TITLE_MAX_CHARS = 50;
+const SESSION_TITLE_OUTPUT_TOKEN_BUDGET = 256;
 const SESSION_TITLE_TIMEOUT_MS = 15000;
 const COWORK_MODEL_PROBE_TIMEOUT_MS = 20000;
+
+function matchesApiHostname(baseURL: string, hostname: string): boolean {
+  try {
+    const parsedHostname = new URL(baseURL).hostname.toLowerCase();
+    return parsedHostname === hostname || parsedHostname.endsWith(`.${hostname}`);
+  } catch {
+    const normalizedBaseURL = baseURL.toLowerCase();
+    const normalizedHostname = hostname.toLowerCase();
+    let matchIndex = normalizedBaseURL.indexOf(normalizedHostname);
+
+    while (matchIndex >= 0) {
+      const before = matchIndex === 0 ? '' : normalizedBaseURL[matchIndex - 1];
+      const after = normalizedBaseURL[matchIndex + normalizedHostname.length] || '';
+      const hasValidPrefix = matchIndex === 0 || before === '/' || before === '.';
+      const hasValidSuffix = !after || after === '/' || after === ':';
+
+      if (hasValidPrefix && hasValidSuffix) {
+        return true;
+      }
+
+      matchIndex = normalizedBaseURL.indexOf(normalizedHostname, matchIndex + normalizedHostname.length);
+    }
+
+    return false;
+  }
+}
+
+function isDeepSeekApiBaseUrl(baseURL: string): boolean {
+  return matchesApiHostname(baseURL, 'deepseek.com');
+}
+
+function isMiniMaxApiBaseUrl(baseURL: string): boolean {
+  return matchesApiHostname(baseURL, 'minimaxi.com');
+}
+
+function shouldDisableAnthropicTitleThinking(baseURL: string): boolean {
+  return isDeepSeekApiBaseUrl(baseURL) || isMiniMaxApiBaseUrl(baseURL);
+}
+
+function shouldDisableOpenAICompatTitleThinking(baseURL: string, providerName?: string): boolean {
+  return providerName === 'deepseek'
+    || providerName === 'minimax'
+    || isDeepSeekApiBaseUrl(baseURL)
+    || isMiniMaxApiBaseUrl(baseURL);
+}
 
 type SessionTitleApiConfig =
   | {
@@ -1474,18 +1530,21 @@ type SessionTitleApiConfig =
       apiKey: string;
       baseURL: string;
       model: string;
+      providerName?: string;
     }
   | {
       protocol: typeof CoworkModelProtocol.GeminiNative;
       apiKey: string;
       baseURL: string;
       model: string;
+      providerName?: string;
     }
   | {
       protocol: typeof CoworkModelProtocol.OpenAICompat;
       apiKey: string;
       baseURL: string;
       model: string;
+      providerName?: string;
     };
 
 function resolveSessionTitleApiConfig(): { config: SessionTitleApiConfig | null; error?: string } {
@@ -1497,6 +1556,7 @@ function resolveSessionTitleApiConfig(): { config: SessionTitleApiConfig | null;
         apiKey: rawResolution.config.apiKey,
         baseURL: rawResolution.config.baseURL,
         model: rawResolution.config.model,
+        providerName: rawResolution.providerMetadata?.providerName,
       },
     };
   }
@@ -1516,6 +1576,7 @@ function resolveSessionTitleApiConfig(): { config: SessionTitleApiConfig | null;
         apiKey: resolution.config.apiKey,
         baseURL: resolution.config.baseURL,
         model: resolution.config.model,
+        providerName: resolution.providerMetadata?.providerName,
       },
     };
   }
@@ -1526,67 +1587,13 @@ function resolveSessionTitleApiConfig(): { config: SessionTitleApiConfig | null;
       apiKey: resolution.config.apiKey,
       baseURL: resolution.config.baseURL,
       model: resolution.config.model,
+      providerName: resolution.providerMetadata?.providerName,
     },
   };
 }
 
-function normalizeTitleToPlainText(value: string, fallback: string): string {
-  if (!value.trim()) return fallback;
-
-  let title = value.trim();
-  const fenced = /```(?:[\w-]+)?\s*([\s\S]*?)```/i.exec(title);
-  if (fenced?.[1]) {
-    title = fenced[1].trim();
-  }
-
-  title = title
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/__([^_]+)__/g, '$1')
-    .replace(/\*([^*\n]+)\*/g, '$1')
-    .replace(/_([^_\n]+)_/g, '$1')
-    .replace(/~~([^~]+)~~/g, '$1')
-    .replace(/^\s{0,3}#{1,6}\s+/, '')
-    .replace(/^\s*>\s?/, '')
-    .replace(/^\s*[-*+]\s+/, '')
-    .replace(/^\s*\d+\.\s+/, '')
-    .replace(/\r?\n+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  const labeledTitle = /^(?:title|标题)\s*[:：]\s*(.+)$/i.exec(title);
-  if (labeledTitle?.[1]) {
-    title = labeledTitle[1].trim();
-  }
-
-  title = title
-    .replace(/^["'`“”‘’]+/, '')
-    .replace(/["'`“”‘’]+$/, '')
-    .trim();
-
-  if (!title) return fallback;
-  if (title.length > SESSION_TITLE_MAX_CHARS) {
-    title = title.slice(0, SESSION_TITLE_MAX_CHARS).trim();
-  }
-  return title || fallback;
-}
-
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
-}
-
-function buildFallbackSessionTitle(userIntent: string | null): string {
-  const normalizedInput = typeof userIntent === 'string' ? userIntent.trim() : '';
-  if (!normalizedInput) {
-    return SESSION_TITLE_FALLBACK;
-  }
-  const firstLine = normalizedInput
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean) || '';
-  return normalizeTitleToPlainText(firstLine, SESSION_TITLE_FALLBACK);
 }
 
 export async function probeCoworkModelReadiness(
@@ -1702,9 +1709,9 @@ export async function probeCoworkModelReadiness(
 }
 
 export async function generateSessionTitle(userIntent: string | null): Promise<string> {
-  const normalizedInput = typeof userIntent === 'string' ? userIntent.trim() : '';
-  const fallbackTitle = buildFallbackSessionTitle(normalizedInput);
-  if (!normalizedInput) {
+  const titleContext = buildSessionTitleContext(userIntent);
+  const fallbackTitle = buildFallbackSessionTitle(titleContext, SESSION_TITLE_FALLBACK);
+  if (!titleContext) {
     return fallbackTitle;
   }
 
@@ -1725,8 +1732,8 @@ export async function generateSessionTitle(userIntent: string | null): Promise<s
       : config.protocol === CoworkModelProtocol.OpenAICompat
         ? buildOpenAIChatCompletionsUrl(config.baseURL)
       : buildAnthropicMessagesUrl(config.baseURL);
-    const prompt = `Return one plain-text title in the same language, max ${SESSION_TITLE_MAX_CHARS} chars: ${normalizedInput}`;
-    console.log(`[cowork-title] Generating title: protocol=${config.protocol}, baseURL=${config.baseURL}, requestUrl=${url}, model=${config.model}`);
+    const prompt = buildSessionTitlePrompt(titleContext);
+    console.log(`[cowork-title] Generating title: protocol=${config.protocol}, provider=${config.providerName || 'unknown'}, baseURL=${config.baseURL}, requestUrl=${url}, model=${config.model}`);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -1750,23 +1757,30 @@ export async function generateSessionTitle(userIntent: string | null): Promise<s
           ? {
               contents: [{ role: 'user', parts: [{ text: prompt }] }],
               generationConfig: {
-                maxOutputTokens: 80,
+                maxOutputTokens: SESSION_TITLE_OUTPUT_TOKEN_BUDGET,
                 temperature: 0,
               },
             }
           : config.protocol === CoworkModelProtocol.OpenAICompat
-            ? {
-                model: config.model,
-                messages: [{ role: 'user', content: prompt }],
-                // Reasoning models may spend hidden tokens before emitting text.
-                max_tokens: 128,
-                temperature: 0,
-                stream: false,
-              }
-          : {
+              ? {
+                  model: config.model,
+                  messages: [{ role: 'user', content: prompt }],
+                  // DeepSeek and MiniMax-M3 enable thinking by default and can
+                  // spend hidden tokens before emitting visible text. Disable
+                  // it for short title requests when the provider supports it.
+                  max_tokens: SESSION_TITLE_OUTPUT_TOKEN_BUDGET,
+                  ...(shouldDisableOpenAICompatTitleThinking(config.baseURL, config.providerName)
+                    ? { thinking: { type: 'disabled' } }
+                    : {}),
+                  stream: false,
+                }
+            : {
               model: config.model,
-              max_tokens: 80,
+              max_tokens: SESSION_TITLE_OUTPUT_TOKEN_BUDGET,
               temperature: 0,
+              ...(shouldDisableAnthropicTitleThinking(config.baseURL)
+                ? { thinking: { type: 'disabled' } }
+                : {}),
               messages: [{ role: 'user', content: prompt }],
             }
       ),
@@ -1790,8 +1804,9 @@ export async function generateSessionTitle(userIntent: string | null): Promise<s
       : config.protocol === CoworkModelProtocol.OpenAICompat
         ? extractTextFromOpenAIChatCompletionResponse(payload)
       : extractTextFromAnthropicResponse(payload);
-    console.log(`[cowork-title] Extracted title text: "${llmTitle}"`);
-    return normalizeTitleToPlainText(llmTitle, fallbackTitle);
+    const title = normalizeSessionTitleToPlainText(llmTitle, fallbackTitle);
+    console.log(`[cowork-title] Extracted title text: "${llmTitle || title}"`);
+    return title;
   } catch (error) {
     if (isAbortError(error)) {
       const timeoutSeconds = Math.ceil(SESSION_TITLE_TIMEOUT_MS / 1000);

@@ -106,6 +106,22 @@ const AGENT_SETUP_TARGETS: AgentSetupTarget[] = [
     primary: false,
     recommended: false,
   },
+  {
+    engine: CoworkAgentEngine.OpenSquilla,
+    appType: 'opensquilla',
+    labelKey: 'coworkAgentEngineOpenSquilla',
+    hintKey: 'coworkAgentEngineOpenSquillaHint',
+    primary: false,
+    recommended: false,
+  },
+  {
+    engine: CoworkAgentEngine.KimiCode,
+    appType: 'kimi',
+    labelKey: 'coworkAgentEngineKimiCode',
+    hintKey: 'coworkAgentEngineKimiCodeHint',
+    primary: false,
+    recommended: false,
+  },
 ];
 
 const RECOMMENDED_APP_TYPES = AGENT_SETUP_TARGETS
@@ -160,16 +176,25 @@ const AgentEnvironmentSetup: React.FC<AgentEnvironmentSetupProps> = ({
   const selectedTarget = findTargetByEngine(effectiveSelectedEngine);
   const primaryTargets = AGENT_SETUP_TARGETS.filter((target) => target.primary);
   const moreTargets = AGENT_SETUP_TARGETS.filter((target) => !target.primary);
+  const initialScanAppTypes = useMemo(() => (
+    Array.from(new Set([
+      ...RECOMMENDED_APP_TYPES,
+      ...(selectedTarget ? [selectedTarget.appType] : []),
+    ]))
+  ), [selectedTarget]);
 
   const publishSnapshot = useCallback((nextSnapshot: ExternalAgentEnvironmentSnapshot | null) => {
     setSnapshot(nextSnapshot);
     onSnapshotChange?.(nextSnapshot);
   }, [onSnapshotChange]);
 
-  const refreshSnapshot = useCallback(async () => {
+  const refreshSnapshot = useCallback(async (options: {
+    forceRefresh?: boolean;
+    appTypes?: ExternalAgentProviderAppType[];
+  } = {}) => {
     setIsScanning(true);
     try {
-      const nextSnapshot = await coworkService.getAgentEngineSnapshot();
+      const nextSnapshot = await coworkService.getAgentEngineSnapshot(options);
       publishSnapshot(nextSnapshot);
       return nextSnapshot;
     } finally {
@@ -178,8 +203,8 @@ const AgentEnvironmentSetup: React.FC<AgentEnvironmentSetupProps> = ({
   }, [publishSnapshot]);
 
   useEffect(() => {
-    void refreshSnapshot();
-  }, [refreshSnapshot]);
+    void refreshSnapshot({ appTypes: initialScanAppTypes });
+  }, [initialScanAppTypes, refreshSnapshot]);
 
   useEffect(() => {
     return coworkService.onAgentCliInstallProgress((progress) => {
@@ -199,6 +224,28 @@ const AgentEnvironmentSetup: React.FC<AgentEnvironmentSetupProps> = ({
   const getCliStatus = useCallback((target: AgentSetupTarget) => {
     return snapshot?.engines.find((item) => item.appType === target.appType) ?? null;
   }, [snapshot]);
+
+  const getRepairHintKey = useCallback((target: AgentSetupTarget): string | null => {
+    const status = getCliStatus(target);
+    if (!status || status.checking) {
+      return null;
+    }
+    if (!status.found) {
+      return isSupportedInstallPlatform
+        ? 'agentSetupRepairCliMissingInstall'
+        : 'agentSetupRepairCliMissingManual';
+    }
+    if (!status.config.configExists) {
+      return 'agentSetupRepairConfigMissing';
+    }
+    if (status.error) {
+      return 'agentSetupRepairCliError';
+    }
+    if (status.authStatus !== 'logged_in') {
+      return 'agentSetupRepairAuthMissing';
+    }
+    return null;
+  }, [getCliStatus, isSupportedInstallPlatform]);
 
   const missingRecommendedAppTypes = useMemo(() => {
     return RECOMMENDED_APP_TYPES.filter((appType) => {
@@ -295,11 +342,13 @@ const AgentEnvironmentSetup: React.FC<AgentEnvironmentSetupProps> = ({
     const progress = installProgress[target.appType];
     const isSelected = target.engine === effectiveSelectedEngine;
     const isInstalling = installingAppType === target.appType;
+    const checked = Boolean(status);
     const found = Boolean(status?.found);
     const percent = getProgressPercent(progress?.phase);
     const progressMessage = progress?.detail
       ? `${progress.message} ${progress.detail}`
       : progress?.message;
+    const repairHintKey = getRepairHintKey(target);
 
     return (
       <button
@@ -336,10 +385,24 @@ const AgentEnvironmentSetup: React.FC<AgentEnvironmentSetupProps> = ({
           <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 ${
             found
               ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+              : !checked
+                ? 'bg-primary/10 text-primary'
               : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
           }`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${found ? 'bg-green-500' : 'bg-amber-500'}`} />
-            {i18nService.t(found ? 'coworkAgentEngineCliInstalled' : 'coworkAgentEngineCliMissing')}
+            <span className={`h-1.5 w-1.5 rounded-full ${
+              found
+                ? 'bg-green-500'
+                : !checked
+                  ? 'bg-primary animate-pulse'
+                  : 'bg-amber-500'
+            }`} />
+            {i18nService.t(
+              found
+                ? 'coworkAgentEngineCliInstalled'
+                : !checked
+                  ? 'coworkAgentEngineCliChecking'
+                  : 'coworkAgentEngineCliMissing'
+            )}
           </span>
           {status?.version && (
             <span className="max-w-[180px] truncate rounded-full bg-background px-2 py-1 font-mono text-[11px] text-secondary">
@@ -365,7 +428,7 @@ const AgentEnvironmentSetup: React.FC<AgentEnvironmentSetupProps> = ({
           </div>
         )}
 
-        {!found && (
+        {checked && !found && (
           <div className="mt-3" onClick={(event) => event.stopPropagation()}>
             {isSupportedInstallPlatform ? (
               <button
@@ -382,6 +445,13 @@ const AgentEnvironmentSetup: React.FC<AgentEnvironmentSetupProps> = ({
                 {i18nService.t('coworkAgentEngineInstallCliUnsupported')}
               </div>
             )}
+          </div>
+        )}
+
+        {repairHintKey && (
+          <div className="mt-3 flex gap-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] leading-5 text-amber-700 dark:text-amber-300">
+            <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{i18nService.t(repairHintKey)}</span>
           </div>
         )}
 
@@ -429,7 +499,7 @@ const AgentEnvironmentSetup: React.FC<AgentEnvironmentSetupProps> = ({
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => void refreshSnapshot()}
+              onClick={() => void refreshSnapshot({ forceRefresh: true })}
               disabled={isScanning || Boolean(installingAppType)}
               className="inline-flex items-center justify-center rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground hover:bg-surface-raised disabled:cursor-wait disabled:opacity-60"
             >

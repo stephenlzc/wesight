@@ -24,7 +24,7 @@ import {
 } from './hermesConfig';
 import { readOpenClawGlobalConfig, summarizeOpenClawConfig } from './openclawSystemRuntime';
 
-export type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui';
+export type CliAppType = 'claude' | 'codex' | 'hermes' | 'openclaw' | 'opencode' | 'grok' | 'qwen' | 'deepseek_tui' | 'opensquilla' | 'kimi';
 export type CliAuthStatus = 'unknown' | 'logged_out' | 'logged_in' | 'expired' | 'unconfigured';
 
 export interface CliAppConfigSnapshot {
@@ -71,6 +71,8 @@ export interface ExternalAgentEnvironmentSnapshot {
 
 export interface CliProbeMetric {
   command: string;
+  path: string | null;
+  version: string | null;
   resolveMs: number;
   versionMs?: number;
   found: boolean;
@@ -88,6 +90,14 @@ export interface ExternalAgentEnvironmentSnapshotResult {
   report: ExternalAgentEnvironmentProbeReport;
 }
 
+export interface ExternalAgentEnvironmentProbeOptions {
+  commandProbeTimeoutMs?: number;
+  versionProbeTimeoutMs?: number;
+  versionProbeTimeoutMsByAppType?: Partial<Record<CliAppType, number>>;
+  appTypes?: CliAppType[];
+  includeUserShellPath?: boolean;
+}
+
 type CcSwitchSettings = {
   claude_config_dir?: unknown;
   codex_config_dir?: unknown;
@@ -102,6 +112,12 @@ type CcSwitchSettings = {
 type ProviderRow = {
   id: string;
   name: string;
+};
+
+type CliConfigSummary = {
+  providerId: string | null;
+  providerName: string | null;
+  count: number;
 };
 
 const homeDir = (): string => os.homedir();
@@ -247,9 +263,118 @@ const getQwenCodeConfigDir = (): string => path.join(homeDir(), '.qwen');
 
 const getDeepSeekTuiConfigDir = (): string => path.join(homeDir(), '.deepseek');
 
+const getOpenSquillaConfigDir = (): string => path.join(homeDir(), '.opensquilla');
+
+const getKimiCodeConfigDir = (): string => path.join(homeDir(), '.kimi-code');
+
+const getKimiSdkConfigDir = (): string => path.join(homeDir(), '.kimi');
+
+const getKimiCodeBinDir = (): string => path.join(getKimiCodeConfigDir(), 'bin');
+
+const getKimiCodeCredentialsPath = (): string => path.join(getKimiCodeConfigDir(), 'credentials', 'kimi-code.json');
+
+const getNestedRecord = (value: unknown, key: string): Record<string, unknown> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const nested = (value as Record<string, unknown>)[key];
+  return nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : {};
+};
+
+const getString = (value: unknown): string => {
+  return typeof value === 'string' ? value.trim() : '';
+};
+
+const extractTomlString = (configText: string, key: string): string => {
+  const match = configText.match(new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']*)["']`, 'm'));
+  return match?.[1]?.trim() ?? '';
+};
+
+const readTomlTableBody = (configText: string, tableName: string): string => {
+  const escapedTableName = tableName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = configText.match(
+    new RegExp(`^\\s*\\[${escapedTableName}\\]\\s*\\r?\\n([\\s\\S]*?)(?=\\r?\\n\\s*\\[|$)`, 'm'),
+  );
+  return match?.[1] ?? '';
+};
+
+const normalizeTomlTableKey = (value: string): string => {
+  return value
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .trim();
+};
+
+const listCodexModelProviderIds = (configText: string): string[] => {
+  const ids = new Set<string>();
+  const tablePattern = /^\s*\[model_providers\.([^\]]+)\]\s*$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = tablePattern.exec(configText)) !== null) {
+    const id = normalizeTomlTableKey(match[1] ?? '');
+    if (id) ids.add(id);
+  }
+  return [...ids];
+};
+
+const readCodexModelProviderBody = (configText: string, providerId: string): string => {
+  const escapedProviderId = providerId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const tableMatch = configText.match(
+    new RegExp(`^\\s*\\[model_providers\\.(?:"${escapedProviderId}"|'${escapedProviderId}'|${escapedProviderId})\\]\\s*\\r?\\n([\\s\\S]*?)(?=\\r?\\n\\s*\\[|$)`, 'm'),
+  );
+  return tableMatch?.[1] ?? '';
+};
+
+const readClaudeNativeConfigSummary = (settingsPath: string): CliConfigSummary => {
+  const settings = readJsonObject(settingsPath);
+  if (!settings) return { providerId: null, providerName: null, count: 0 };
+  const env = getNestedRecord(settings, 'env');
+  const apiKey = getString(env.ANTHROPIC_AUTH_TOKEN) || getString(env.ANTHROPIC_API_KEY);
+  const baseUrl = getString(env.ANTHROPIC_BASE_URL);
+  const model = getString(env.ANTHROPIC_MODEL)
+    || getString(env.ANTHROPIC_DEFAULT_SONNET_MODEL)
+    || getString(env.ANTHROPIC_DEFAULT_OPUS_MODEL)
+    || getString(env.ANTHROPIC_DEFAULT_HAIKU_MODEL)
+    || getString(env.ANTHROPIC_SMALL_FAST_MODEL);
+  if (!isNonPlaceholderSecret(apiKey) || (!baseUrl && !model)) {
+    return { providerId: null, providerName: model || null, count: 0 };
+  }
+  return {
+    providerId: 'local-live',
+    providerName: 'Local Claude Code',
+    count: 1,
+  };
+};
+
+const readCodexNativeConfigSummary = (
+  configPath: string,
+  authPath: string,
+): CliConfigSummary => {
+  const configText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  const modelProvider = extractTomlString(configText, 'model_provider');
+  const model = extractTomlString(configText, 'model');
+  const providerIds = listCodexModelProviderIds(configText);
+  const providerBody = modelProvider ? readCodexModelProviderBody(configText, modelProvider) : '';
+  const providerName = extractTomlString(providerBody, 'name') || modelProvider || model || null;
+  if (providerIds.length > 0) {
+    return {
+      providerId: modelProvider || providerIds[0] || null,
+      providerName,
+      count: providerIds.length,
+    };
+  }
+  if (modelProvider || model || fileContainsCredential(authPath)) {
+    return {
+      providerId: modelProvider || 'local-live',
+      providerName: providerName || 'Local Codex',
+      count: 1,
+    };
+  }
+  return { providerId: null, providerName: null, count: 0 };
+};
+
 const readOpenCodeConfigSummary = (
   configPath: string,
-): { providerId: string | null; providerName: string | null; count: number } => {
+): CliConfigSummary => {
   const config = readJsonObject(configPath);
   if (!config) {
     return { providerId: null, providerName: null, count: 0 };
@@ -271,7 +396,7 @@ const readOpenCodeConfigSummary = (
 
 const readQwenCodeConfigSummary = (
   configPath: string,
-): { providerId: string | null; providerName: string | null; count: number } => {
+): CliConfigSummary => {
   const config = readJsonObject(configPath);
   if (!config) {
     return { providerId: null, providerName: null, count: 0 };
@@ -301,7 +426,7 @@ const readQwenCodeConfigSummary = (
 
 const readDeepSeekTuiConfigSummary = (
   configPath: string,
-): { providerId: string | null; providerName: string | null; count: number } => {
+): CliConfigSummary => {
   if (!fs.existsSync(configPath)) {
     return { providerId: null, providerName: null, count: 0 };
   }
@@ -317,7 +442,7 @@ const readDeepSeekTuiConfigSummary = (
 
 const readGrokBuildConfigSummary = (
   configPath: string,
-): { providerId: string | null; providerName: string | null; count: number } => {
+): CliConfigSummary => {
   if (!fs.existsSync(configPath)) {
     return { providerId: null, providerName: null, count: 0 };
   }
@@ -332,7 +457,7 @@ const readGrokBuildConfigSummary = (
 const readHermesConfigSummary = (
   configPath: string,
   envPath: string,
-): { providerId: string | null; providerName: string | null; count: number } => {
+): CliConfigSummary => {
   if (!fs.existsSync(configPath)) {
     return { providerId: null, providerName: null, count: 0 };
   }
@@ -351,13 +476,60 @@ const readHermesConfigSummary = (
 
 const readOpenClawConfigSummary = (
   configPath: string,
-): { providerId: string | null; providerName: string | null; count: number } => {
+): CliConfigSummary => {
   const summary = summarizeOpenClawConfig(readOpenClawGlobalConfig(configPath));
   const model = summary.currentModel;
   return {
     providerId: model?.includes('/') ? model.split('/')[0] : model,
     providerName: model,
     count: model ? 1 : 0,
+  };
+};
+
+const readOpenSquillaConfigSummary = (
+  configPath: string,
+  secondaryConfigPaths: string[],
+): CliConfigSummary => {
+  const configText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  const llmBody = readTomlTableBody(configText, 'llm');
+  const providerRoutingBody = readTomlTableBody(configText, 'llm.provider_routing');
+  const provider = extractTomlString(llmBody, 'provider')
+    || extractTomlString(providerRoutingBody, 'provider')
+    || extractTomlString(configText, 'llm.provider')
+    || extractTomlString(configText, 'provider')
+    || extractTomlString(configText, 'model_provider')
+    || extractTomlString(configText, 'router');
+  const model = extractTomlString(llmBody, 'model')
+    || extractTomlString(providerRoutingBody, 'model')
+    || extractTomlString(configText, 'llm.model')
+    || extractTomlString(configText, 'model')
+    || extractTomlString(configText, 'default_model')
+    || extractTomlString(configText, 'model_id');
+  const providerName = provider && model ? `${provider}/${model}` : provider || model || null;
+  const hasConfig = Boolean(configText.trim()) || secondaryConfigPaths.some((filePath) => fs.existsSync(filePath));
+  return {
+    providerId: provider || (hasConfig ? 'local-cli' : null),
+    providerName: providerName || (hasConfig ? 'Local OpenSquilla' : null),
+    count: hasConfig ? 1 : 0,
+  };
+};
+
+const readKimiCodeConfigSummary = (
+  configPath: string,
+  secondaryConfigPaths: string[],
+): CliConfigSummary => {
+  const configText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  const defaultModel = extractTomlString(configText, 'default_model')
+    || extractTomlString(configText, 'defaultModel')
+    || extractTomlString(configText, 'model');
+  const provider = extractTomlString(configText, 'provider')
+    || extractTomlString(configText, 'model_provider');
+  const modelCount = (configText.match(/^\s*\[\[?models(?:\.|\])|^\s*\[models\./gm) ?? []).length;
+  const hasConfig = Boolean(configText.trim()) || secondaryConfigPaths.some((filePath) => fs.existsSync(filePath));
+  return {
+    providerId: provider || (hasConfig ? 'local-cli' : null),
+    providerName: defaultModel || provider || (hasConfig ? 'Local Kimi Code' : null),
+    count: modelCount || (hasConfig ? 1 : 0),
   };
 };
 
@@ -376,6 +548,8 @@ const localEnvKeysByAppType: Record<CliAppType, string[]> = {
   grok: ['GROK_API_KEY', 'XAI_API_KEY', 'X_AI_API_KEY'],
   qwen: ['DASHSCOPE_API_KEY', 'QWEN_API_KEY'],
   deepseek_tui: ['DEEPSEEK_API_KEY', 'OPENAI_API_KEY'],
+  opensquilla: ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'DEEPSEEK_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'MOONSHOT_API_KEY', 'ZAI_API_KEY', 'Z_AI_API_KEY'],
+  kimi: ['MOONSHOT_API_KEY', 'KIMI_API_KEY'],
 };
 
 const formatAuthSource = (filePath: string): string => (
@@ -415,6 +589,20 @@ const buildAuthPathCandidates = (
     return [
       ...common,
       path.join(configDir, 'oauth_creds.json'),
+    ];
+  }
+  if (appType === 'kimi') {
+    const sdkDir = getKimiSdkConfigDir();
+    return [
+      ...common,
+      path.join(configDir, 'auth.json'),
+      path.join(configDir, 'credentials.json'),
+      path.join(configDir, 'oauth.json'),
+      getKimiCodeCredentialsPath(),
+      path.join(sdkDir, 'config.toml'),
+      path.join(sdkDir, 'auth.json'),
+      path.join(sdkDir, 'credentials.json'),
+      path.join(sdkDir, 'oauth.json'),
     ];
   }
   return common;
@@ -480,7 +668,7 @@ const readCurrentProviderFromDb = (
   appType: CliAppType,
   settingsCurrentProviderId: string | null,
 ): { provider: ProviderRow | null; count: number } => {
-  if (appType === 'openclaw' || appType === 'opencode' || appType === 'grok' || appType === 'qwen' || appType === 'deepseek_tui') {
+  if (appType === 'openclaw' || appType === 'opencode' || appType === 'grok' || appType === 'qwen' || appType === 'deepseek_tui' || appType === 'opensquilla' || appType === 'kimi') {
     return { provider: null, count: 0 };
   }
   if (!fs.existsSync(dbPath)) {
@@ -524,7 +712,7 @@ interface CommandResult {
   error: string | null;
 }
 
-interface CommandResolution {
+export interface CliCommandResolution {
   found: boolean;
   path: string | null;
   error: string | null;
@@ -541,6 +729,7 @@ const runCommand = (
       env: options.env,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: process.platform === 'win32',
       windowsVerbatimArguments: options.windowsVerbatimArguments,
     });
     const timeoutMs = options.timeoutMs ?? DEFAULT_CLI_PROBE_TIMEOUT_MS;
@@ -593,17 +782,25 @@ const runCommand = (
   })
 );
 
-const buildProbeEnv = (): NodeJS.ProcessEnv => ({
-  ...process.env,
-  PATH: [
+const buildProbeEnv = (
+  options: ExternalAgentEnvironmentProbeOptions = {},
+): NodeJS.ProcessEnv => {
+  const pathEntries = [
     process.env.PATH ?? '',
     path.join(homeDir(), '.npm-global', 'bin'),
     path.join(homeDir(), '.local', 'bin'),
+    getKimiCodeBinDir(),
     '/opt/homebrew/bin',
     '/usr/local/bin',
-    resolveUserShellPath() ?? '',
-  ].join(path.delimiter),
-});
+  ];
+  if (options.includeUserShellPath !== false) {
+    pathEntries.push(resolveUserShellPath() ?? '');
+  }
+  return {
+    ...process.env,
+    PATH: pathEntries.join(path.delimiter),
+  };
+};
 
 const getWindowsSearchPaths = (command: string): string[] => {
   const home = homeDir();
@@ -626,9 +823,13 @@ const getWindowsSearchPaths = (command: string): string[] => {
   }
   if (command === 'claude') {
     return [
+      localAppData
+        ? path.join(localAppData, 'Programs', 'Claude', 'claude.exe')
+        : null,
       path.join(appData, 'npm', 'claude.cmd'),
+      path.join(home, 'AppData', 'Local', 'Programs', 'Claude', 'claude.exe'),
       path.join(home, '.local', 'bin', 'claude.exe'),
-    ];
+    ].filter((candidate): candidate is string => Boolean(candidate));
   }
   if (command === 'codex') {
     return [
@@ -659,9 +860,32 @@ const getWindowsSearchPaths = (command: string): string[] => {
       path.join(appData, 'npm', 'deepseek-tui.cmd'),
     ];
   }
+  if (command === 'opensquilla') {
+    return [
+      path.join(home, '.local', 'bin', 'opensquilla.exe'),
+      path.join(home, '.local', 'bin', 'opensquilla'),
+    ];
+  }
+  if (command === 'kimi') {
+    return [
+      path.join(appData, 'npm', 'kimi.cmd'),
+      path.join(home, '.kimi-code', 'bin', 'kimi.exe'),
+      path.join(home, '.kimi-code', 'bin', 'kimi'),
+      path.join(home, '.local', 'bin', 'kimi.exe'),
+      path.join(home, '.local', 'bin', 'kimi'),
+    ];
+  }
 
   return [];
 };
+
+const isWindowsNetworkPath = (candidate: string): boolean => (
+  /^\\\\/.test(candidate)
+);
+
+const isSafeWindowsFastProbePath = (candidate: string): boolean => (
+  !isWindowsNetworkPath(candidate)
+);
 
 const preferWindowsExecutable = (candidates: string[]): string | null => {
   if (candidates.length === 0) return null;
@@ -670,25 +894,29 @@ const preferWindowsExecutable = (candidates: string[]): string | null => {
     ?? null;
 };
 
-const isWindowsCommandShim = (commandPath: string): boolean => {
+export const isWindowsCommandShim = (commandPath: string): boolean => {
   return process.platform === 'win32' && /\.(cmd|bat)$/i.test(commandPath);
 };
 
-const buildWindowsCommandShimArgs = (commandPath: string, args: string[]): string[] => {
+export const buildWindowsCommandShimArgs = (commandPath: string, args: string[]): string[] => {
   return ['/d', '/s', '/c', `call "${commandPath}" ${args.map((arg) => `"${arg.replace(/"/g, '\\"')}"`).join(' ')}`];
 };
 
-const resolveCommand = async (command: string): Promise<CommandResolution> => {
+export const resolveCliCommand = async (
+  command: string,
+  options: ExternalAgentEnvironmentProbeOptions = {},
+): Promise<CliCommandResolution> => {
   if (process.platform === 'win32') {
     for (const candidate of getWindowsSearchPaths(command)) {
-      if (candidate && fs.existsSync(candidate)) {
+      if (candidate && isSafeWindowsFastProbePath(candidate) && fs.existsSync(candidate)) {
         return { found: true, path: candidate, error: null, timedOut: false };
       }
     }
   }
 
   const result = await runCommand(process.platform === 'win32' ? 'where' : 'which', [command], {
-    env: buildProbeEnv(),
+    env: buildProbeEnv(options),
+    timeoutMs: options.commandProbeTimeoutMs,
   });
   if (result.status === 0) {
     const candidates = result.stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -701,7 +929,8 @@ const resolveCommand = async (command: string): Promise<CommandResolution> => {
   if (process.platform !== 'win32') {
     const shellPath = process.env.SHELL || '/bin/zsh';
     const shellResult = await runCommand(shellPath, ['-lc', `command -v ${quoteForShell(command)}`], {
-      env: buildProbeEnv(),
+      env: buildProbeEnv(options),
+      timeoutMs: options.commandProbeTimeoutMs,
     });
     if (shellResult.status === 0) {
       const commandPath = shellResult.stdout.split(/\r?\n/).map(line => line.trim()).find(Boolean) ?? null;
@@ -725,13 +954,20 @@ const resolveCommand = async (command: string): Promise<CommandResolution> => {
   };
 };
 
-const readCommandVersion = async (command: string): Promise<{ version: string | null; durationMs: number; timedOut: boolean }> => {
+const readCommandVersion = async (
+  command: string,
+  appType: CliAppType,
+  options: ExternalAgentEnvironmentProbeOptions = {},
+): Promise<{ version: string | null; durationMs: number; timedOut: boolean }> => {
   const startedAt = Date.now();
   const executable = isWindowsCommandShim(command) ? 'cmd.exe' : command;
   const args = isWindowsCommandShim(command)
     ? buildWindowsCommandShimArgs(command, ['--version'])
     : ['--version'];
   const result = await runCommand(executable, args, {
+    timeoutMs: options.versionProbeTimeoutMsByAppType?.[appType]
+      ?? options.versionProbeTimeoutMs
+      ?? options.commandProbeTimeoutMs,
     windowsVerbatimArguments: isWindowsCommandShim(command),
   });
   const durationMs = Date.now() - startedAt;
@@ -766,7 +1002,13 @@ const buildCliConfigSnapshot = (
         ? getGrokBuildConfigDir()
         : appType === 'qwen'
           ? getQwenCodeConfigDir()
-          : getDeepSeekTuiConfigDir();
+          : appType === 'deepseek_tui'
+            ? getDeepSeekTuiConfigDir()
+            : appType === 'opensquilla'
+              ? getOpenSquillaConfigDir()
+              : fs.existsSync(path.join(getKimiCodeConfigDir(), 'config.toml'))
+                ? getKimiCodeConfigDir()
+                : getKimiSdkConfigDir();
   const primaryConfigPath = appType === 'claude'
     ? resolveClaudeSettingsPath(configDir)
     : appType === 'codex'
@@ -781,7 +1023,11 @@ const buildCliConfigSnapshot = (
         ? path.join(configDir, 'config.toml')
         : appType === 'qwen'
           ? path.join(configDir, 'settings.json')
-          : path.join(configDir, 'config.toml');
+          : appType === 'deepseek_tui'
+            ? path.join(configDir, 'config.toml')
+            : appType === 'opensquilla'
+              ? path.join(configDir, 'config.toml')
+              : path.join(configDir, 'config.toml');
   const secondaryConfigPaths = appType === 'claude'
     ? [resolveClaudeMcpPath(configDir, Boolean(claudeOverride))]
     : appType === 'codex'
@@ -796,7 +1042,22 @@ const buildCliConfigSnapshot = (
         ? [path.join(configDir, 'auth.json')]
         : appType === 'qwen'
           ? [path.join(configDir, 'oauth_creds.json')]
-          : [path.join(configDir, 'sessions')];
+          : appType === 'deepseek_tui'
+            ? [path.join(configDir, 'sessions')]
+            : appType === 'opensquilla'
+              ? [path.join(configDir, 'opensquilla.toml'), path.join(configDir, '.env'), path.join(configDir, 'state')]
+              : [
+                path.join(configDir, 'session_index.jsonl'),
+                path.join(configDir, 'skills'),
+                path.join(configDir, 'mcp.json'),
+                path.join(getKimiCodeConfigDir(), 'config.toml'),
+                getKimiCodeCredentialsPath(),
+                path.join(getKimiCodeConfigDir(), 'session_index.jsonl'),
+                path.join(getKimiCodeConfigDir(), 'skills'),
+                path.join(getKimiSdkConfigDir(), 'config.toml'),
+                path.join(getKimiSdkConfigDir(), 'session_index.jsonl'),
+                path.join(getKimiSdkConfigDir(), 'skills'),
+              ];
   const settingsCurrentProviderId = getCurrentProviderSetting(settings, appType);
   if (appType === 'opencode') {
     const summary = readOpenCodeConfigSummary(primaryConfigPath);
@@ -876,7 +1137,40 @@ const buildCliConfigSnapshot = (
       providerCount: summary.count,
     };
   }
+  if (appType === 'opensquilla') {
+    const summary = readOpenSquillaConfigSummary(primaryConfigPath, secondaryConfigPaths);
+    return {
+      appType,
+      configDir,
+      primaryConfigPath,
+      secondaryConfigPaths,
+      configExists: fs.existsSync(primaryConfigPath),
+      currentProviderId: summary.providerId,
+      currentProviderName: summary.providerName,
+      providerCount: summary.count,
+    };
+  }
+  if (appType === 'kimi') {
+    const summary = readKimiCodeConfigSummary(primaryConfigPath, secondaryConfigPaths);
+    return {
+      appType,
+      configDir,
+      primaryConfigPath,
+      secondaryConfigPaths,
+      configExists: fs.existsSync(primaryConfigPath),
+      currentProviderId: summary.providerId,
+      currentProviderName: summary.providerName,
+      providerCount: summary.count,
+    };
+  }
   const { provider, count } = readCurrentProviderFromDb(dbPath, appType, settingsCurrentProviderId);
+  const nativeSummary = !provider && count === 0
+    ? appType === 'claude'
+      ? readClaudeNativeConfigSummary(primaryConfigPath)
+      : appType === 'codex'
+        ? readCodexNativeConfigSummary(primaryConfigPath, secondaryConfigPaths[0] || path.join(configDir, 'auth.json'))
+        : { providerId: null, providerName: null, count: 0 }
+    : { providerId: null, providerName: null, count: 0 };
 
   return {
     appType,
@@ -884,9 +1178,9 @@ const buildCliConfigSnapshot = (
     primaryConfigPath,
     secondaryConfigPaths,
     configExists: fs.existsSync(primaryConfigPath),
-    currentProviderId: provider?.id ?? settingsCurrentProviderId,
-    currentProviderName: provider?.name ?? null,
-    providerCount: count,
+    currentProviderId: provider?.id ?? settingsCurrentProviderId ?? nativeSummary.providerId,
+    currentProviderName: provider?.name ?? nativeSummary.providerName,
+    providerCount: count || nativeSummary.count,
   };
 };
 
@@ -896,13 +1190,14 @@ const buildCommandStatus = (
   command: string,
   settings: CcSwitchSettings,
   dbPath: string,
+  options: ExternalAgentEnvironmentProbeOptions = {},
 ): Promise<{ status: CliCommandStatus; metric: CliProbeMetric }> => (
   (async () => {
     const resolveStartedAt = Date.now();
-    const resolution = await resolveCommand(command);
+    const resolution = await resolveCliCommand(command, options);
     const resolveMs = Date.now() - resolveStartedAt;
     const versionResult = resolution.found
-      ? await readCommandVersion(resolution.path ?? command)
+      ? await readCommandVersion(resolution.path ?? command, appType, options)
       : { version: null, durationMs: 0, timedOut: false };
     const config = buildCliConfigSnapshot(appType, settings, dbPath);
     const auth = summarizeCliAuthStatus(appType, config);
@@ -920,6 +1215,8 @@ const buildCommandStatus = (
       },
       metric: {
         command,
+        path: resolution.path,
+        version: versionResult.version,
         resolveMs,
         versionMs: versionResult.durationMs,
         found: resolution.found,
@@ -960,7 +1257,19 @@ const AGENT_ENGINE_COMMANDS = [
   { engine: CoworkAgentEngine.GrokBuild, appType: 'grok', command: 'grok' },
   { engine: CoworkAgentEngine.QwenCode, appType: 'qwen', command: 'qwen' },
   { engine: CoworkAgentEngine.DeepSeekTui, appType: 'deepseek_tui', command: 'deepseek-tui' },
+  { engine: CoworkAgentEngine.OpenSquilla, appType: 'opensquilla', command: 'opensquilla' },
+  { engine: CoworkAgentEngine.KimiCode, appType: 'kimi', command: 'kimi' },
 ] as const satisfies Array<{ engine: CliCoworkAgentEngine; appType: CliAppType; command: string }>;
+
+const listAgentEngineCommands = (
+  options: ExternalAgentEnvironmentProbeOptions = {},
+): typeof AGENT_ENGINE_COMMANDS[number][] => {
+  if (!options.appTypes?.length) {
+    return [...AGENT_ENGINE_COMMANDS];
+  }
+  const appTypes = new Set<CliAppType>(options.appTypes);
+  return AGENT_ENGINE_COMMANDS.filter(({ appType }) => appTypes.has(appType));
+};
 
 const buildCcSwitchSnapshot = (
   appDir: string,
@@ -995,21 +1304,26 @@ const readBaseSnapshotInputs = (): {
   return { appDir, settingsPath, dbPath, settings };
 };
 
-export function getPlaceholderExternalAgentEnvironmentSnapshot(): ExternalAgentEnvironmentSnapshot {
+export function getPlaceholderExternalAgentEnvironmentSnapshot(
+  options: ExternalAgentEnvironmentProbeOptions = {},
+): ExternalAgentEnvironmentSnapshot {
   const { appDir, settingsPath, dbPath, settings } = readBaseSnapshotInputs();
+  const commands = listAgentEngineCommands(options);
   return {
     ccSwitch: buildCcSwitchSnapshot(appDir, settingsPath, dbPath, settings),
-    engines: AGENT_ENGINE_COMMANDS.map(({ engine, appType, command }) => (
+    engines: commands.map(({ engine, appType, command }) => (
       buildPlaceholderCommandStatus(engine, appType, command, settings, dbPath)
     )),
   };
 }
 
-export async function getExternalAgentEnvironmentSnapshot(): Promise<ExternalAgentEnvironmentSnapshotResult> {
+export async function getExternalAgentEnvironmentSnapshot(
+  options: ExternalAgentEnvironmentProbeOptions = {},
+): Promise<ExternalAgentEnvironmentSnapshotResult> {
   const startedAt = Date.now();
   const { appDir, settingsPath, dbPath, settings } = readBaseSnapshotInputs();
-  const results = await Promise.all(AGENT_ENGINE_COMMANDS.map(({ engine, appType, command }) => (
-    buildCommandStatus(engine, appType, command, settings, dbPath)
+  const results = await Promise.all(listAgentEngineCommands(options).map(({ engine, appType, command }) => (
+    buildCommandStatus(engine, appType, command, settings, dbPath, options)
   )));
 
   return {

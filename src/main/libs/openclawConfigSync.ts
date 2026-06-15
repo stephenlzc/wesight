@@ -4,11 +4,12 @@ import path from 'path';
 
 import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
 import { ExternalAgentConfigSource } from '../../shared/cowork/constants';
+import { WeixinOwnership } from '../../shared/im/constants';
 import { PlatformRegistry } from '../../shared/platform';
 import { OpenClawApi as OpenClawApiConst,OpenClawProviderId, ProviderName } from '../../shared/providers';
 import type { Agent,CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { DiscordOpenClawConfig, IMSettings,TelegramOpenClawConfig } from '../im/types';
-import type { DingTalkInstanceConfig, DingTalkOpenClawConfig, FeishuInstanceConfig, NeteaseBeeChanConfig,NimConfig, PopoOpenClawConfig, QQInstanceConfig, WecomOpenClawConfig, WeixinOpenClawConfig } from '../im/types';
+import type { DingTalkInstanceConfig, FeishuInstanceConfig, NeteaseBeeChanConfig,NimConfig, PopoOpenClawConfig, QQInstanceConfig, WecomOpenClawConfig, WeixinOpenClawConfig } from '../im/types';
 import { getAllServerModelMetadata,resolveAllEnabledProviderConfigs, resolveAllProviderApiKeys, resolveRawApiConfig } from './claudeSettings';
 import { getCoworkOpenAICompatProxyBaseURL } from './coworkOpenAICompatProxy';
 import type { McpToolManifestEntry } from './mcpServerManager';
@@ -169,6 +170,42 @@ const ALL_MANAGED_AGENTS_MARKERS = [MANAGED_AGENTS_MARKER, ...LEGACY_MANAGED_AGE
 
 const stripManagedAgentsMarkers = (value: string): string => {
   return ALL_MANAGED_AGENTS_MARKERS.reduce((next, marker) => next.replaceAll(marker, ''), value);
+};
+
+const normalizeEnvSuffix = (value: string): string =>
+  value.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+
+const API_KEY_ENV_SUFFIX_ALIASES: Record<string, string[]> = {
+  ZHIPU: ['ZAI'],
+  ZAI: ['ZHIPU'],
+  GEMINI: ['GOOGLE'],
+  GOOGLE: ['GEMINI'],
+  WESIGHT_SERVER: ['SERVER'],
+  SERVER: ['WESIGHT_SERVER'],
+  GITHUB_COPILOT: ['WESIGHT_COPILOT'],
+  WESIGHT_COPILOT: ['GITHUB_COPILOT'],
+};
+
+const setApiKeyEnv = (env: Record<string, string>, suffix: string, apiKey: string): void => {
+  const normalizedSuffix = normalizeEnvSuffix(suffix);
+  if (!normalizedSuffix) return;
+  env[`WESIGHT_APIKEY_${normalizedSuffix}`] = apiKey;
+  env[`LOBSTER_APIKEY_${normalizedSuffix}`] = apiKey;
+  for (const alias of API_KEY_ENV_SUFFIX_ALIASES[normalizedSuffix] ?? []) {
+    env[`WESIGHT_APIKEY_${alias}`] = apiKey;
+    env[`LOBSTER_APIKEY_${alias}`] = apiKey;
+  }
+};
+
+const readApiKeyEnvAlias = (env: Record<string, string>, envName: string): string | null => {
+  const match = envName.match(/^(WESIGHT|LOBSTER)_APIKEY_(.+)$/);
+  if (!match) return null;
+  const [, prefix, suffix] = match;
+  for (const alias of API_KEY_ENV_SUFFIX_ALIASES[suffix] ?? []) {
+    const value = env[`${prefix}_APIKEY_${alias}`] || process.env[`${prefix}_APIKEY_${alias}`];
+    if (value?.trim()) return value;
+  }
+  return null;
 };
 
 const MANAGED_WEB_SEARCH_POLICY_PROMPT = [
@@ -1045,6 +1082,7 @@ export class OpenClawConfigSync {
     const neteaseBeeChanConfig = this.getNeteaseBeeChanConfig();
 
     const weixinConfig = this.getWeixinConfig();
+    const weixinOwnedByOpenClaw = this.getIMSettings?.()?.weixinOwnership === WeixinOwnership.LocalOpenClaw;
 
     const hasAnyChannel = hasDingTalkOpenClaw || feishuInstances.some(i => i.enabled && i.appId);
 
@@ -1129,7 +1167,7 @@ export class OpenClawConfigSync {
                 if (id === 'moltbot-popo') return !!(popoConfig?.enabled && popoConfig.appKey);
                 if (id === 'nim') return !!(nimConfig?.enabled && nimConfig.appKey && nimConfig.account && nimConfig.token);
                 if (id === 'openclaw-netease-bee') return !!(neteaseBeeChanConfig?.enabled && neteaseBeeChanConfig.clientId && neteaseBeeChanConfig.secret);
-                if (id === 'openclaw-weixin') return true; // Always keep enabled for QR login discovery
+                if (id === 'openclaw-weixin') return weixinOwnedByOpenClaw && !!(weixinConfig?.enabled);
                 return true; // other plugins stay enabled
               })();
               return [id, { enabled: pluginEnabled }];
@@ -1461,7 +1499,7 @@ export class OpenClawConfigSync {
     // Sync Weixin OpenClaw channel config (via openclaw-weixin plugin)
     // Always write the channel entry — use enabled:false when disabled so the
     // Gateway stops the channel instead of falling back to plugin defaults.
-    const weixinChannelEnabled = !!(weixinConfig?.enabled);
+    const weixinChannelEnabled = weixinOwnedByOpenClaw && !!(weixinConfig?.enabled);
     const weixinChannel: Record<string, unknown> = {
       enabled: weixinChannelEnabled,
       ...(weixinConfig?.accountId ? { accountId: weixinConfig.accountId } : {}),
@@ -1623,49 +1661,19 @@ export class OpenClawConfigSync {
    * placeholders for these values so that no plaintext secrets are stored on disk.
    */
   collectSecretEnvVars(): Record<string, string> {
+    const env: Record<string, string> = {};
+    this.collectProviderApiKeyEnvVars(env);
+    this.collectPersistedApiKeyPlaceholderEnvVars(env);
+
     if (this.getCoworkConfig().openclawConfigSource === ExternalAgentConfigSource.LocalCli) {
-      const env: Record<string, string> = {};
       if (this.shouldWriteFeishuChannel()) {
         this.collectFeishuSecretEnvVars(env);
       }
       return env;
     }
-    const env: Record<string, string> = {};
 
-    // Provider API Keys — one per configured provider so switching models
-    // never changes env vars and avoids gateway process restarts.
-    const allApiKeys = resolveAllProviderApiKeys();
-    for (const [envSuffix, apiKey] of Object.entries(allApiKeys)) {
-      env[`WESIGHT_APIKEY_${envSuffix}`] = apiKey;
-      env[`LOBSTER_APIKEY_${envSuffix}`] = apiKey;
-    }
-    for (const provider of resolveAllEnabledProviderConfigs()) {
-      const envSuffix = provider.providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-      const envName = `WESIGHT_APIKEY_${envSuffix}`;
-      if (!env[envName]) {
-        env[envName] = provider.apiKey?.trim() || 'sk-wesight-local';
-      }
-      const legacyEnvName = `LOBSTER_APIKEY_${envSuffix}`;
-      if (!env[legacyEnvName]) {
-        env[legacyEnvName] = env[envName];
-      }
-    }
-    try {
-      const persistedConfig = fs.readFileSync(this.engineManager.getConfigPath(), 'utf8');
-      for (const match of persistedConfig.matchAll(API_KEY_PLACEHOLDER_PATTERN)) {
-        const envName = match[1];
-        if (envName && !env[envName]) {
-          env[envName] = 'sk-wesight-local';
-        }
-      }
-    } catch {
-      // The config may not exist yet during first-run preparation.
-    }
-    // Legacy fallback: keep LOBSTER_PROVIDER_API_KEY set to a stable value so stale
-    // openclaw.json files with the old placeholder don't crash the gateway.
-    // Use the active provider's key if available, but ONLY for the first sync —
-    // after that, openclaw.json uses provider-specific placeholders and this var
-    // is never resolved. Use a fixed value to avoid secretEnvVarsChanged on switch.
+    // Legacy provider fallback keeps stale OpenClaw configs from failing
+    // with MissingEnvVarError after the WeSight rename.
     env.LOBSTER_PROVIDER_API_KEY = 'legacy-unused';
 
     // MCP Bridge Secret — always set so stale openclaw.json with
@@ -1745,6 +1753,42 @@ export class OpenClawConfigSync {
     }
 
     return env;
+  }
+
+  private collectProviderApiKeyEnvVars(env: Record<string, string>): void {
+    // Provider API Keys — one per configured provider so switching models
+    // never changes env vars and avoids gateway process restarts.
+    const allApiKeys = resolveAllProviderApiKeys();
+    for (const [envSuffix, apiKey] of Object.entries(allApiKeys)) {
+      setApiKeyEnv(env, envSuffix, apiKey);
+    }
+    for (const provider of resolveAllEnabledProviderConfigs()) {
+      const envSuffix = normalizeEnvSuffix(provider.providerName);
+      const envName = `WESIGHT_APIKEY_${envSuffix}`;
+      if (!env[envName]) {
+        setApiKeyEnv(env, envSuffix, provider.apiKey?.trim() || 'sk-wesight-local');
+      }
+      const legacyEnvName = `LOBSTER_APIKEY_${envSuffix}`;
+      if (!env[legacyEnvName]) {
+        env[legacyEnvName] = env[envName];
+      }
+    }
+  }
+
+  private collectPersistedApiKeyPlaceholderEnvVars(env: Record<string, string>): void {
+    try {
+      const persistedConfig = fs.readFileSync(this.engineManager.getConfigPath(), 'utf8');
+      for (const match of persistedConfig.matchAll(API_KEY_PLACEHOLDER_PATTERN)) {
+        const envName = match[1];
+        if (envName && !env[envName]) {
+          const processValue = process.env[envName]?.trim();
+          const aliasValue = readApiKeyEnvAlias(env, envName);
+          env[envName] = processValue || aliasValue || 'sk-wesight-local';
+        }
+      }
+    } catch {
+      // The config may not exist yet during first-run preparation.
+    }
   }
 
   /**
@@ -2099,6 +2143,7 @@ export class OpenClawConfigSync {
     }
 
     // Handle single-instance platforms
+    const weixinOwnedByOpenClaw = this.getIMSettings?.()?.weixinOwnership === WeixinOwnership.LocalOpenClaw;
     const singleInstanceChannels: Array<{ getter: () => { enabled: boolean } | null; channel: string; platform: string }> = [
       { getter: () => this.getTelegramOpenClawConfig?.() ?? null, channel: 'telegram', platform: 'telegram' },
       { getter: () => this.getDiscordOpenClawConfig?.() ?? null, channel: 'discord', platform: 'discord' },
@@ -2106,7 +2151,9 @@ export class OpenClawConfigSync {
       { getter: () => this.getPopoConfig(), channel: 'moltbot-popo', platform: 'popo' },
       { getter: () => this.getNimConfig(), channel: 'nim', platform: 'nim' },
       { getter: () => this.getNeteaseBeeChanConfig(), channel: 'netease-bee', platform: 'netease-bee' },
-      { getter: () => this.getWeixinConfig(), channel: 'openclaw-weixin', platform: 'weixin' },
+      ...(weixinOwnedByOpenClaw
+        ? [{ getter: () => this.getWeixinConfig(), channel: 'openclaw-weixin', platform: 'weixin' }]
+        : []),
     ];
 
     for (const { getter, channel, platform } of singleInstanceChannels) {
@@ -2213,8 +2260,6 @@ export class OpenClawConfigSync {
    * user sets up a model in the UI.
    */
   private writeMinimalConfig(configPath: string, _reason: string): OpenClawConfigSyncResult {
-    const preinstalledPluginIds = readPreinstalledPluginIds().filter((id) => isBundledPluginAvailable(id));
-
     const minimalConfig: Record<string, unknown> = {
       gateway: {
         mode: 'local',

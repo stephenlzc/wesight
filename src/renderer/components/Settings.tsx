@@ -1,11 +1,13 @@
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import { ArrowPathIcon, ArrowTopRightOnSquareIcon,ChatBubbleLeftIcon, CheckCircleIcon, ClockIcon, Cog6ToothIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, SignalIcon, UserCircleIcon, UserGroupIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ArrowTopRightOnSquareIcon,ChatBubbleLeftIcon, CheckCircleIcon, ClockIcon, Cog6ToothIcon, CommandLineIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, SignalIcon, UserCircleIcon, UserGroupIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import {
   ClaudeCodePermissionMode as ClaudeCodePermissionModeValue,
   CoworkAgentEngine as CoworkAgentEngineValue,
   DeepSeekTuiPermissionMode as DeepSeekTuiPermissionModeValue,
   ExternalAgentConfigSource as ExternalAgentConfigSourceValue,
+  KimiCodePermissionMode as KimiCodePermissionModeValue,
   OpenCodePermissionMode as OpenCodePermissionModeValue,
+  OpenSquillaPermissionMode as OpenSquillaPermissionModeValue,
   QwenCodePermissionMode as QwenCodePermissionModeValue,
 } from '@shared/cowork/constants';
 import {
@@ -47,8 +49,10 @@ import type {
   ExternalAgentProviderAppType,
   ExternalAgentProviderListResult,
   HermesEngineStatus,
+  KimiCodePermissionMode,
   OpenClawEngineStatus,
   OpenCodePermissionMode,
+  OpenSquillaPermissionMode,
   QwenCodePermissionMode,
   StartupServiceState,
 } from '../types/cowork';
@@ -94,6 +98,11 @@ const COWORK_AGENT_ENGINE_OPTIONS: Array<{
   hintKey: string;
 }> = [
   {
+    value: CoworkAgentEngineValue.ClaudeCode,
+    labelKey: 'coworkAgentEngineClaudeCode',
+    hintKey: 'coworkAgentEngineClaudeCodeHint',
+  },
+  {
     value: CoworkAgentEngineValue.OpenClaw,
     labelKey: 'coworkAgentEngineOpenClaw',
     hintKey: 'coworkAgentEngineOpenClawHint',
@@ -104,14 +113,19 @@ const COWORK_AGENT_ENGINE_OPTIONS: Array<{
     hintKey: 'coworkAgentEngineHermesHint',
   },
   {
+    value: CoworkAgentEngineValue.OpenSquilla,
+    labelKey: 'coworkAgentEngineOpenSquilla',
+    hintKey: 'coworkAgentEngineOpenSquillaHint',
+  },
+  {
+    value: CoworkAgentEngineValue.KimiCode,
+    labelKey: 'coworkAgentEngineKimiCode',
+    hintKey: 'coworkAgentEngineKimiCodeHint',
+  },
+  {
     value: CoworkAgentEngineValue.YdCowork,
     labelKey: 'coworkAgentEngineClaudeLegacy',
     hintKey: 'coworkAgentEngineClaudeLegacyHint',
-  },
-  {
-    value: CoworkAgentEngineValue.ClaudeCode,
-    labelKey: 'coworkAgentEngineClaudeCode',
-    hintKey: 'coworkAgentEngineClaudeCodeHint',
   },
   {
     value: CoworkAgentEngineValue.Codex,
@@ -144,6 +158,22 @@ const COWORK_AGENT_ENGINE_OPTIONS: Array<{
     hintKey: 'coworkAgentEngineDeepSeekTuiHint',
   },
 ];
+
+const mergeAgentEnvironmentSnapshots = (
+  previous: ExternalAgentEnvironmentSnapshot | null,
+  next: ExternalAgentEnvironmentSnapshot,
+): ExternalAgentEnvironmentSnapshot => {
+  if (!previous) return next;
+  const enginesByAppType = new Map(previous.engines.map((engine) => [engine.appType, engine]));
+  next.engines.forEach((engine) => {
+    enginesByAppType.set(engine.appType, engine);
+  });
+  return {
+    ...previous,
+    ...next,
+    engines: Array.from(enginesByAppType.values()),
+  };
+};
 
 const PET_VARIANT_OPTIONS: Array<{
   value: PetVariantType;
@@ -218,6 +248,14 @@ type ProviderConnectionTestResult = {
   success: boolean;
   message: string;
   provider: ProviderType;
+};
+
+type OpenSquillaGatewayAction = 'status' | 'start' | 'restart' | 'stop';
+type OpenSquillaGatewayResult = {
+  success: boolean;
+  action: OpenSquillaGatewayAction | string;
+  payload?: Record<string, unknown> | null;
+  error?: string;
 };
 
 interface ProviderExportEntry {
@@ -635,13 +673,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const buildNoticeMessage = (): string | null => {
+  const buildNoticeMessage = useCallback((): string | null => {
     if (noticeI18nKey) {
       const base = i18nService.t(noticeI18nKey);
       return noticeExtra ? `${base} (${noticeExtra})` : base;
     }
     return notice ?? null;
-  };
+  }, [notice, noticeExtra, noticeI18nKey]);
 
   const [noticeMessage, setNoticeMessage] = useState<string | null>(() => buildNoticeMessage());
   const [testResult, setTestResult] = useState<ProviderConnectionTestResult | null>(null);
@@ -938,13 +976,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     coworkConfig.openclawConfigSource ?? ExternalAgentConfigSourceValue.LocalCli,
   );
   const [claudeCodeConfigSource, setClaudeCodeConfigSource] = useState<ExternalAgentConfigSource>(
-    coworkConfig.claudeCodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
+    coworkConfig.claudeCodeConfigSource ?? ExternalAgentConfigSourceValue.LocalCli,
   );
   const [claudeCodePermissionMode, setClaudeCodePermissionMode] = useState<ClaudeCodePermissionMode>(
     coworkConfig.claudeCodePermissionMode ?? ClaudeCodePermissionModeValue.BypassPermissions,
   );
   const [codexConfigSource, setCodexConfigSource] = useState<ExternalAgentConfigSource>(
-    coworkConfig.codexConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
+    coworkConfig.codexConfigSource ?? ExternalAgentConfigSourceValue.LocalCli,
   );
   const [hermesConfigSource, setHermesConfigSource] = useState<ExternalAgentConfigSource>(
     coworkConfig.hermesConfigSource ?? ExternalAgentConfigSourceValue.WesightModel,
@@ -967,6 +1005,20 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [deepseekTuiPermissionMode, setDeepSeekTuiPermissionMode] = useState<DeepSeekTuiPermissionMode>(
     coworkConfig.deepseekTuiPermissionMode ?? DeepSeekTuiPermissionModeValue.Auto,
   );
+  const [opensquillaConfigSource, setOpenSquillaConfigSource] = useState<ExternalAgentConfigSource>(
+    coworkConfig.opensquillaConfigSource ?? ExternalAgentConfigSourceValue.LocalCli,
+  );
+  const [opensquillaPermissionMode, setOpenSquillaPermissionMode] = useState<OpenSquillaPermissionMode>(
+    coworkConfig.opensquillaPermissionMode ?? OpenSquillaPermissionModeValue.Bypass,
+  );
+  const [kimiCodeConfigSource, setKimiCodeConfigSource] = useState<ExternalAgentConfigSource>(
+    coworkConfig.kimiCodeConfigSource ?? ExternalAgentConfigSourceValue.LocalCli,
+  );
+  const [kimiCodePermissionMode, setKimiCodePermissionMode] = useState<KimiCodePermissionMode>(
+    coworkConfig.kimiCodePermissionMode ?? KimiCodePermissionModeValue.Auto,
+  );
+  const [openSquillaGatewayResult, setOpenSquillaGatewayResult] = useState<OpenSquillaGatewayResult | null>(null);
+  const [openSquillaGatewayBusyAction, setOpenSquillaGatewayBusyAction] = useState<OpenSquillaGatewayAction | null>(null);
   const [agentConfigImportingAppType, setAgentConfigImportingAppType] = useState<ExternalAgentProviderAppType | null>(null);
   const [openclawGlobalSyncing, setOpenClawGlobalSyncing] = useState(false);
   const [opencodeGlobalSyncing, setOpenCodeGlobalSyncing] = useState(false);
@@ -982,6 +1034,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     grok: '',
     qwen: '',
     deepseek_tui: '',
+    opensquilla: '',
+    kimi: '',
   });
   const [agentProviderLists, setAgentProviderLists] = useState<Partial<Record<ExternalAgentProviderAppType, ExternalAgentProviderListResult>>>({});
   const [agentProviderLoadingAppType, setAgentProviderLoadingAppType] = useState<ExternalAgentProviderAppType | null>(null);
@@ -994,15 +1048,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     if (coworkAgentEngine === CoworkAgentEngineValue.OpenCode) return 'opencode';
     if (coworkAgentEngine === CoworkAgentEngineValue.QwenCode) return 'qwen';
     if (coworkAgentEngine === CoworkAgentEngineValue.DeepSeekTui) return 'deepseek_tui';
+    if (coworkAgentEngine === CoworkAgentEngineValue.OpenSquilla) return 'opensquilla';
+    if (coworkAgentEngine === CoworkAgentEngineValue.KimiCode) return 'kimi';
     return null;
   }, [coworkAgentEngine]);
 
   useEffect(() => {
     setCoworkAgentEngine(coworkConfig.agentEngine || CoworkAgentEngineValue.YdCowork);
     setOpenClawConfigSource(coworkConfig.openclawConfigSource ?? ExternalAgentConfigSourceValue.LocalCli);
-    setClaudeCodeConfigSource(coworkConfig.claudeCodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
+    setClaudeCodeConfigSource(coworkConfig.claudeCodeConfigSource ?? ExternalAgentConfigSourceValue.LocalCli);
     setClaudeCodePermissionMode(coworkConfig.claudeCodePermissionMode ?? ClaudeCodePermissionModeValue.BypassPermissions);
-    setCodexConfigSource(coworkConfig.codexConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
+    setCodexConfigSource(coworkConfig.codexConfigSource ?? ExternalAgentConfigSourceValue.LocalCli);
     setHermesConfigSource(coworkConfig.hermesConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
     setOpenCodeConfigSource(coworkConfig.opencodeConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
     setOpenCodePermissionMode(coworkConfig.opencodePermissionMode ?? OpenCodePermissionModeValue.Auto);
@@ -1010,6 +1066,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setQwenCodePermissionMode(coworkConfig.qwenCodePermissionMode ?? QwenCodePermissionModeValue.Auto);
     setDeepSeekTuiConfigSource(coworkConfig.deepseekTuiConfigSource ?? ExternalAgentConfigSourceValue.WesightModel);
     setDeepSeekTuiPermissionMode(coworkConfig.deepseekTuiPermissionMode ?? DeepSeekTuiPermissionModeValue.Auto);
+    setOpenSquillaConfigSource(coworkConfig.opensquillaConfigSource ?? ExternalAgentConfigSourceValue.LocalCli);
+    setOpenSquillaPermissionMode(coworkConfig.opensquillaPermissionMode ?? OpenSquillaPermissionModeValue.Bypass);
+    setKimiCodeConfigSource(coworkConfig.kimiCodeConfigSource ?? ExternalAgentConfigSourceValue.LocalCli);
+    setKimiCodePermissionMode(coworkConfig.kimiCodePermissionMode ?? KimiCodePermissionModeValue.Auto);
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
   }, [
@@ -1025,6 +1085,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     coworkConfig.qwenCodePermissionMode,
     coworkConfig.deepseekTuiConfigSource,
     coworkConfig.deepseekTuiPermissionMode,
+    coworkConfig.opensquillaConfigSource,
+    coworkConfig.opensquillaPermissionMode,
+    coworkConfig.kimiCodeConfigSource,
+    coworkConfig.kimiCodePermissionMode,
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
   ]);
@@ -1043,11 +1107,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     let active = true;
     void measureSettingsIpc('cowork:agentEngine:snapshot', () => coworkService.getAgentEngineSnapshot()).then((snapshot) => {
       if (!active) return;
-      setAgentEnvironmentSnapshot(snapshot);
+      setAgentEnvironmentSnapshot((previous) => (
+        snapshot ? mergeAgentEnvironmentSnapshots(previous, snapshot) : previous
+      ));
     });
     const unsubscribe = coworkService.onAgentEnginesChanged((snapshot) => {
       if (!active) return;
-      setAgentEnvironmentSnapshot(snapshot);
+      setAgentEnvironmentSnapshot((previous) => mergeAgentEnvironmentSnapshots(previous, snapshot));
     });
     return () => {
       active = false;
@@ -1072,7 +1138,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           current === progress.appType ? null : current
         ));
         if (progress.phase === 'success') {
-          void refreshAgentEnvironmentSnapshot({ forceRefresh: true });
+          void refreshAgentEnvironmentSnapshot({ forceRefresh: true, appTypes: [progress.appType] });
         }
       }
     });
@@ -1097,6 +1163,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   useEffect(() => {
     if (activeTab !== 'coworkAgentEngine' || !selectedExternalAgentAppType) return;
+    void refreshAgentEnvironmentSnapshot({ forceRefresh: true, appTypes: [selectedExternalAgentAppType] });
     void loadAgentProviders(selectedExternalAgentAppType);
   }, [activeTab, loadAgentProviders, selectedExternalAgentAppType]);
 
@@ -1389,13 +1456,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   }, [measureSettingsIpc]);
 
   useEffect(() => {
+    const initialThemeId = initialThemeIdRef.current;
+    const initialTheme = initialThemeRef.current;
+    const initialPetConfig = initialPetConfigRef.current;
+    const initialLanguage = initialLanguageRef.current;
     return () => {
       if (didSaveRef.current) {
         return;
       }
-      themeService.restoreTheme(initialThemeIdRef.current, initialThemeRef.current);
-      void window.electron.desktopPet.applyPreview(initialPetConfigRef.current);
-      i18nService.setLanguage(initialLanguageRef.current, { persist: false });
+      themeService.restoreTheme(initialThemeId, initialTheme);
+      void window.electron.desktopPet.applyPreview(initialPetConfig);
+      i18nService.setLanguage(initialLanguage, { persist: false });
     };
   }, []);
 
@@ -1408,7 +1479,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   useEffect(() => {
     setNoticeMessage(buildNoticeMessage());
-  }, [notice, noticeI18nKey, noticeExtra]);
+  }, [buildNoticeMessage]);
 
   useEffect(() => {
     if (initialTab) {
@@ -1762,6 +1833,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     || qwenCodePermissionMode !== coworkConfig.qwenCodePermissionMode
     || deepseekTuiConfigSource !== coworkConfig.deepseekTuiConfigSource
     || deepseekTuiPermissionMode !== coworkConfig.deepseekTuiPermissionMode
+    || opensquillaConfigSource !== coworkConfig.opensquillaConfigSource
+    || opensquillaPermissionMode !== coworkConfig.opensquillaPermissionMode
+    || kimiCodeConfigSource !== coworkConfig.kimiCodeConfigSource
+    || kimiCodePermissionMode !== coworkConfig.kimiCodePermissionMode
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled;
   const hasCoworkAgentEngineApplyChanges = coworkAgentEngine !== coworkConfig.agentEngine
@@ -1782,7 +1857,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         || qwenCodePermissionMode !== coworkConfig.qwenCodePermissionMode))
     || (coworkAgentEngine === CoworkAgentEngineValue.DeepSeekTui
       && (deepseekTuiConfigSource !== coworkConfig.deepseekTuiConfigSource
-        || deepseekTuiPermissionMode !== coworkConfig.deepseekTuiPermissionMode));
+        || deepseekTuiPermissionMode !== coworkConfig.deepseekTuiPermissionMode))
+    || (coworkAgentEngine === CoworkAgentEngineValue.OpenSquilla
+      && (opensquillaConfigSource !== coworkConfig.opensquillaConfigSource
+        || opensquillaPermissionMode !== coworkConfig.opensquillaPermissionMode))
+    || (coworkAgentEngine === CoworkAgentEngineValue.KimiCode
+      && (kimiCodeConfigSource !== coworkConfig.kimiCodeConfigSource
+        || kimiCodePermissionMode !== coworkConfig.kimiCodePermissionMode));
   const isCoworkAgentConfigApplying = isSaving
     && activeTab === 'coworkAgentEngine'
     && hasCoworkAgentEngineApplyChanges;
@@ -2043,8 +2124,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         setCopilotError(result.error || 'Authentication failed');
         setCopilotAuthStatus('error');
       }
-    } catch (error: any) {
-      setCopilotError(error.message || 'Authentication failed');
+    } catch (error: unknown) {
+      setCopilotError(error instanceof Error ? error.message : 'Authentication failed');
       setCopilotAuthStatus('error');
     }
   };
@@ -2144,7 +2225,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
       // For Qwen provider, check if OAuth should be used
       if (firstEnabledProvider && firstEnabledProvider[0] === 'qwen') {
-        const qwenConfig = firstEnabledProvider[1] as any;
+        const qwenConfig = firstEnabledProvider[1] as ProviderConfig;
         if (!qwenConfig.apiKey && qwenConfig.oauthCredentials) {
           // Use OAuth token as API key placeholder
           apiKeyToUse = 'qwen-oauth';
@@ -2188,6 +2269,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           qwenCodePermissionMode,
           deepseekTuiConfigSource,
           deepseekTuiPermissionMode,
+          opensquillaConfigSource,
+          opensquillaPermissionMode,
+          kimiCodeConfigSource,
+          kimiCodePermissionMode,
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
         });
@@ -2580,8 +2665,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setTestResult(null);
 
     // Check if provider has valid authentication (API Key or OAuth for Qwen)
-    const hasValidAuth = providerConfig.apiKey || 
-      (testingProvider === 'qwen' && (providerConfig as any).oauthCredentials);
+    const qwenOAuthCredentials = testingProvider === 'qwen' ? providers.qwen.oauthCredentials : undefined;
+    const hasValidAuth = providerConfig.apiKey || qwenOAuthCredentials;
     
     if (providerRequiresApiKey(testingProvider) && !hasValidAuth) {
       showTestResultModal({ success: false, message: i18nService.t('apiKeyRequired') }, testingProvider);
@@ -2804,7 +2889,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       let payload: ProvidersImportPayload;
       try {
         payload = JSON.parse(raw) as ProvidersImportPayload;
-      } catch (parseError) {
+      } catch {
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
@@ -2999,19 +3084,25 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   // 渲染标签页
   const sidebarTabs: { key: TabType; label: string; icon: React.ReactNode }[] = useMemo(() => {
+    const tabLabel = (key: string): string => {
+      if (language === 'en' || language === 'zh') {
+        return i18nService.t(key);
+      }
+      return i18nService.t(key);
+    };
     const allTabs = [
-      { key: 'general' as TabType,        label: i18nService.t('general'),        icon: <Cog6ToothIcon className="h-5 w-5" /> },
-      { key: 'coworkAgentEngine' as TabType, label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
-      { key: 'model' as TabType,          label: i18nService.t('model'),          icon: <CubeIcon className="h-5 w-5" /> },
-      { key: 'im' as TabType,             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
-      { key: 'email' as TabType,          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
-      { key: 'scheduledTasks' as TabType, label: i18nService.t('scheduledTasksTitle'), icon: <ClockIcon className="h-5 w-5" /> },
-      { key: 'mcp' as TabType,            label: i18nService.t('mcpServers'),     icon: <ConnectorIcon className="h-5 w-5" /> },
-      { key: 'coworkMemory' as TabType,   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
-      { key: 'coworkAgent' as TabType,    label: i18nService.t('coworkAgentTab'),    icon: <UserCircleIcon className="h-5 w-5" /> },
-      { key: 'agents' as TabType,         label: i18nService.t('agentManagement'), icon: <UserGroupIcon className="h-5 w-5" /> },
-      { key: 'shortcuts' as TabType,      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
-      { key: 'about' as TabType,          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
+      { key: 'general' as TabType,        label: tabLabel('general'),        icon: <Cog6ToothIcon className="h-5 w-5" /> },
+      { key: 'coworkAgentEngine' as TabType, label: tabLabel('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
+      { key: 'model' as TabType,          label: tabLabel('model'),          icon: <CubeIcon className="h-5 w-5" /> },
+      { key: 'im' as TabType,             label: tabLabel('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
+      { key: 'email' as TabType,          label: tabLabel('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
+      { key: 'scheduledTasks' as TabType, label: tabLabel('scheduledTasksTitle'), icon: <ClockIcon className="h-5 w-5" /> },
+      { key: 'mcp' as TabType,            label: tabLabel('mcpServers'),     icon: <ConnectorIcon className="h-5 w-5" /> },
+      { key: 'coworkMemory' as TabType,   label: tabLabel('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
+      { key: 'coworkAgent' as TabType,    label: tabLabel('coworkAgentTab'),    icon: <UserCircleIcon className="h-5 w-5" /> },
+      { key: 'agents' as TabType,         label: tabLabel('agentManagement'), icon: <UserGroupIcon className="h-5 w-5" /> },
+      { key: 'shortcuts' as TabType,      label: tabLabel('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
+      { key: 'about' as TabType,          label: tabLabel('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
     ];
     // Filter out tabs hidden by enterprise config
     // Filter out tabs with 'hide' action in enterprise config
@@ -3078,9 +3169,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     return status.authSource;
   };
 
-  const refreshAgentEnvironmentSnapshot = async (options: { forceRefresh?: boolean } = {}) => {
+  const refreshAgentEnvironmentSnapshot = async (options: { forceRefresh?: boolean; appTypes?: ExternalAgentProviderAppType[] } = {}) => {
     const snapshot = await coworkService.getAgentEngineSnapshot(options);
-    setAgentEnvironmentSnapshot(snapshot);
+    setAgentEnvironmentSnapshot((previous) => (
+      snapshot ? mergeAgentEnvironmentSnapshots(previous, snapshot) : previous
+    ));
   };
 
   const handleInstallAgentCli = async (appType: ExternalAgentProviderAppType) => {
@@ -3097,9 +3190,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     try {
       const result = await coworkService.installAgentCli(appType);
       if (result.snapshot) {
-        setAgentEnvironmentSnapshot(result.snapshot);
+        setAgentEnvironmentSnapshot((previous) => mergeAgentEnvironmentSnapshots(previous, result.snapshot!));
       } else {
-        await refreshAgentEnvironmentSnapshot({ forceRefresh: true });
+        await refreshAgentEnvironmentSnapshot({ forceRefresh: true, appTypes: [appType] });
       }
       if (!result.success) {
         setError(result.error || i18nService.t('coworkAgentEngineInstallCliFailed'));
@@ -3175,6 +3268,58 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     }
   };
 
+  const refreshOpenSquillaGatewayStatus = useCallback(async () => {
+    setOpenSquillaGatewayBusyAction('status');
+    try {
+      const result = await window.electron.openSquillaGateway.status();
+      setOpenSquillaGatewayResult(result);
+      if (!result.success) {
+        setError(result.error || i18nService.t('coworkAgentOpenSquillaGatewayFailed'));
+      }
+    } catch (error) {
+      setOpenSquillaGatewayResult({
+        success: false,
+        action: 'status',
+        error: error instanceof Error ? error.message : i18nService.t('coworkAgentOpenSquillaGatewayFailed'),
+      });
+      setError(error instanceof Error ? error.message : i18nService.t('coworkAgentOpenSquillaGatewayFailed'));
+    } finally {
+      setOpenSquillaGatewayBusyAction(null);
+    }
+  }, []);
+
+  const runOpenSquillaGatewayAction = useCallback(async (action: 'start' | 'restart' | 'stop') => {
+    setOpenSquillaGatewayBusyAction(action);
+    setError(null);
+    try {
+      const api = window.electron.openSquillaGateway;
+      const result = action === 'start'
+        ? await api.start()
+        : action === 'restart'
+          ? await api.restart()
+          : await api.stop();
+      setOpenSquillaGatewayResult(result);
+      if (!result.success) {
+        setError(result.error || i18nService.t('coworkAgentOpenSquillaGatewayFailed'));
+        return;
+      }
+      setNoticeMessage(action === 'stop'
+        ? i18nService.t('coworkAgentOpenSquillaGatewayStopped')
+        : i18nService.t('coworkAgentOpenSquillaGatewayReady'));
+      const status = await window.electron.openSquillaGateway.status();
+      setOpenSquillaGatewayResult(status);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : i18nService.t('coworkAgentOpenSquillaGatewayFailed'));
+    } finally {
+      setOpenSquillaGatewayBusyAction(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedExternalAgentAppType !== 'opensquilla') return;
+    void refreshOpenSquillaGatewayStatus();
+  }, [refreshOpenSquillaGatewayStatus, selectedExternalAgentAppType]);
+
   const handleSelectCoworkAgentEngine = (engine: CoworkAgentEngine) => {
     if (isSaving) return;
     setCoworkAgentEngine(engine);
@@ -3200,6 +3345,106 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         </div>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-primary/15">
           <div className="h-full w-2/3 animate-pulse rounded-full bg-primary" />
+        </div>
+      </div>
+    );
+  };
+
+  const renderOpenSquillaGatewayControls = () => {
+    const payload = openSquillaGatewayResult?.payload;
+    const running = payload?.running === true || payload?.status === 'running' || payload?.state === 'running';
+    const pid = typeof payload?.pid === 'number' || typeof payload?.pid === 'string'
+      ? String(payload.pid)
+      : '';
+    const host = typeof payload?.host === 'string' ? payload.host : '127.0.0.1';
+    const port = typeof payload?.port === 'number' || typeof payload?.port === 'string'
+      ? String(payload.port)
+      : '18791';
+    const gatewayUrl = running ? `http://${host}:${port}` : '-';
+    const statusLabel = openSquillaGatewayBusyAction === 'status'
+      ? i18nService.t('coworkAgentOpenSquillaGatewayChecking')
+      : running
+        ? i18nService.t('coworkAgentOpenSquillaGatewayRunning')
+        : openSquillaGatewayResult?.success === false
+          ? i18nService.t('coworkAgentOpenSquillaGatewayError')
+          : i18nService.t('coworkAgentOpenSquillaGatewayStoppedStatus');
+    const statusTone = running
+      ? 'text-green-600 dark:text-green-400'
+      : openSquillaGatewayResult?.success === false
+        ? 'text-red-600 dark:text-red-400'
+        : 'text-amber-600 dark:text-amber-400';
+    const statusDot = running
+      ? 'bg-green-500'
+      : openSquillaGatewayResult?.success === false
+        ? 'bg-red-500'
+        : 'bg-amber-500';
+    const isBusy = openSquillaGatewayBusyAction !== null;
+    const buttonClass = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60';
+
+    return (
+      <div className="rounded-xl border border-border px-3 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-medium text-foreground">
+              {i18nService.t('coworkAgentOpenSquillaGatewayTitle')}
+            </div>
+            <div className="mt-1 text-[11px] leading-5 text-secondary">
+              {i18nService.t('coworkAgentOpenSquillaGatewayHint')}
+            </div>
+          </div>
+          <span className={`inline-flex items-center gap-1.5 text-[11px] ${statusTone}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${statusDot}`} />
+            {statusLabel}
+          </span>
+        </div>
+        <div className="mt-3 grid grid-cols-[96px_minmax(0,1fr)] gap-2 text-[11px] leading-5">
+          <span className="text-secondary">{i18nService.t('coworkAgentOpenSquillaGatewayUrl')}</span>
+          <span className="truncate font-mono text-foreground/80" title={gatewayUrl}>{gatewayUrl}</span>
+          <span className="text-secondary">{i18nService.t('coworkAgentOpenSquillaGatewayPid')}</span>
+          <span className="truncate font-mono text-foreground/80">{pid || '-'}</span>
+        </div>
+        {openSquillaGatewayResult?.success === false && openSquillaGatewayResult.error && (
+          <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] leading-5 text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+            {openSquillaGatewayResult.error}
+          </div>
+        )}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void runOpenSquillaGatewayAction('start')}
+            disabled={isBusy}
+            className={buttonClass}
+          >
+            <CommandLineIcon className="h-3.5 w-3.5" />
+            {i18nService.t('coworkAgentOpenSquillaGatewayStart')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void runOpenSquillaGatewayAction('restart')}
+            disabled={isBusy}
+            className={buttonClass}
+          >
+            <ArrowPathIcon className={`h-3.5 w-3.5 ${openSquillaGatewayBusyAction === 'restart' ? 'animate-spin' : ''}`} />
+            {i18nService.t('coworkAgentOpenSquillaGatewayRestart')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void runOpenSquillaGatewayAction('stop')}
+            disabled={isBusy}
+            className={buttonClass}
+          >
+            <XCircleIcon className="h-3.5 w-3.5" />
+            {i18nService.t('coworkAgentOpenSquillaGatewayStop')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void refreshOpenSquillaGatewayStatus()}
+            disabled={isBusy}
+            className={buttonClass}
+          >
+            <ArrowPathIcon className={`h-3.5 w-3.5 ${openSquillaGatewayBusyAction === 'status' ? 'animate-spin' : ''}`} />
+            {i18nService.t('coworkAgentOpenSquillaGatewayRefresh')}
+          </button>
         </div>
       </div>
     );
@@ -3569,6 +3814,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       || engine === CoworkAgentEngineValue.GrokBuild
       || engine === CoworkAgentEngineValue.QwenCode
       || engine === CoworkAgentEngineValue.DeepSeekTui
+      || engine === CoworkAgentEngineValue.OpenSquilla
+      || engine === CoworkAgentEngineValue.KimiCode
     ) {
       return (
         <div className="mt-4 space-y-4">
@@ -3654,13 +3901,17 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     if (selectedExternalAgentAppType === 'opencode') return opencodeConfigSource;
     if (selectedExternalAgentAppType === 'qwen') return qwenCodeConfigSource;
     if (selectedExternalAgentAppType === 'deepseek_tui') return deepseekTuiConfigSource;
+    if (selectedExternalAgentAppType === 'opensquilla') return opensquillaConfigSource;
+    if (selectedExternalAgentAppType === 'kimi') return kimiCodeConfigSource;
     return null;
   }, [
     claudeCodeConfigSource,
     codexConfigSource,
     deepseekTuiConfigSource,
     hermesConfigSource,
+    kimiCodeConfigSource,
     opencodeConfigSource,
+    opensquillaConfigSource,
     qwenCodeConfigSource,
     selectedExternalAgentAppType,
   ]);
@@ -3689,6 +3940,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     }
     if (selectedExternalAgentAppType === 'deepseek_tui') {
       setDeepSeekTuiConfigSource(source);
+      return;
+    }
+    if (selectedExternalAgentAppType === 'opensquilla') {
+      setOpenSquillaConfigSource(source);
+      return;
+    }
+    if (selectedExternalAgentAppType === 'kimi') {
+      setKimiCodeConfigSource(source);
     }
   };
 
@@ -3753,6 +4012,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       window.dispatchEvent(new CustomEvent('wesight-agent-provider-changed', {
         detail: { appType: selectedExternalAgentAppType },
       }));
+      await refreshAgentEnvironmentSnapshot({
+        forceRefresh: true,
+        appTypes: [selectedExternalAgentAppType],
+      });
     } finally {
       setAgentProviderSwitchingId(null);
     }
@@ -3890,7 +4153,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       ? [cliStatus.config.primaryConfigPath, ...cliStatus.config.secondaryConfigPaths].filter(Boolean)
       : [];
     const isImporting = agentConfigImportingAppType === selectedExternalAgentAppType;
-    const sourceOptions = [
+    const sourceOptions = selectedExternalAgentAppType === 'opensquilla' || selectedExternalAgentAppType === 'kimi' ? [
+      {
+        value: ExternalAgentConfigSourceValue.LocalCli,
+        labelKey: 'coworkAgentConfigSourceLocalCli',
+        hintKey: selectedExternalAgentAppType === 'kimi'
+          ? 'coworkAgentKimiCodeLocalConfigHint'
+          : 'coworkAgentOpenSquillaLocalConfigHint',
+      },
+    ] : selectedExternalAgentAppType === 'claude' ? [
+      {
+        value: ExternalAgentConfigSourceValue.LocalCli,
+        labelKey: 'coworkAgentConfigSourceClaudeLocal',
+        hintKey: 'coworkAgentConfigSourceClaudeLocalHint',
+      },
+      {
+        value: ExternalAgentConfigSourceValue.WesightModel,
+        labelKey: 'coworkAgentConfigSourceWesightModel',
+        hintKey: 'coworkAgentConfigSourceClaudeWesightHint',
+      },
+    ] : [
       {
         value: ExternalAgentConfigSourceValue.WesightModel,
         labelKey: 'coworkAgentConfigSourceWesightModel',
@@ -4140,6 +4422,124 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                       checked={checked}
                       disabled={isSaving}
                       onChange={() => setDeepSeekTuiPermissionMode(option.value)}
+                      className="mt-1"
+                    />
+                    <span>
+                      <span className="block text-xs font-medium text-foreground">
+                        {i18nService.t(option.labelKey)}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-5 text-secondary">
+                        {i18nService.t(option.hintKey)}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {selectedExternalAgentAppType === 'opensquilla' && (
+          <>
+            {renderOpenSquillaGatewayControls()}
+            <div className="rounded-xl border border-border px-3 py-3">
+              <div className="text-xs font-medium text-foreground">
+                {i18nService.t('coworkAgentOpenSquillaPermissionTitle')}
+              </div>
+              <div className="mt-1 text-[11px] leading-5 text-secondary">
+                {i18nService.t('coworkAgentOpenSquillaPermissionHint')}
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {[
+                  {
+                    value: OpenSquillaPermissionModeValue.Bypass,
+                    labelKey: 'coworkAgentOpenSquillaPermissionBypass',
+                    hintKey: 'coworkAgentOpenSquillaPermissionBypassHint',
+                  },
+                  {
+                    value: OpenSquillaPermissionModeValue.On,
+                    labelKey: 'coworkAgentOpenSquillaPermissionOn',
+                    hintKey: 'coworkAgentOpenSquillaPermissionOnHint',
+                  },
+                  {
+                    value: OpenSquillaPermissionModeValue.Restricted,
+                    labelKey: 'coworkAgentOpenSquillaPermissionRestricted',
+                    hintKey: 'coworkAgentOpenSquillaPermissionRestrictedHint',
+                  },
+                  {
+                    value: OpenSquillaPermissionModeValue.Full,
+                    labelKey: 'coworkAgentOpenSquillaPermissionFull',
+                    hintKey: 'coworkAgentOpenSquillaPermissionFullHint',
+                  },
+                ].map((option) => {
+                  const checked = opensquillaPermissionMode === option.value;
+                  return (
+                    <label
+                      key={option.value}
+                      className={`flex gap-3 rounded-lg border px-3 py-2 ${checked ? 'border-primary bg-primary/5' : 'border-border hover:bg-surface-raised'}`}
+                    >
+                      <input
+                        type="radio"
+                        name="opensquilla-permission-mode"
+                        checked={checked}
+                        disabled={isSaving}
+                        onChange={() => setOpenSquillaPermissionMode(option.value)}
+                        className="mt-1"
+                      />
+                      <span>
+                        <span className="block text-xs font-medium text-foreground">
+                          {i18nService.t(option.labelKey)}
+                        </span>
+                        <span className="mt-0.5 block text-[11px] leading-5 text-secondary">
+                          {i18nService.t(option.hintKey)}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
+
+        {selectedExternalAgentAppType === 'kimi' && (
+          <div className="rounded-xl border border-border px-3 py-3">
+            <div className="text-xs font-medium text-foreground">
+              {i18nService.t('coworkAgentKimiCodePermissionTitle')}
+            </div>
+            <div className="mt-1 text-[11px] leading-5 text-secondary">
+              {i18nService.t('coworkAgentKimiCodePermissionHint')}
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              {[
+                {
+                  value: KimiCodePermissionModeValue.Auto,
+                  labelKey: 'coworkAgentKimiCodePermissionAuto',
+                  hintKey: 'coworkAgentKimiCodePermissionAutoHint',
+                },
+                {
+                  value: KimiCodePermissionModeValue.Yolo,
+                  labelKey: 'coworkAgentKimiCodePermissionYolo',
+                  hintKey: 'coworkAgentKimiCodePermissionYoloHint',
+                },
+                {
+                  value: KimiCodePermissionModeValue.Plan,
+                  labelKey: 'coworkAgentKimiCodePermissionPlan',
+                  hintKey: 'coworkAgentKimiCodePermissionPlanHint',
+                },
+              ].map((option) => {
+                const checked = kimiCodePermissionMode === option.value;
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex gap-3 rounded-lg border px-3 py-2 ${checked ? 'border-primary bg-primary/5' : 'border-border hover:bg-surface-raised'}`}
+                  >
+                    <input
+                      type="radio"
+                      name="kimi-code-permission-mode"
+                      checked={checked}
+                      disabled={isSaving}
+                      onChange={() => setKimiCodePermissionMode(option.value)}
                       className="mt-1"
                     />
                     <span>
@@ -4823,6 +5223,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
               onSnapshotChange={setAgentEnvironmentSnapshot}
               compact
             />
+            {window.electron?.platform === 'win32' && (
+              <div className="rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                {i18nService.t('coworkAgentEngineWslUnsupportedHint')}
+              </div>
+            )}
             {expandedCoworkAgentEngine !== coworkAgentEngine && renderCoworkAgentApplyProgress()}
             <div className="space-y-3">
               {COWORK_AGENT_ENGINE_OPTIONS.map(renderAgentEngineOption)}
@@ -5787,7 +6192,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 <button
                   type="button"
                   onClick={handleTestConnection}
-                  disabled={isTesting || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey && !(activeProvider === 'qwen' && (providers.qwen as any).oauthCredentials))}
+                  disabled={isTesting || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey && !(activeProvider === 'qwen' && providers.qwen.oauthCredentials))}
                   className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                 >
                   <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
