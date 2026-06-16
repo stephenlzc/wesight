@@ -106,22 +106,22 @@ interface SkillRecord {
 
 ### 4.1 安装 skill 时
 1. 执行现有 `downloadSkill()` 逻辑。
-2. 成功后解析来源信息。
-3. 写入/更新 `skill_metadata` 表。
-4. 根据 Settings 中启用的 sync targets 创建软链/复制。
-5. 如果目标已存在同 id 但不同来源的 skill，弹窗询问用户。
-6. 如果同步失败，弹窗提示重试/跳过/取消；取消则回滚安装。
-7. 返回 `SkillRecord` 给 renderer，包含 `source` 字段。
+2. 成功后解析来源信息（`classifySourceInput`）。
+3. 写入/更新 `skill_metadata` 表（`recordInstalledSkillSource`）。
+4. 根据 Settings 中启用的 sync targets 创建软链/复制（`SkillMetadataSync.syncSkillToTargets`，内置 skills 直接跳过）。
+5. 同步冲突当前默认跳过该 target 并记录 outcome；v1 暂不弹窗。同步失败同样记录 outcome 并不阻断安装。
+6. 返回 `SkillRecord` 给 renderer，包含 `source` 字段与 `syncTargets`。
 
 ### 4.2 删除 skill 时
 1. 删除用户数据目录中的 skill。
-2. 从所有已同步的 Agent 目录中移除软链/复制。
-3. 可选择是否保留 `skill_metadata` 记录（建议保留但标记为已删除，v1 直接删除）。
+2. 调用 `SkillMetadataSync.removeSkillFromTargets` 清理所有已同步的 Agent 目录（symlink 或 copy）。
+3. 调用 `forgetSkillMetadata` 同步删除 `skill_metadata` 行。
+4. bundled skill 拒绝删除（`isBuiltInSkillId` 守卫）。
 
 ### 4.3 升级 skill 时
 1. 执行现有 `performSkillUpgrade()` 逻辑。
-2. 更新 `skill_metadata` 中的 `version`、`source_url`、`source_ref`、`updated_at`。
-3. 重新同步到目标 Agent 目录。
+2. 更新 `skill_metadata` 中的 `version`、`source_url`、`source_ref`、`updated_at`（`recordUpgradedSkillSource`）。
+3. 自动重新同步到目标 Agent 目录（`recordUpgradedSkillSource` 内调用 `syncSkillToTargets`）。
 
 ### 4.4 首次启动迁移
 1. 扫描所有已安装 skill。
@@ -161,15 +161,16 @@ interface SkillRecord {
 ## 6. UI/UX
 
 ### 6.1 Skill 详情弹窗
-- 新增 "Source" 区域，展示：
+- 新增 "Source" 区域（`SkillSourceInfo` 组件），展示：
   - Source type
   - Source URL（可点击）
   - Ref
   - Author / License / Homepage
   - Installed at / Updated at
-- 新增 "Synced Agents" 列表，展示每个 Agent 的同步状态和模式（symlink/copy）。
+- 新增 "Synced Agents" 列表（`SkillSyncedAgents` 组件），展示每个 Agent 的同步状态和模式（symlink/copy），由 `skillSyncedAgentsFormatting.ts` helper 渲染。
 
 ### 6.2 Settings → Skill Sync Targets
+- Settings 中新增 "Skill Sync Targets" 区域（实现见 `SkillSyncTargetsSettings`）。
 - 列表展示所有默认 + 自定义目标。
 - 每个目标显示：
   - Agent 名称
@@ -178,6 +179,7 @@ interface SkillRecord {
   - 启用/禁用开关
 - 支持添加、编辑、删除自定义路径。
 - 默认所有目标**禁用**，首次安装时引导开启。
+- 持久化：`getSyncTargets` / `setSyncTargets` 经由 `SkillManager` 写入 kv 键 `skills.syncTargets.config`；首次引导状态由 `skills.syncTargets.firstRunPrompted` 记录。
 
 ### 6.3 首次安装引导
 - 用户第一次通过 WeSight 安装 skill 时：
@@ -198,12 +200,16 @@ interface SkillRecord {
 ### 7.1 新增 IPC 通道（在 `src/shared/skills/constants.ts` 中）
 
 ```ts
-export const SkillIpcChannel = {
+export const SkillsIpcChannel = {
   // ... existing channels ...
-  GetSkillMetadata: 'skill:getMetadata',
-  SetSkillSyncTargets: 'skill:setSyncTargets',
-  GetSkillSyncTargets: 'skill:getSyncTargets',
-  ResolveSyncConflict: 'skill:resolveSyncConflict',
+  GetSkillMetadata: 'skills:getSkillMetadata',
+  ListSkillMetadata: 'skills:listSkillMetadata',
+  GetSyncTargets: 'skills:getSyncTargets',
+  SetSyncTargets: 'skills:setSyncTargets',
+  // v2 dialog channels (declared; main handlers ship incrementally):
+  ResolveSyncConflict: 'skills:resolveSyncConflict',
+  ReportSyncFailure: 'skills:reportSyncFailure',
+  PromptFirstSyncTargets: 'skills:promptFirstSyncTargets',
 } as const;
 ```
 
@@ -212,19 +218,26 @@ export const SkillIpcChannel = {
 ```ts
 class SkillManager {
   // registry
-  getSkillMetadata(id: string): Promise<SkillMetadata | null>;
-  setSkillMetadata(id: string, data: Partial<SkillMetadata>): Promise<void>;
-  migrateLegacySkills(): Promise<void>;
+  getSkillMetadata(id: string): SkillMetadataRow | null;
+  listSkillMetadata(): SkillMetadataRow[];
+  upsertSkillMetadata(id: string, data: Partial<SkillMetadataRow>): SkillMetadataRow;
+  deleteSkillMetadata(id: string): void;
+  recordSkillMetadata(id: string, source: SkillSource | undefined, options?: {...}): void;
+  recordInstalledSkillSource(skillId: string, sourceInput: string): void;
+  recordUpgradedSkillSource(skillId: string, sourceInput: string, version?: string): void;
+  forgetSkillMetadata(skillId: string): void;
+  migrateLegacySkills(): { migrated: number; skipped: number };
 
-  // sync
+  // sync config
   getSyncTargets(): SkillSyncTarget[];
-  setSyncTargets(targets: SkillSyncTarget[]): Promise<void>;
-  syncSkillToTargets(skillId: string): Promise<SyncResult[]>;
-  removeSkillFromTargets(skillId: string): Promise<SyncResult[]>;
-
-  // conflict
-  requestSyncConflictResolution(skillId: string, target: SkillSyncTarget, existingSource: SkillSource): Promise<'keep' | 'replace' | 'skip'>;
+  setSyncTargets(targets: SkillSyncTarget[]): { success: boolean; error?: string };
+  isSyncTargetsFirstRunPrompted(): boolean;
+  markSyncTargetsFirstRunPrompted(): void;
 }
+
+// Pure helpers live under src/main/libs/skillManager/:
+// - skillMetadataSync.ts: syncSkillToTargets / removeSkillFromTargets
+// - skillSyncResolver.ts: detectConflict / decideSyncMode / detectWindowsDeveloperMode
 ```
 
 ---
@@ -256,15 +269,15 @@ class SkillManager {
 ## 9. 里程碑与验收
 
 ### PR 合并标准
-- [ ] `skill_metadata` 表可用，旧 skill 成功迁移。
-- [ ] 新安装 skill 写入来源信息。
-- [ ] 安装/删除/升级均触发同步，目标目录正确创建/清理/更新。
-- [ ] 冲突和失败场景有弹窗处理。
-- [ ] UI 展示来源和同步目标。
-- [ ] Settings 可管理同步目标。
-- [ ] 新增单元测试 + 生命周期集成测试通过。
-- [ ] 现有测试不回归。
-- [ ] 代码通过 `npm run lint`。
+- [x] `skill_metadata` 表可用，旧 skill 成功迁移（`migrateLegacySkills` + `isSkillMetadataMigrationComplete`）。
+- [x] 新安装 skill 写入来源信息（`recordInstalledSkillSource` + `classifySourceInput`）。
+- [x] 安装/删除/升级均触发同步，目标目录正确创建/清理/更新（`SkillMetadataSync.syncSkillToTargets` / `removeSkillFromTargets`）。
+- [ ] 冲突和失败场景有弹窗处理（v1 默认跳过/记录 outcome；`ResolveSyncConflict` / `ReportSyncFailure` 通道已声明待 v2 接入）。
+- [x] UI 展示来源和同步目标（`SkillSourceInfo` + `SkillSyncedAgents`）。
+- [x] Settings 可管理同步目标（`SkillSyncTargetsSettings` + `getSyncTargets` / `setSyncTargets`）。
+- [x] 新增单元测试 + 生命周期集成测试通过（`sqliteStore.test.ts` / `skillManager.registry.test.ts` / `skillSyncResolver.test.ts` / `skillManager.sync.lifecycle.test.ts` / `skillSyncTargets.test.ts` / `skillMetadataSync.test.ts`）。
+- [x] 现有测试不回归。
+- [x] 代码通过 `npm run lint`。
 
 ---
 
