@@ -5,10 +5,28 @@
 - [x] 已完成
 - [~] 进行中（查看 current_tasks/ 目录确认谁在做）
 
+## 任务分配（减少冲突）
+
+认领任务前请先检查 `current_tasks/*.lock`，避免与他人同时修改同一文件。当前推荐分工：
+
+- **Agent-1**：`src/main/libs/skillManager/skillSyncResolver.ts`（同步策略：symlink/copy/冲突检测）
+- **Agent-2**：`src/main/sqliteStore.test.ts` 和 skill metadata 相关测试
+- **Agent-3**：`src/renderer/types/skill.ts` 和 `src/shared/skills/constants.ts` 的类型与常量扩展
+- **Agent-4**：`src/main/sqliteStore.ts` 的 `skill_metadata` 表迁移（已部分完成）
+- **Agent-5**：`src/main/skillManager.ts` 中 metadata registry CRUD API
+- **Agent-6**：`src/main/skillManager.ts` 中 sync 生命周期集成（install/delete/upgrade）
+- **Agent-7**：Renderer UI：skill 详情展示来源
+- **Agent-8**：Renderer UI：Settings 同步目标管理 + 首次安装引导
+
+通用规则：
+1. 每完成一个小步骤就 `commit + push`，不要等整个 session 结束。
+2. 新增文件统一放在 `src/main/libs/skillManager/` 下，不要新建 `src/main/skills/`。
+3. 冲突时优先 `git pull --rebase` 解决，必要时在 TASKS.md 记录并让出文件。
+
 ## 任务列表
 
 ### 数据层与类型
-- [ ] 在 `src/main/sqliteStore.ts` 中新增 `skill_metadata` 表及迁移逻辑
+- [x] 在 `src/main/sqliteStore.ts` 中新增 `skill_metadata` 表及迁移逻辑（Agent-5/8 已完成基础提交 `f94fb2a`）
 - [ ] 在 `src/main/skillManager.ts` 中新增 `SkillMetadata` 类型和 registry CRUD 方法
 - [ ] 向后兼容扩展 `SkillRecord`（`src/main/skillManager.ts`）和 renderer `Skill` 类型（`src/renderer/types/skill.ts`）
 - [ ] 实现首次启动时旧 skill 迁移到 `skill_metadata`（`source_type: 'unknown'`）
