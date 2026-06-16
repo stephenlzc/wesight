@@ -8,7 +8,7 @@ import os from 'os';
 import path from 'path';
 
 import type { SkillSyncMode } from '../shared/skills/constants';
-import { SkillsIpcChannel,SkillSourceType, SkillSyncConflictDecision, SkillSyncFailureDecision, SkillSyncTargetKind } from '../shared/skills/constants';
+import { SkillsIpcChannel,SkillSourceType, SkillSyncConflictDecision, SkillSyncFailureDecision, SkillSyncTargetKind, type SkillSourceType as SkillSourceTypeValue,type SkillSyncMode as SkillSyncModeValue,type SkillsIpcChannel as SkillsIpcChannelValue } from '../shared/skills/constants';
 import type { SkillSyncConflict, SkillSyncFailure, SkillSyncResult, SkillSyncTarget } from '../shared/skills/types';
 import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
@@ -2163,6 +2163,7 @@ export class SkillManager {
             targetDir,
             skillId,
             (this.getStore().getSkillMetadata(skillId)?.sourceType ?? 'unknown') as SkillSourceTypeValue,
+            this.buildSyncDialogHooks(skillId),
           );
         } catch (error) {
           console.warn('[SkillManager] failed to sync newly installed skill:', error);
@@ -2436,6 +2437,7 @@ export class SkillManager {
             targetDir,
             id,
             (this.getStore().getSkillMetadata(id)?.sourceType ?? 'unknown') as SkillSourceTypeValue,
+            this.buildSyncDialogHooks(id),
           );
         } catch (error) {
           console.warn('[SkillManager] failed to sync newly installed skill:', error);
@@ -2558,6 +2560,45 @@ export class SkillManager {
     }, WATCH_DEBOUNCE_MS);
   }
 
+  private buildSyncDialogHooks(skillId: string): {
+    onConflict: (info: {
+      target: { kind: string };
+      targetPath: string;
+      conflict: { reason: string; existingSourceType?: SkillSourceTypeValue };
+    }) => void;
+    onFailure: (info: {
+      target: { kind: string };
+      targetPath: string;
+      mode: SkillSyncModeValue;
+      reason: string;
+      error: string;
+    }) => void;
+  } {
+    return {
+      onConflict: ({ target, targetPath, conflict }) => {
+        this.emitSyncDialogEvent(SkillsIpcChannel.ResolveSyncConflict, {
+          skillId,
+          skillName: skillId,
+          agent: target.kind,
+          path: targetPath,
+          existingSourceType: conflict.existingSourceType,
+          incomingSourceType: (this.getStore().getSkillMetadata(skillId)?.sourceType ?? 'unknown') as SkillSourceTypeValue,
+        });
+      },
+      onFailure: ({ target, targetPath, mode, reason, error }) => {
+        this.emitSyncDialogEvent(SkillsIpcChannel.ReportSyncFailure, {
+          skillId,
+          skillName: skillId,
+          agent: target.kind,
+          path: targetPath,
+          mode,
+          reason,
+          error,
+        });
+      },
+    };
+  }
+
   private notifySkillsChanged(): void {
     BrowserWindow.getAllWindows().forEach(win => {
       if (!win.isDestroyed()) {
@@ -2572,6 +2613,22 @@ export class SkillManager {
         console.warn('[skills] onSkillsChanged listener error:', error);
       }
     }
+  }
+
+  /**
+   * Emit a sync-dialog event to every renderer. The renderer-side
+   * `SyncDialogHost` listens on these channels and surfaces the
+   * corresponding modal so the user can decide what to do.
+   */
+  private emitSyncDialogEvent(
+    channel: SkillsIpcChannelValue,
+    payload: Record<string, unknown>,
+  ): void {
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send(channel, payload);
+      }
+    });
   }
 
   onSkillsChanged(listener: () => void): () => void {
@@ -2637,6 +2694,7 @@ export class SkillManager {
           skillDir,
           skillId,
           classification.type as SkillSourceTypeValue,
+          this.buildSyncDialogHooks(skillId),
         );
       } catch (error) {
         console.warn(`[SkillManager] failed to re-sync after upgrade for ${skillId}:`, error);

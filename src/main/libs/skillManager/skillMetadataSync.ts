@@ -151,6 +151,20 @@ export const SkillMetadataSync = {
     sourceDir: string,
     skillId: string,
     sourceType: SkillSourceTypeValue,
+    hooks?: {
+      onConflict?: (info: {
+        target: SkillSyncTargetConfig;
+        targetPath: string;
+        conflict: { reason: string; existingSourceType?: SkillSourceTypeValue };
+      }) => void;
+      onFailure?: (info: {
+        target: SkillSyncTargetConfig;
+        targetPath: string;
+        mode: SkillSyncModeValue;
+        reason: string;
+        error: string;
+      }) => void;
+    },
   ): SkillSyncOutcome[] {
     const targets = this.listTargets(store).filter((t: SkillSyncTargetConfig) => t.enabled);
     if (targets.length === 0) return [];
@@ -166,6 +180,14 @@ export const SkillMetadataSync = {
             applied: false,
             reason: conflict.reason ?? 'conflict',
             skipped: true,
+          });
+          hooks?.onConflict?.({
+            target,
+            targetPath,
+            conflict: {
+              reason: conflict.reason ?? 'conflict',
+              existingSourceType: conflict.existingSourceType as SkillSourceTypeValue | undefined,
+            },
           });
           continue;
         }
@@ -185,6 +207,13 @@ export const SkillMetadataSync = {
         outcomes.push({
           target,
           applied: false,
+          reason: decision.reason,
+          error: message,
+        });
+        hooks?.onFailure?.({
+          target,
+          targetPath,
+          mode: decision.mode,
           reason: decision.reason,
           error: message,
         });

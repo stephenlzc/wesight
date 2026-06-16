@@ -49,6 +49,36 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on(SkillsIpcChannel.Changed, handler);
       return () => ipcRenderer.removeListener(SkillsIpcChannel.Changed, handler);
     },
+    promptFirstSyncTargets: () => ipcRenderer.invoke(SkillsIpcChannel.PromptFirstSyncTargets),
+    resolveSyncConflict: (payload: { skillId: string; agent: string; decision: string }) =>
+      ipcRenderer.invoke(SkillsIpcChannel.ResolveSyncConflict, payload),
+    reportSyncFailure: (payload: { skillId: string; agent: string; decision: string; reason?: string }) =>
+      ipcRenderer.invoke(SkillsIpcChannel.ReportSyncFailure, payload),
+    onSyncConflict: (callback: (payload: {
+      skillId: string;
+      skillName?: string;
+      agent: string;
+      path: string;
+      existingSourceType?: string;
+      incomingSourceType: string;
+    }) => void) => {
+      const handler = (_: unknown, payload: unknown) => callback(payload as never);
+      ipcRenderer.on(SkillsIpcChannel.ResolveSyncConflict, handler);
+      return () => ipcRenderer.removeListener(SkillsIpcChannel.ResolveSyncConflict, handler);
+    },
+    onSyncFailure: (callback: (payload: {
+      skillId: string;
+      skillName?: string;
+      agent: string;
+      path: string;
+      mode: string;
+      reason: string;
+      error: string;
+    }) => void) => {
+      const handler = (_: unknown, payload: unknown) => callback(payload as never);
+      ipcRenderer.on(SkillsIpcChannel.ReportSyncFailure, handler);
+      return () => ipcRenderer.removeListener(SkillsIpcChannel.ReportSyncFailure, handler);
+    },
   },
   mcp: {
     list: () => ipcRenderer.invoke('mcp:list'),

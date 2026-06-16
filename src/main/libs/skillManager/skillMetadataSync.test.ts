@@ -183,3 +183,72 @@ test('first-install onboarding flag round-trips', () => {
   SkillMetadataSync.markFirstInstallOnboarded(store as never);
   expect(SkillMetadataSync.isFirstInstallOnboarded(store as never)).toBe(true);
 });
+
+test('syncSkillToTargets invokes onConflict when target has a foreign entry with the same id', () => {
+  const store = createFakeStore();
+  store.set('skills.syncTargets.v1', [
+    {
+      id: 'claude-code',
+      label: 'Claude Code',
+      kind: SkillSyncTargetKind.ClaudeCode,
+      path: path.join(os.tmpdir(), 'mock-target-claude-code'),
+      enabled: true,
+    },
+  ]);
+  mockDetectConflict.mockReturnValueOnce({
+    hasConflict: true,
+    reason: 'foreign-directory',
+    existingSourceType: SkillSourceType.GitHub,
+    incomingSourceType: SkillSourceType.Npm,
+  });
+  const onConflict = vi.fn();
+  const onFailure = vi.fn();
+
+  const outcomes = SkillMetadataSync.syncSkillToTargets(
+    store as never,
+    '/tmp/src',
+    'skill-x',
+    SkillSourceType.Npm,
+    { onConflict, onFailure },
+  );
+
+  expect(mockApplySync).not.toHaveBeenCalled();
+  expect(onConflict).toHaveBeenCalledTimes(1);
+  expect(onConflict).toHaveBeenCalledWith(expect.objectContaining({
+    conflict: expect.objectContaining({ reason: 'foreign-directory', existingSourceType: SkillSourceType.GitHub }),
+  }));
+  expect(onFailure).not.toHaveBeenCalled();
+  expect(outcomes[0].skipped).toBe(true);
+});
+
+test('syncSkillToTargets invokes onFailure when applySync throws', () => {
+  const store = createFakeStore();
+  store.set('skills.syncTargets.v1', [
+    {
+      id: 'claude-code',
+      label: 'Claude Code',
+      kind: SkillSyncTargetKind.ClaudeCode,
+      path: path.join(os.tmpdir(), 'mock-target-claude-code'),
+      enabled: true,
+    },
+  ]);
+  mockApplySync.mockImplementationOnce(() => {
+    throw new Error('EPERM: symlink not permitted');
+  });
+  const onConflict = vi.fn();
+  const onFailure = vi.fn();
+
+  const outcomes = SkillMetadataSync.syncSkillToTargets(
+    store as never,
+    '/tmp/src',
+    'skill-y',
+    SkillSourceType.GitHub,
+    { onConflict, onFailure },
+  );
+
+  expect(onConflict).not.toHaveBeenCalled();
+  expect(onFailure).toHaveBeenCalledTimes(1);
+  expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('EPERM') }));
+  expect(outcomes[0].applied).toBe(false);
+  expect(outcomes[0].error).toContain('EPERM');
+});
