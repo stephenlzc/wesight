@@ -24,10 +24,10 @@ import PuzzleIcon from '../icons/PuzzleIcon';
 import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
 import UploadIcon from '../icons/UploadIcon';
+import FirstSyncTargetsPrompt from './FirstSyncTargetsPrompt';
 import SkillSecurityReport from './SkillSecurityReport';
 import { SkillSourceInfo } from './SkillSourceInfo';
 import { SkillSyncedAgents } from './SkillSyncedAgents';
-import FirstSyncTargetsPrompt from './FirstSyncTargetsPrompt';
 
 type SkillTab = 'installed' | 'marketplace';
 type ImportSourceType = 'github' | 'clawhub';
