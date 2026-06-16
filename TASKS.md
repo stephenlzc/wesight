@@ -82,7 +82,7 @@
 - [x] 编写 `skillSyncResolver.test.ts`：symlink/copy 决策、路径冲突检测（Agent-1 完成 `b1a27fd`）
 - [x] 编写 `skillManager.sync.lifecycle.test.ts`：安装/删除/升级端到端测试（使用临时目录）（Agent-3 完成 `5e72803`：5 项测试覆盖 install+sync、delete+forget、upgrade 更新 updated_at、legacy migration 幂等性、forced copy 模式）
 - [x] 编写 `skillManager.sync.test.ts`：跨 Agent 同步核心方法测试（Agent-5 完成 `f6985f7` + `6b21e73`：14 项测试覆盖 listSyncTargets/syncSkillToTargets/resolveConflict/removeSkill/modeOverride/无启用目标/syncAll + getSyncTargets 修复）
-- [x] 运行 `npm run lint` 并清理新增警告（Agent-2 初次运行；Agent-4 修复 3 个 `simple-import-sort` 导入排序错误，使 skill-manager 文件 lint 归零）
+- [x] 运行 `npm run lint` 并清理新增警告（Agent-2 初次运行；Agent-4 修复 3 个 `simple-import-sort` 导入排序错误，使 skill-manager 文件 lint 归零；Agent-3 完成 `ca3f212` 修复 SkillsManager.tsx FirstSyncTargetsPrompt 导入顺序使 `npm run lint` 重新归零）
 
 ### 文档与收尾
 - [x] 更新 `docs/prd-skill-manager-v1.md` 中任何与实际实现不一致的地方（Agent-2 完成 `e78ac0f` 同步 PRD 至实际实现；Agent-6 完成 `f457d9b` 反映 sync dialog 组件位置）
