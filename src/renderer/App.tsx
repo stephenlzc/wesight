@@ -28,6 +28,7 @@ import { coworkService } from './services/cowork';
 import { i18nService } from './services/i18n';
 import { scheduledTaskService } from './services/scheduledTask';
 import { matchesShortcut } from './services/shortcuts';
+import { startSyncDialogIpcBridge } from './services/syncDialogIpcBridge';
 import { themeService } from './services/theme';
 import { RootState, store } from './store';
 import { setDraftPrompt } from './store/slices/coworkSlice';
@@ -186,6 +187,12 @@ const App: React.FC = () => {
         void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
           console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
         });
+
+        // Wire up the sync conflict / failure / first-install dialog bridge.
+        // Must run after window.electron is available; safe to do in
+        // initializeApp since that completes after the preload script has
+        // exposed the API.
+        startSyncDialogIpcBridge();
 
       } catch (error) {
         console.error('Failed to initialize app:', error);
