@@ -13,6 +13,7 @@ import RuntimeDashboardView from './components/runtime/RuntimeDashboardView';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
 import { SkillsView } from './components/skills';
+import { SyncDialogHost } from './components/skills/sync';
 import Toast from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateModal from './components/update/AppUpdateModal';
@@ -812,6 +813,7 @@ const App: React.FC = () => {
       {privacyAgreed === true && agentSetupCompleted === false && (
         <AgentSetupWizard onComplete={handleAgentSetupComplete} />
       )}
+      <SyncDialogHost />
     </div>
   );
 };
