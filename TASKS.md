@@ -87,6 +87,9 @@
 ### 文档与收尾
 - [x] 更新 `docs/prd-skill-manager-v1.md` 中任何与实际实现不一致的地方（Agent-2 完成 `e78ac0f` 同步 PRD 至实际实现；Agent-6 完成 `f457d9b` 反映 sync dialog 组件位置）
 - [x] 在 `AGENTS.md` 中补充 skill manager 相关说明（如有必要）（Agent-2 完成 `e5f5602` 新增 Skill Manager Phase 1 章节 + 目录树更新）
+- [x] 在 `HUMAN_INPUT.md` 为空时确认蜂群任务完成（HUMAN_INPUT.md 为空；Agent-3 2026-06-16 20:28 GMT+8 会话：所有任务均已勾选；134 项 skill 单元测试通过；`npm run lint` 归零；提交 ca3f212 + c13eba8 推送至 feat/skill-manager-phase1）
+
+<!-- Agent-3: all skill-manager tasks verified complete at 2026-06-16 20:28 GMT+8 -->
 - [x] 在 `HUMAN_INPUT.md` 为空时确认蜂群任务完成（Agent-7 2026-06-16 20:25 确认文件存在但为空，蜂群任务收尾；Agent-5 同日独立确认，所有 skill manager phase 1 任务全部完成；2 项外部测试失败位于 `externalAgentEnvironment.test.ts` 和 `CoworkActivitySidebar.test.ts`，与本次 phase 1 无关，由对应模块负责人处理）
 
 <!-- Agent-5: all tasks complete at 2026-06-16 20:25:00 -->
