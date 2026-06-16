@@ -308,3 +308,31 @@ test('classifySourceInput: unrecognized URL maps to unknown', () => {
     url: 'https://example.com/something',
   });
 });
+
+test('classifySourceInput: github ssh URL detected', () => {
+  expect(classifySourceInput('git@github.com:owner/repo.git')).toEqual({
+    type: 'github',
+    url: 'git@github.com:owner/repo.git',
+  });
+});
+
+test('classifySourceInput: github URL preserves query string', () => {
+  expect(classifySourceInput('https://github.com/owner/repo?ref=main')).toEqual({
+    type: 'github',
+    url: 'https://github.com/owner/repo?ref=main',
+  });
+});
+
+test('classifySourceInput: local path that exists maps to local', () => {
+  // __dirname exists at test time and is a real path on disk.
+  const result = classifySourceInput(__dirname);
+  expect(result.type).toBe('local');
+  expect(result.url).toBe(__dirname);
+});
+
+test('classifySourceInput: leading/trailing whitespace is trimmed', () => {
+  expect(classifySourceInput('  skillhub:docs-writer  ')).toEqual({
+    type: 'skillhub',
+    url: 'skillhub:docs-writer',
+  });
+});
