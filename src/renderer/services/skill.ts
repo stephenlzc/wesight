@@ -1,3 +1,5 @@
+import type { SkillMetadata } from '@shared/skills/constants';
+
 import { LocalizedText, LocalSkillInfo, MarketplaceSkill, MarketTag, Skill, SkillMarketplaceOptions } from '../types/skill';
 import { i18nService } from './i18n';
 
@@ -284,6 +286,109 @@ class SkillService {
     const marketDesc = this.marketplaceSkillDescriptions.get(skillId);
     if (marketDesc != null) return resolveLocalizedText(marketDesc);
     return fallback;
+  }
+
+  async getSkillMetadata(skillId: string): Promise<SkillMetadata | null> {
+    try {
+      const result = await window.electron.skills.getSkillMetadata(skillId);
+      if (result.success) {
+        return result.metadata ?? null;
+      }
+      console.warn('Failed to load skill metadata:', result.error);
+      return null;
+    } catch (error) {
+      console.error('Failed to load skill metadata:', error);
+      return null;
+    }
+  }
+
+  async listSkillMetadata(): Promise<SkillMetadata[]> {
+    try {
+      const result = await window.electron.skills.listSkillMetadata();
+      if (result.success) {
+        return result.metadata ?? [];
+      }
+      console.warn('Failed to list skill metadata:', result.error);
+      return [];
+    } catch (error) {
+      console.error('Failed to list skill metadata:', error);
+      return [];
+    }
+  }
+
+  async getSyncTargets(): Promise<{
+    targets: Array<{
+      id: string;
+      kind: string;
+      label: string;
+      path: string;
+      enabled: boolean;
+      isCustom: boolean;
+      builtIn?: boolean;
+    }>;
+    firstRunPrompted: boolean;
+  }> {
+    try {
+      const result = await window.electron.skills.getSyncTargets();
+      if (result.success) {
+        return {
+          targets: result.targets ?? [],
+          firstRunPrompted: result.firstRunPrompted === true,
+        };
+      }
+      return { targets: [], firstRunPrompted: false };
+    } catch (error) {
+      console.error('Failed to get sync targets:', error);
+      return { targets: [], firstRunPrompted: false };
+    }
+  }
+
+  async setSyncTargets(targets: unknown[]): Promise<boolean> {
+    try {
+      const result = await window.electron.skills.setSyncTargets(targets as never);
+      return result.success === true;
+    } catch (error) {
+      console.error('Failed to set sync targets:', error);
+      return false;
+    }
+  }
+
+  async resolveSyncConflict(requestId: string, decision: string): Promise<boolean> {
+    try {
+      const result = await window.electron.skills.resolveSyncConflict({ requestId, decision });
+      return result.success === true;
+    } catch (error) {
+      console.error('Failed to resolve sync conflict:', error);
+      return false;
+    }
+  }
+
+  async reportSyncFailure(requestId: string, decision: string): Promise<boolean> {
+    try {
+      const result = await window.electron.skills.reportSyncFailure({ requestId, decision });
+      return result.success === true;
+    } catch (error) {
+      console.error('Failed to report sync failure:', error);
+      return false;
+    }
+  }
+
+  async submitFirstSyncTargets(
+    requestId: string,
+    selectedTargetIds: string[],
+    rememberChoice: boolean,
+  ): Promise<boolean> {
+    try {
+      const result = await window.electron.skills.promptFirstSyncTargets({
+        requestId,
+        selectedTargetIds,
+        rememberChoice,
+      });
+      return result.success === true;
+    } catch (error) {
+      console.error('Failed to submit first-sync targets:', error);
+      return false;
+    }
   }
 }
 

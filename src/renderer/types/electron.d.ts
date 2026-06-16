@@ -19,7 +19,8 @@ import type { CoworkModelOverride, CoworkSessionRuntimeSnapshot } from '@shared/
 import type { CoworkStudioAssetsResult } from '@shared/cowork/studioAssets';
 import type { FeishuEngineKeyType, FeishuManagementModeType, FeishuRuntimeOwnershipType, WeixinOwnershipType } from '@shared/im/constants';
 import type { DesktopPetTaskSnapshot, PetConfig, PetPosition } from '@shared/pet/constants';
-import type { SkillMarketplaceSort, SkillMarketplaceSourceType } from '@shared/skills/constants';
+import type { SkillMarketplaceSort, SkillMarketplaceSourceType, SkillMetadata, SkillSource, SkillSourceType } from '@shared/skills/constants';
+import type { SkillSyncTarget } from '@shared/skills/types';
 
 interface ApiResponse {
   ok: boolean;
@@ -575,6 +576,33 @@ interface IElectronAPI {
     fetchMarketplace: (options?: SkillMarketplaceOptions) => Promise<SkillMarketplaceResponse>;
     searchMarketplace: (options?: SkillMarketplaceOptions) => Promise<SkillMarketplaceResponse>;
     installMarketplaceSkill: (skill: MarketplaceSkill) => Promise<{ success: boolean; skills?: Skill[]; error?: string; auditReport?: any; pendingInstallId?: string }>;
+    getSkillMetadata: (skillId: string) => Promise<{ success: boolean; metadata?: SkillMetadata | null; error?: string }>;
+    listSkillMetadata: () => Promise<{ success: boolean; metadata?: SkillMetadata[]; error?: string }>;
+    getSyncTargets: () => Promise<{
+      success: boolean;
+      targets?: SkillSyncTarget[];
+      firstRunPrompted?: boolean;
+      error?: string;
+    }>;
+    setSyncTargets: (targets: SkillSyncTarget[]) => Promise<{ success: boolean; targets?: SkillSyncTarget[]; error?: string }>;
+    getSyncTargetsFirstRunPrompted: () => Promise<{ success: boolean; prompted?: boolean; error?: string }>;
+    setSyncTargetsFirstRunPrompted: (prompted: boolean) => Promise<{ success: boolean; error?: string }>;
+    resolveSyncConflict: (payload: { requestId: string; decision: string }) => Promise<{ success: boolean; error?: string }>;
+    reportSyncFailure: (payload: { requestId: string; decision: string }) => Promise<{ success: boolean; error?: string }>;
+    promptFirstSyncTargets: (payload: {
+      requestId: string;
+      selectedTargetIds: string[];
+      rememberChoice: boolean;
+    }) => Promise<{ success: boolean; error?: string }>;
+    onSyncConflictRequest: (
+      callback: (payload: { requestId: string; conflict: unknown }) => void,
+    ) => () => void;
+    onSyncFailureRequest: (
+      callback: (payload: { requestId: string; failure: unknown }) => void,
+    ) => () => void;
+    onFirstSyncPromptRequest: (
+      callback: (payload: { requestId: string; targets: unknown[] }) => void,
+    ) => () => void;
     onChanged: (callback: () => void) => () => void;
   };
   mcp: {

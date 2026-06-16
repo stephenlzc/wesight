@@ -13,6 +13,7 @@ import RuntimeDashboardView from './components/runtime/RuntimeDashboardView';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
 import { SkillsView } from './components/skills';
+import { SyncDialogHost } from './components/skills/sync';
 import Toast from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateModal from './components/update/AppUpdateModal';
@@ -27,6 +28,7 @@ import { coworkService } from './services/cowork';
 import { i18nService } from './services/i18n';
 import { scheduledTaskService } from './services/scheduledTask';
 import { matchesShortcut } from './services/shortcuts';
+import { startSyncDialogIpcBridge } from './services/syncDialogIpcBridge';
 import { themeService } from './services/theme';
 import { RootState, store } from './store';
 import { setDraftPrompt } from './store/slices/coworkSlice';
@@ -185,6 +187,12 @@ const App: React.FC = () => {
         void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
           console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
         });
+
+        // Wire up the sync conflict / failure / first-install dialog bridge.
+        // Must run after window.electron is available; safe to do in
+        // initializeApp since that completes after the preload script has
+        // exposed the API.
+        startSyncDialogIpcBridge();
 
       } catch (error) {
         console.error('Failed to initialize app:', error);
@@ -812,6 +820,7 @@ const App: React.FC = () => {
       {privacyAgreed === true && agentSetupCompleted === false && (
         <AgentSetupWizard onComplete={handleAgentSetupComplete} />
       )}
+      <SyncDialogHost />
     </div>
   );
 };
