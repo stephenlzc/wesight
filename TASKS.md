@@ -46,7 +46,7 @@
 - [x] 实现 `removeSkillFromTargets(skillId)`：删除目标目录中的 symlink/copy（Agent-6 完成 `76206d9`：封装在 `SkillMetadataSync.removeSkillFromTargets`，委托 `skillSyncResolver.removeTarget`）
 - [x] 实现 `resolveSyncConflict()`：检测目标已存在同 id skill 时询问用户（Agent-1 完成 `c5fca4f`/`b1a27fd`：`skillSyncResolver.detectConflict` 返回 conflict reason）
 - [x] 实现 Windows 开发者模式检测和 symlink/copy 降级策略（Agent-1 完成 `b1a27fd`：`detectWindowsDeveloperMode` + `decideSyncMode`，以及 `applySync` 的 EPERM 自动降级）
-- [~] 实现同步失败处理：弹窗重试/跳过/取消，取消时回滚安装（agent-1 提供 `detectConflict` 返回 reason；IPC 弹窗与取消回滚由后续 agent 接入 UI）
+- [x] 实现同步失败处理：弹窗重试/跳过/取消，取消时回滚安装（Agent-5 完成 `6b21e73`：`SkillManager.syncSkillToTargets` 接受 `handleFailure` 回调封装 retry/skip/cancel 循环；`SkillManager.reportSyncFailure` 重放决策；IPC `skills:reportSyncFailure` 在 main.ts 中接入）
 
 ### 生命周期集成
 - [x] 在安装 skill 成功后调用 `syncSkillToTargets()`（Agent-6 完成 `76206d9`：`recordInstalledSkillSource` 之后 + safe-install 路径中）
@@ -72,7 +72,7 @@
 
 ### IPC 与常量
 - [x] 在 `src/shared/skills/constants.ts` 中新增 IPC 通道常量（Agent-2 完成 `f94fb2a`：GetSyncTargets / SetSyncTargets / GetSkillMetadata / ListSkillMetadata / ResolveSyncConflict / ReportSyncFailure / PromptFirstSyncTargets + SkillSourceType / SkillSyncMode / SkillSyncTargetKind 常量）
-- [x] 在 `src/main/main.ts` 中注册新的 IPC handlers（Agent-2 完成 `031f459`：GetSyncTargets / SetSyncTargets 处理器，封装 getSkillManager().setSyncTargets 并自动标记 firstRunPrompted）
+- [x] 在 `src/main/main.ts` 中注册新的 IPC handlers（Agent-2 完成 `031f459`：GetSyncTargets / SetSyncTargets 处理器，封装 getSkillManager().setSyncTargets 并自动标记 firstRunPrompted；Agent-5 完成 `6b21e73` 新增 ResolveSyncConflict / ReportSyncFailure / PromptFirstSyncTargets handlers，桥接到 SkillManager 的 conflict/failure 处理）
 - [x] 在 `src/renderer/services/skill.ts` 中暴露新的渲染层 API（Agent-2 完成 `031f459`：skillService.getSyncTargets/setSyncTargets + electron.d.ts 类型契约）
 
 ### 测试
@@ -80,6 +80,7 @@
 - [x] 编写 `skillManager.registry.test.ts`：CRUD 和迁移（Agent-5 完成 `79a1226`：8 项测试覆盖 rowToSkillSource 往返、detect/classify 协同、CRUD 生命周期、migration 一次性标志、sync_targets 顺序/模式）
 - [x] 编写 `skillSyncResolver.test.ts`：symlink/copy 决策、路径冲突检测（Agent-1 完成 `b1a27fd`）
 - [x] 编写 `skillManager.sync.lifecycle.test.ts`：安装/删除/升级端到端测试（使用临时目录）（Agent-3 完成 `5e72803`：5 项测试覆盖 install+sync、delete+forget、upgrade 更新 updated_at、legacy migration 幂等性、forced copy 模式）
+- [x] 编写 `skillManager.sync.test.ts`：跨 Agent 同步核心方法测试（Agent-5 完成 `f6985f7` + `6b21e73`：14 项测试覆盖 listSyncTargets/syncSkillToTargets/resolveConflict/removeSkill/modeOverride/无启用目标/syncAll + getSyncTargets 修复）
 - [x] 运行 `npm run lint` 并清理新增警告（Agent-2 初次运行；Agent-4 修复 3 个 `simple-import-sort` 导入排序错误，使 skill-manager 文件 lint 归零）
 
 ### 文档与收尾
