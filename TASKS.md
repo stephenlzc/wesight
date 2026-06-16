@@ -85,5 +85,5 @@
 
 ### 文档与收尾
 - [x] 更新 `docs/prd-skill-manager-v1.md` 中任何与实际实现不一致的地方（Agent-2 完成 `e78ac0f`：修正 7.1 IPC 通道命名 `skill:*` → `skills:*`、补全 `SkillsIpcChannel` 常量；7.2 替换为 `SkillManager` 实际方法集；9 里程碑勾选已交付项、保留唯一未交付项；11 待确认事项锁定 v1 决策）
-- [ ] 在 `AGENTS.md` 中补充 skill manager 相关说明（如有必要）
+- [x] 在 `AGENTS.md` 中补充 skill manager 相关说明（如有必要）（Agent-2 完成 `e5f5602`：新增 "Skill Manager (Phase 1, Issue #52)" 小节，覆盖持久化、sync-targets、跨 Agent 同步、生命周期 hook、IPC 通道、渲染层组件；同步更新 Key Directories 文件树）
 - [ ] 在 `HUMAN_INPUT.md` 为空时确认蜂群任务完成
