@@ -8,8 +8,8 @@ import os from 'os';
 import path from 'path';
 
 import type { SkillSyncMode } from '../shared/skills/constants';
-import { SkillsIpcChannel,SkillSourceType, SkillSyncTargetKind } from '../shared/skills/constants';
-import type { SkillSyncTarget } from '../shared/skills/types';
+import { SkillsIpcChannel,SkillSourceType, SkillSyncConflictDecision, SkillSyncFailureDecision, SkillSyncTargetKind } from '../shared/skills/constants';
+import type { SkillSyncConflict, SkillSyncFailure, SkillSyncResult, SkillSyncTarget } from '../shared/skills/types';
 import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
 import { getElectronNodeRuntimePath, resolveUserShellPath } from './libs/coworkUtil';
@@ -26,6 +26,13 @@ import { fetchSkillHubMarketplace } from './skillHubMarketplace';
 import { buildDefaultSyncTargetsState } from './skillSyncTargets';
 import type { SkillMetadataRow } from './sqliteStore';
 import { SqliteStore } from './sqliteStore';
+import {
+  applySync,
+  decideSyncMode,
+  detectConflict,
+  inspectTarget,
+  removeTarget as removeSyncTarget,
+} from './skillSyncResolver';
 
 /**
  * Check if a command exists in the given environment.
@@ -1485,19 +1492,12 @@ export class SkillManager {
 
   /**
    * Return the user's persisted sync-target list. Reads from the kv store
-   * via `getSkillSyncTargets`, with defaults applied for first-run users.
+   * (key: `skills.syncTargets.config`) with defaults applied for first-run
+   * users who have not yet picked any targets.
    */
   getSyncTargets(): SkillSyncTarget[] {
-    const stored = this.getStore().getSkillSyncTargets();
-    if (stored.length === 0) {
-      return this.buildDefaultSyncTargets();
-    }
-    // The store returns SkillSyncTargetEntry (agent/path/path/mode) — the
-    // sync-target config has a different shape (id/kind/label/path/enabled).
-    // Bridge the two by reading the kv-stored target list under a separate
-    // key. Falls back to defaults if nothing has been written yet.
     const configTargets = this.getStore().get<unknown>('skills.syncTargets.config');
-    if (Array.isArray(configTargets)) {
+    if (Array.isArray(configTargets) && configTargets.length > 0) {
       return configTargets.filter((t): t is SkillSyncTarget => (
         Boolean(t) && typeof t === 'object' && typeof (t as SkillSyncTarget).id === 'string'
       ));
@@ -2729,6 +2729,332 @@ export class SkillManager {
     store.markSkillMetadataMigrationComplete();
     console.log(`[SkillManager] legacy skill metadata migration: migrated=${migrated}, skipped=${skipped}`);
     return { migrated, skipped };
+  }
+
+  // -------------------------------------------------------------------------
+  // Sync target configuration (kv-backed)
+  // -------------------------------------------------------------------------
+
+  /**
+   * List configured sync targets. Thin alias for `getSyncTargets()` so
+   * callers can drive the conflict-resolution flow without ambiguity.
+   */
+  listSyncTargets(): SkillSyncTarget[] {
+    return this.getSyncTargets();
+  }
+
+  // -------------------------------------------------------------------------
+  // Sync execution — calls into skillSyncResolver with conflict/failure
+  // callbacks so the renderer can drive the user-facing dialogs.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Sync a single installed skill to every enabled sync target. Returns a
+   * per-target result so the caller can drive conflict / failure dialogs.
+   *
+   * Bundled skills (built into the app) are never synced — they ship with
+   * the binary and should not leak into user agent directories.
+   *
+   * Conflict and failure handling are delegated to the caller via the
+   * `resolveConflict` / `handleFailure` callbacks. Without those, conflicts
+   * are skipped and failures are surfaced as `success: false` in the result.
+   */
+  async syncSkillToTargets(
+    skillId: string,
+    options: {
+      resolveConflict?: (
+        skillId: string,
+        conflict: SkillSyncConflict
+      ) => SkillSyncConflictDecision | Promise<SkillSyncConflictDecision>;
+      handleFailure?: (
+        skillId: string,
+        failure: SkillSyncFailure
+      ) => SkillSyncFailureDecision | Promise<SkillSyncFailureDecision>;
+      modeOverride?: SkillSyncMode;
+    } = {},
+  ): Promise<SkillSyncResult> {
+    if (this.isBuiltInSkillId(skillId)) {
+      return { skillId, attempts: [] };
+    }
+
+    const targets = this.listSyncTargets().filter(t => t.enabled);
+    if (targets.length === 0) {
+      return { skillId, attempts: [] };
+    }
+
+    const sourceDir = resolveWithin(this.getSkillsRoot(), skillId);
+    if (!fs.existsSync(sourceDir)) {
+      throw new Error(`Skill not found: ${skillId}`);
+    }
+
+    const metadata = this.getStore().getSkillMetadata(skillId);
+    const sourceType = (metadata?.sourceType ?? SkillSourceType.Unknown) as SkillSourceType;
+
+    const decision = options.modeOverride
+      ? { mode: options.modeOverride, reason: 'override' }
+      : decideSyncMode();
+
+    const attempts: SkillSyncResult['attempts'] = [];
+    const newEntries: SkillMetadataRow['syncTargets'] = [];
+
+    for (const target of targets) {
+      const targetPath = path.join(target.path, skillId);
+      const attempt = await this.applySyncAttempt({
+        skillId,
+        target,
+        targetPath,
+        sourceDir,
+        sourceType,
+        decision,
+        resolveConflict: options.resolveConflict,
+        handleFailure: options.handleFailure,
+      });
+      attempts.push(attempt);
+      if (attempt.success) {
+        newEntries.push({
+          agent: target.kind,
+          path: targetPath,
+          mode: decision.mode,
+        });
+      }
+    }
+
+    if (metadata) {
+      this.recordSkillSyncTargets(skillId, newEntries);
+    }
+
+    return { skillId, attempts };
+  }
+
+  /**
+   * Internal: run a single sync attempt, including conflict/failure recovery.
+   */
+  private async applySyncAttempt(input: {
+    skillId: string;
+    target: SkillSyncTarget;
+    targetPath: string;
+    sourceDir: string;
+    sourceType: SkillSourceType;
+    decision: { mode: SkillSyncMode; reason: string };
+    resolveConflict?: (
+      skillId: string,
+      conflict: SkillSyncConflict
+    ) => SkillSyncConflictDecision | Promise<SkillSyncConflictDecision>;
+    handleFailure?: (
+      skillId: string,
+      failure: SkillSyncFailure
+    ) => SkillSyncFailureDecision | Promise<SkillSyncFailureDecision>;
+  }): Promise<SkillSyncResult['attempts'][number]> {
+    const { skillId, target, targetPath, sourceDir, sourceType, decision, resolveConflict, handleFailure } = input;
+
+    const conflict = detectConflict(targetPath, sourceType, sourceDir);
+    if (conflict.hasConflict && resolveConflict) {
+      const decision2 = await resolveConflict(skillId, {
+        skillId,
+        agent: target.kind,
+        path: targetPath,
+        existingSourceType: conflict.existingSourceType,
+        incomingSourceType: conflict.incomingSourceType,
+      });
+      if (decision2 === SkillSyncConflictDecision.Skip) {
+        return {
+          agent: target.kind,
+          path: targetPath,
+          mode: decision.mode,
+          success: false,
+          reason: 'user-skipped',
+        };
+      }
+      if (decision2 === SkillSyncConflictDecision.Keep) {
+        return {
+          agent: target.kind,
+          path: targetPath,
+          mode: decision.mode,
+          success: true,
+          reason: 'kept-existing',
+        };
+      }
+      // 'replace' = fall through with replaceExisting=true.
+    }
+
+    try {
+      applySync(sourceDir, targetPath, decision, {
+        replaceExisting: conflict.hasConflict,
+        sourceType,
+      });
+      return {
+        agent: target.kind,
+        path: targetPath,
+        mode: decision.mode,
+        success: true,
+      };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      console.warn(`[SkillManager] sync to ${target.kind} failed for ${skillId}: ${reason}`);
+
+      if (!handleFailure) {
+        return {
+          agent: target.kind,
+          path: targetPath,
+          mode: decision.mode,
+          success: false,
+          reason,
+        };
+      }
+
+      let attempt: SkillSyncFailureDecision = SkillSyncFailureDecision.Retry;
+      let lastReason = reason;
+      while (attempt === SkillSyncFailureDecision.Retry) {
+        attempt = await handleFailure(skillId, {
+          skillId,
+          agent: target.kind,
+          path: targetPath,
+          mode: decision.mode,
+          reason: lastReason,
+        });
+        if (attempt === SkillSyncFailureDecision.Retry) {
+          try {
+            applySync(sourceDir, targetPath, decision, {
+              replaceExisting: conflict.hasConflict,
+              sourceType,
+            });
+            return {
+              agent: target.kind,
+              path: targetPath,
+              mode: decision.mode,
+              success: true,
+            };
+          } catch (retryError) {
+            lastReason = retryError instanceof Error ? retryError.message : 'unknown error';
+            console.warn(`[SkillManager] sync retry to ${target.kind} failed for ${skillId}: ${lastReason}`);
+            if (lastReason === reason) break;
+          }
+        }
+      }
+
+      if (attempt === SkillSyncFailureDecision.Cancel) {
+        throw new Error(`sync canceled by user for ${skillId} on ${target.kind}`);
+      }
+
+      return {
+        agent: target.kind,
+        path: targetPath,
+        mode: decision.mode,
+        success: false,
+        reason,
+      };
+    }
+  }
+
+  /**
+   * Remove a skill from every sync target it was synced to. Reads the
+   * `sync_targets` column so we don't have to enumerate configured targets.
+   * Returns the list of removals actually performed.
+   */
+  removeSkillFromTargets(skillId: string): SkillSyncResult {
+    const metadata = this.getStore().getSkillMetadata(skillId);
+    const entries = metadata?.syncTargets ?? [];
+    if (entries.length === 0) {
+      return { skillId, attempts: [] };
+    }
+
+    const attempts: SkillSyncResult['attempts'] = [];
+    for (const entry of entries) {
+      const targetPath = entry.path;
+      const inspection = inspectTarget(targetPath);
+      if (!inspection.exists) {
+        attempts.push({
+          agent: entry.agent,
+          path: targetPath,
+          mode: entry.mode as SkillSyncMode,
+          success: true,
+          reason: 'absent',
+        });
+        continue;
+      }
+      try {
+        removeSyncTarget(targetPath);
+        attempts.push({
+          agent: entry.agent,
+          path: targetPath,
+          mode: entry.mode as SkillSyncMode,
+          success: true,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'unknown error';
+        attempts.push({
+          agent: entry.agent,
+          path: targetPath,
+          mode: entry.mode as SkillSyncMode,
+          success: false,
+          reason,
+        });
+      }
+    }
+
+    if (metadata) {
+      this.recordSkillSyncTargets(skillId, []);
+    }
+    return { skillId, attempts };
+  }
+
+  /**
+   * Apply a user decision to an existing sync conflict. Currently this is
+   * informational: the conflict is resolved when `syncSkillToTargets` runs
+   * with a `resolveConflict` callback, so this method just records the
+   * decision in metadata for later auditing and returns the next sync
+   * result.
+   */
+  async resolveSyncConflict(
+    skillId: string,
+    agent: string,
+    decision: SkillSyncConflictDecision,
+  ): Promise<SkillSyncResult> {
+    console.log(`[SkillManager] resolveSyncConflict: ${skillId}/${agent} → ${decision}`);
+    // Re-run sync with the resolved decision so the next attempt respects
+    // the user's choice. We pass an inline resolver that returns the
+    // supplied decision.
+    return this.syncSkillToTargets(skillId, {
+      resolveConflict: (_id, conflict) => {
+        if (conflict.agent === agent) return decision;
+        return SkillSyncConflictDecision.Keep;
+      },
+    });
+  }
+
+  /**
+   * Apply a user decision to a sync failure (retry / skip / cancel).
+   * Mirrors `resolveSyncConflict` but routes through the failure handler.
+   */
+  async reportSyncFailure(
+    skillId: string,
+    agent: string,
+    decision: SkillSyncFailureDecision,
+  ): Promise<SkillSyncResult> {
+    console.log(`[SkillManager] reportSyncFailure: ${skillId}/${agent} → ${decision}`);
+    return this.syncSkillToTargets(skillId, {
+      handleFailure: (_id, failure) => {
+        if (failure.agent === agent) return decision;
+        return SkillSyncFailureDecision.Skip;
+      },
+    });
+  }
+
+  /**
+   * Sync every installed user skill to its enabled targets. Bundled skills
+   * are skipped. Used after the user enables a target in Settings or
+   * changes its path.
+   */
+  async syncAllSkillsToTargets(): Promise<{ synced: number; results: SkillSyncResult[] }> {
+    const skills = this.listSkills().filter(s => !s.isBuiltIn);
+    const results: SkillSyncResult[] = [];
+    let synced = 0;
+    for (const skill of skills) {
+      const result = await this.syncSkillToTargets(skill.id);
+      results.push(result);
+      if (result.attempts.some(a => a.success)) synced += 1;
+    }
+    return { synced, results };
   }
 
   /**
