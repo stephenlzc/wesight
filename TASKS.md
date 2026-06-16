@@ -32,9 +32,9 @@
 - [x] 实现首次启动时旧 skill 迁移到 `skill_metadata`（`source_type: 'unknown'`）（Agent-5 `migrateLegacySkills()` 在 `2880c77` 中实现）
 
 ### 来源记录
-- [ ] 在 `downloadSkill()` 结束时写入/更新 `skill_metadata`
-- [ ] 在 `performSkillUpgrade()` 结束时更新 `skill_metadata` 的 `version`、`source_url`、`source_ref`、`updated_at`
-- [ ] 在 `deleteSkill()` 时清理 `skill_metadata` 记录
+- [x] 在 `downloadSkill()` 结束时写入/更新 `skill_metadata`（Agent-2 完成 `8415341`，含 `recordInstallSources` 入口）
+- [x] 在 `performSkillUpgrade()` 结束时更新 `skill_metadata` 的 `version`、`source_url`、`source_ref`、`updated_at`（Agent-2 完成 `8415341`，含 `refreshUpgradeSourceMetadata`）
+- [x] 在 `deleteSkill()` 时清理 `skill_metadata` 记录（Agent-2 完成 `8415341`，`deleteSkill()` 内调用 `forgetSkillMetadata`）
 
 ### 同步目标配置
 - [ ] 新增 `SkillSyncTarget` 类型和默认目标列表（Claude / Kimi / OpenClaw / Codex / Custom）
@@ -76,11 +76,11 @@
 - [ ] 在 `src/renderer/services/skill.ts` 中暴露新的渲染层 API
 
 ### 测试
-- [ ] 编写 `sqliteStore.test.ts` 中 `skill_metadata` 表的测试
+- [x] 编写 `sqliteStore.test.ts` 中 `skill_metadata` 表的测试（Agent-2 完成 `eb36fe6`：schema/CRUD/migration/corrupt-JSON 共 5 项）
 - [ ] 编写 `skillManager.registry.test.ts`：CRUD 和迁移
-- [ ] 编写 `skillSyncResolver.test.ts`：symlink/copy 决策、路径冲突检测
+- [x] 编写 `skillSyncResolver.test.ts`：symlink/copy 决策、路径冲突检测（Agent-1 完成 `b1a27fd`）
 - [ ] 编写 `skillManager.sync.lifecycle.test.ts`：安装/删除/升级端到端测试（使用临时目录）
-- [ ] 运行 `npm run lint` 并清理新增警告
+- [x] 运行 `npm run lint` 并清理新增警告（Agent-2 已运行 lint，无新增警告）
 
 ### 文档与收尾
 - [ ] 更新 `docs/prd-skill-manager-v1.md` 中任何与实际实现不一致的地方
