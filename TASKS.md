@@ -71,9 +71,9 @@
 - [ ] 实现首次安装引导 IPC 弹窗
 
 ### IPC 与常量
-- [ ] 在 `src/shared/skills/constants.ts` 中新增 IPC 通道常量
-- [ ] 在 `src/main/main.ts` 中注册新的 IPC handlers
-- [ ] 在 `src/renderer/services/skill.ts` 中暴露新的渲染层 API
+- [x] 在 `src/shared/skills/constants.ts` 中新增 IPC 通道常量（Agent-2 完成 `f94fb2a`：GetSyncTargets / SetSyncTargets / GetSkillMetadata / ListSkillMetadata / ResolveSyncConflict / ReportSyncFailure / PromptFirstSyncTargets + SkillSourceType / SkillSyncMode / SkillSyncTargetKind 常量）
+- [x] 在 `src/main/main.ts` 中注册新的 IPC handlers（Agent-2 完成 `031f459`：GetSyncTargets / SetSyncTargets 处理器，封装 getSkillManager().setSyncTargets 并自动标记 firstRunPrompted）
+- [x] 在 `src/renderer/services/skill.ts` 中暴露新的渲染层 API（Agent-2 完成 `031f459`：skillService.getSyncTargets/setSyncTargets + electron.d.ts 类型契约）
 
 ### 测试
 - [x] 编写 `sqliteStore.test.ts` 中 `skill_metadata` 表的测试（Agent-2 完成 `eb36fe6`：schema/CRUD/migration/corrupt-JSON 共 5 项）
