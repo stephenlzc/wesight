@@ -6,7 +6,6 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 import { SkillSourceType, SkillSyncTargetKind } from '../../../shared/skills/constants';
@@ -183,4 +182,246 @@ test('first-install onboarding flag round-trips', () => {
   expect(SkillMetadataSync.isFirstInstallOnboarded(store as never)).toBe(false);
   SkillMetadataSync.markFirstInstallOnboarded(store as never);
   expect(SkillMetadataSync.isFirstInstallOnboarded(store as never)).toBe(true);
+});
+
+test('syncSkillToTargets skips target on foreign conflict without calling applySync', () => {
+  const store = createFakeStore();
+  const dir = path.join(os.tmpdir(), 'wesight-conflict-foreign');
+  fs.mkdirSync(dir, { recursive: true });
+  tempDirs.push(dir);
+  SkillMetadataSync.saveTargets(store as never, [
+    {
+      id: 'claude-code',
+      label: 'Claude Code',
+      kind: SkillSyncTargetKind.ClaudeCode,
+      path: dir,
+      enabled: true,
+    },
+  ]);
+  const skillDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wesight-meta-sync-'));
+  tempDirs.push(skillDir);
+
+  mockDetectConflict.mockReturnValueOnce({
+    hasConflict: true,
+    reason: 'foreign-directory',
+    incomingSourceType: SkillSourceType.GitHub,
+  });
+
+  const outcomes = SkillMetadataSync.syncSkillToTargets(
+    store as never,
+    skillDir,
+    'my-skill',
+    SkillSourceType.GitHub,
+  );
+  expect(outcomes).toHaveLength(1);
+  expect(outcomes[0].applied).toBe(false);
+  expect(outcomes[0].skipped).toBe(true);
+  expect(outcomes[0].reason).toBe('foreign-directory');
+  expect(mockApplySync).not.toHaveBeenCalled();
+});
+
+test('syncSkillToTargets proceeds past managed-different-source conflict', () => {
+  const store = createFakeStore();
+  const dir = path.join(os.tmpdir(), 'wesight-conflict-managed');
+  fs.mkdirSync(dir, { recursive: true });
+  tempDirs.push(dir);
+  SkillMetadataSync.saveTargets(store as never, [
+    {
+      id: 'kimi',
+      label: 'Kimi CLI',
+      kind: SkillSyncTargetKind.Kimi,
+      path: dir,
+      enabled: true,
+    },
+  ]);
+  const skillDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wesight-meta-sync-'));
+  tempDirs.push(skillDir);
+
+  mockDetectConflict.mockReturnValueOnce({
+    hasConflict: true,
+    reason: 'managed-different-source',
+    existingSourceType: SkillSourceType.GitHub,
+    incomingSourceType: SkillSourceType.Npm,
+  });
+
+  const outcomes = SkillMetadataSync.syncSkillToTargets(
+    store as never,
+    skillDir,
+    'my-skill',
+    SkillSourceType.Npm,
+  );
+  expect(outcomes).toHaveLength(1);
+  expect(outcomes[0].applied).toBe(true);
+  expect(mockApplySync).toHaveBeenCalledTimes(1);
+});
+
+test('syncSkillToTargets captures applySync errors into the outcome', () => {
+  const store = createFakeStore();
+  const dir = path.join(os.tmpdir(), 'wesight-sync-throws');
+  fs.mkdirSync(dir, { recursive: true });
+  tempDirs.push(dir);
+  SkillMetadataSync.saveTargets(store as never, [
+    {
+      id: 'openclaw',
+      label: 'OpenClaw',
+      kind: SkillSyncTargetKind.OpenClaw,
+      path: dir,
+      enabled: true,
+    },
+  ]);
+  const skillDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wesight-meta-sync-'));
+  tempDirs.push(skillDir);
+
+  mockApplySync.mockImplementationOnce(() => {
+    throw new Error('EPERM: symlink not permitted');
+  });
+
+  const outcomes = SkillMetadataSync.syncSkillToTargets(
+    store as never,
+    skillDir,
+    'my-skill',
+    SkillSourceType.GitHub,
+  );
+  expect(outcomes).toHaveLength(1);
+  expect(outcomes[0].applied).toBe(false);
+  expect(outcomes[0].error).toBe('EPERM: symlink not permitted');
+  expect(outcomes[0].mode).toBeUndefined();
+});
+
+test('syncSkillToTargets leaves metadata untouched when no target succeeds', () => {
+  const store = createFakeStore();
+  const dir = path.join(os.tmpdir(), 'wesight-skip-only');
+  fs.mkdirSync(dir, { recursive: true });
+  tempDirs.push(dir);
+  SkillMetadataSync.saveTargets(store as never, [
+    {
+      id: 'codex',
+      label: 'Codex CLI',
+      kind: SkillSyncTargetKind.Codex,
+      path: dir,
+      enabled: true,
+    },
+  ]);
+  const skillDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wesight-meta-sync-'));
+  tempDirs.push(skillDir);
+
+  mockDetectConflict.mockReturnValueOnce({
+    hasConflict: true,
+    reason: 'foreign-symlink',
+    incomingSourceType: SkillSourceType.GitHub,
+  });
+
+  SkillMetadataSync.syncSkillToTargets(
+    store as never,
+    skillDir,
+    'my-skill',
+    SkillSourceType.GitHub,
+  );
+  expect(store.upsertSkillMetadata).not.toHaveBeenCalled();
+});
+
+test('removeSkillFromTargets swallows removeTarget errors', () => {
+  const store = createFakeStore();
+  const dir = path.join(os.tmpdir(), 'wesight-remove-err');
+  fs.mkdirSync(dir, { recursive: true });
+  tempDirs.push(dir);
+  SkillMetadataSync.saveTargets(store as never, [
+    {
+      id: 'claude-code',
+      label: 'Claude Code',
+      kind: SkillSyncTargetKind.ClaudeCode,
+      path: dir,
+      enabled: false,
+    },
+  ]);
+  mockRemoveTarget.mockImplementationOnce(() => {
+    throw new Error('EBUSY: resource busy');
+  });
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(() => SkillMetadataSync.removeSkillFromTargets(store as never, 'my-skill')).not.toThrow();
+    expect(warnSpy).toHaveBeenCalled();
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test('listTargets keeps custom targets after built-in overrides', () => {
+  const store = createFakeStore();
+  const customDir = path.join(os.tmpdir(), 'wesight-custom-trailing');
+  fs.mkdirSync(customDir, { recursive: true });
+  tempDirs.push(customDir);
+  SkillMetadataSync.saveTargets(store as never, [
+    {
+      id: 'claude-code',
+      label: 'Claude Code',
+      kind: SkillSyncTargetKind.ClaudeCode,
+      path: customDir,
+      enabled: true,
+    },
+    {
+      id: 'custom-misc',
+      label: 'My Custom',
+      kind: SkillSyncTargetKind.Custom,
+      path: '/tmp/wesight-custom-misc',
+      enabled: true,
+      isCustom: true,
+    },
+  ]);
+  const targets = SkillMetadataSync.listTargets(store as never);
+  const claude = targets.find(t => t.id === 'claude-code');
+  const custom = targets.find(t => t.id === 'custom-misc');
+  expect(claude?.enabled).toBe(true);
+  expect(claude?.isCustom).toBe(false);
+  expect(custom?.enabled).toBe(true);
+  expect(custom?.isCustom).toBe(true);
+  expect(custom?.path).toBe('/tmp/wesight-custom-misc');
+});
+
+test('syncSkillToTargets applies outcomes to metadata when at least one succeeds', () => {
+  const store = createFakeStore();
+  const claudeDir = path.join(os.tmpdir(), 'wesight-apply-meta-1');
+  const kimiDir = path.join(os.tmpdir(), 'wesight-apply-meta-2');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.mkdirSync(kimiDir, { recursive: true });
+  tempDirs.push(claudeDir, kimiDir);
+  SkillMetadataSync.saveTargets(store as never, [
+    {
+      id: 'claude-code',
+      label: 'Claude Code',
+      kind: SkillSyncTargetKind.ClaudeCode,
+      path: claudeDir,
+      enabled: true,
+    },
+    {
+      id: 'kimi',
+      label: 'Kimi CLI',
+      kind: SkillSyncTargetKind.Kimi,
+      path: kimiDir,
+      enabled: true,
+    },
+  ]);
+  const skillDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wesight-meta-sync-'));
+  tempDirs.push(skillDir);
+
+  // First target succeeds, second hits a foreign conflict.
+  mockDetectConflict
+    .mockReturnValueOnce({ hasConflict: false, incomingSourceType: SkillSourceType.GitHub })
+    .mockReturnValueOnce({
+      hasConflict: true,
+      reason: 'foreign-directory',
+      incomingSourceType: SkillSourceType.GitHub,
+    });
+
+  SkillMetadataSync.syncSkillToTargets(
+    store as never,
+    skillDir,
+    'my-skill',
+    SkillSourceType.GitHub,
+  );
+  expect(store.upsertSkillMetadata).toHaveBeenCalledTimes(1);
+  const arg = (store.upsertSkillMetadata as ReturnType<typeof vi.fn>).mock.calls[0][0];
+  expect(arg.syncTargets).toHaveLength(1);
+  expect(arg.syncTargets[0].agent).toBe(SkillSyncTargetKind.ClaudeCode);
+  expect(arg.syncTargets[0].path).toBe(path.join(claudeDir, 'my-skill'));
 });
