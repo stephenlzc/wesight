@@ -6,7 +6,7 @@ import fs from 'fs';
 import yaml from 'js-yaml';
 import path from 'path';
 
-import type { SkillSyncMode } from '../shared/skills/constants';
+import type { SkillSyncMode, SkillSourceType as SkillSourceTypeValue } from '../shared/skills/constants';
 import { SkillsIpcChannel,SkillSourceType } from '../shared/skills/constants';
 import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
@@ -20,6 +20,7 @@ import type {
   SkillHubMarketplaceSkill,
 } from './skillHubMarketplace';
 import { fetchSkillHubMarketplace } from './skillHubMarketplace';
+import { SkillMetadataSync } from './libs/skillManager/skillMetadataSync';
 import type { SkillMetadataRow } from './sqliteStore';
 import { SqliteStore } from './sqliteStore';
 
@@ -1857,6 +1858,11 @@ export class SkillManager {
     delete state[id];
     this.saveSkillStateMap(state);
     try {
+      SkillMetadataSync.removeSkillFromTargets(this.getStore(), id);
+    } catch (error) {
+      console.warn(`[SkillManager] failed to remove sync targets for ${id}:`, error);
+    }
+    try {
       this.deleteSkillMetadata(id);
     } catch (error) {
       console.warn(`[SkillManager] failed to clean up metadata for ${id}:`, error);
@@ -2060,7 +2066,18 @@ export class SkillManager {
           suffix += 1;
         }
         cpRecursiveSync(skillDir, targetDir);
-        this.recordInstalledSkillSource(path.basename(targetDir), trimmed);
+        const skillId = path.basename(targetDir);
+        this.recordInstalledSkillSource(skillId, trimmed);
+        try {
+          SkillMetadataSync.syncSkillToTargets(
+            this.getStore(),
+            targetDir,
+            skillId,
+            (this.getStore().getSkillMetadata(skillId)?.sourceType ?? 'unknown') as SkillSourceTypeValue,
+          );
+        } catch (error) {
+          console.warn('[SkillManager] failed to sync newly installed skill:', error);
+        }
       }
 
       cleanupPathSafely(cleanupPath);
@@ -2324,6 +2341,16 @@ export class SkillManager {
         const id = path.basename(targetDir);
         installedIds.push(id);
         this.recordInstalledSkillSource(id, pending.rootSource ?? '');
+        try {
+          SkillMetadataSync.syncSkillToTargets(
+            this.getStore(),
+            targetDir,
+            id,
+            (this.getStore().getSkillMetadata(id)?.sourceType ?? 'unknown') as SkillSourceTypeValue,
+          );
+        } catch (error) {
+          console.warn('[SkillManager] failed to sync newly installed skill:', error);
+        }
       }
     }
 
@@ -2511,6 +2538,21 @@ export class SkillManager {
       sourceRef: classification.ref,
       updatedAt: Date.now(),
     });
+    // Re-sync so symlinks pick up the new content
+    const installed = this.listSkills().find(s => s.id === skillId);
+    if (installed) {
+      try {
+        const skillDir = path.dirname(installed.skillPath);
+        SkillMetadataSync.syncSkillToTargets(
+          this.getStore(),
+          skillDir,
+          skillId,
+          classification.type as SkillSourceTypeValue,
+        );
+      } catch (error) {
+        console.warn(`[SkillManager] failed to re-sync after upgrade for ${skillId}:`, error);
+      }
+    }
   }
 
   getSkillMetadata(id: string): SkillMetadataRow | null {
