@@ -198,33 +198,69 @@ interface SkillRecord {
 ### 7.1 新增 IPC 通道（在 `src/shared/skills/constants.ts` 中）
 
 ```ts
-export const SkillIpcChannel = {
+export const SkillsIpcChannel = {
   // ... existing channels ...
-  GetSkillMetadata: 'skill:getMetadata',
-  SetSkillSyncTargets: 'skill:setSyncTargets',
-  GetSkillSyncTargets: 'skill:getSyncTargets',
-  ResolveSyncConflict: 'skill:resolveSyncConflict',
+  GetSyncTargets: 'skills:getSyncTargets',
+  SetSyncTargets: 'skills:setSyncTargets',
+  GetSkillMetadata: 'skills:getSkillMetadata',
+  ListSkillMetadata: 'skills:listSkillMetadata',
+  ResolveSyncConflict: 'skills:resolveSyncConflict',
+  ReportSyncFailure: 'skills:reportSyncFailure',
+  PromptFirstSyncTargets: 'skills:promptFirstSyncTargets',
+  Changed: 'skills:changed',
 } as const;
 ```
 
+> 实施注：v1 阶段 `ResolveSyncConflict` / `ReportSyncFailure` / `PromptFirstSyncTargets` 的常量已定义；对应的 IPC handler 与渲染层对话框由后续 issue 接入。orchestrator 走 `src/main/libs/skillManager/skillSyncOrchestrator.ts` 的 `onConflict` / `onFailure` 回调。
+
 ### 7.2 主进程新增方法
+
+`SkillManager`（`src/main/skillManager.ts`）实际暴露的与 v1 相关的 API：
 
 ```ts
 class SkillManager {
-  // registry
-  getSkillMetadata(id: string): Promise<SkillMetadata | null>;
-  setSkillMetadata(id: string, data: Partial<SkillMetadata>): Promise<void>;
-  migrateLegacySkills(): Promise<void>;
+  // --- metadata registry ---
+  recordSkillMetadata(skillId: string, data: Partial<SkillMetadataRow>): void;
+  recordSkillSyncTargets(skillId: string, entries: SkillSyncTargetEntry[]): void;
+  forgetSkillMetadata(skillId: string): void;
+  getSkillSourceInfo(skillId: string): SkillSource | undefined;
+  getSkillMetadata(id: string): SkillMetadataRow | null;
+  listSkillMetadata(): SkillMetadataRow[];
+  upsertSkillMetadata(id: string, data: Partial<SkillMetadataRow>): SkillMetadataRow;
+  deleteSkillMetadata(id: string): void;
+  migrateLegacySkills(): { migrated: number; skipped: number };
+  toSkillSource(row: SkillMetadataRow): SkillSource;
+  detectSourceFromInput(input: { ... }): SkillSource;
+  inferSourceFromUrl(url: string): SkillSource['type'];
 
-  // sync
+  // --- sync targets ---
   getSyncTargets(): SkillSyncTarget[];
-  setSyncTargets(targets: SkillSyncTarget[]): Promise<void>;
-  syncSkillToTargets(skillId: string): Promise<SyncResult[]>;
-  removeSkillFromTargets(skillId: string): Promise<SyncResult[]>;
+  setSyncTargets(targets: SkillSyncTarget[]): { success: boolean; error?: string };
+  markSyncTargetsFirstRunPrompted(): void;
+  isSyncTargetsFirstRunPrompted(): boolean;
 
-  // conflict
-  requestSyncConflictResolution(skillId: string, target: SkillSyncTarget, existingSource: SkillSource): Promise<'keep' | 'replace' | 'skip'>;
+  // --- lifecycle hooks (called by downloadSkill / deleteSkill / upgradeSkill) ---
+  recordInstalledSkillSource(skillId: string, sourceInput: string): void;
+  recordUpgradedSkillSource(skillId: string, sourceInput: string, version?: string): void;
 }
+```
+
+跨 Agent 同步的纯函数（`src/main/skillSyncResolver.ts`）和编排器（`src/main/libs/skillManager/skillSyncOrchestrator.ts`）：
+
+```ts
+// 纯决策（无副作用）
+decideSyncMode(platform?, developerMode?): SyncModeDecision;
+detectConflict(targetPath, incomingSourceType, sourceDir?): ConflictDescriptor;
+inspectTarget(targetPath): ExistingTargetInfo;
+applySync(sourceDir, targetPath, decision, opts?): void;
+removeTarget(targetPath): void;
+writeMarker(targetPath, sourceType): void;
+defaultTargetPath(kind, homeDir?): string;
+
+// 编排（副作用：调用回调、写入 metadata、按需回滚）
+syncSkillToTargets(skillId, sourceType, skillDir, options): Promise<SkillSyncResult>;
+removeSkillFromTargets(skillId, options): void;
+resyncSkillToTargets(skillId, sourceType, skillDir, options): Promise<SkillSyncResult>;
 ```
 
 ---
@@ -256,15 +292,15 @@ class SkillManager {
 ## 9. 里程碑与验收
 
 ### PR 合并标准
-- [ ] `skill_metadata` 表可用，旧 skill 成功迁移。
-- [ ] 新安装 skill 写入来源信息。
-- [ ] 安装/删除/升级均触发同步，目标目录正确创建/清理/更新。
-- [ ] 冲突和失败场景有弹窗处理。
-- [ ] UI 展示来源和同步目标。
-- [ ] Settings 可管理同步目标。
-- [ ] 新增单元测试 + 生命周期集成测试通过。
-- [ ] 现有测试不回归。
-- [ ] 代码通过 `npm run lint`。
+- [x] `skill_metadata` 表可用，旧 skill 成功迁移（`migrateLegacySkills()`，`isSkillMetadataMigrationComplete` 一次性 guard）。
+- [x] 新安装 skill 写入来源信息（`recordInstalledSkillSource` / `recordUpgradedSkillSource`）。
+- [x] 安装/删除/升级均触发同步，目标目录正确创建/清理/更新（`syncSkillToTargets` / `removeSkillFromTargets` 钩入生命周期）。
+- [ ] 冲突和失败场景有弹窗处理（orchestrator 回调已就绪，对话框与取消回滚的 IPC handler 后续接入）。
+- [x] UI 展示来源和同步目标（`SkillSourceInfo` + `SkillSyncedAgents` 在 `SkillsManager` 详情弹窗中）。
+- [x] Settings 可管理同步目标（`SyncTargetsSettingsView` 列表/编辑/添加/删除）。
+- [x] 新增单元测试 + 生命周期集成测试通过（85 项 skill 相关测试通过）。
+- [x] 现有测试不回归。
+- [x] 代码通过 `npm run lint`（仅有 3 处与本次工作无关的 simple-import-sort 旧问题）。
 
 ---
 
@@ -282,7 +318,7 @@ class SkillManager {
 
 ## 11. 待确认事项（PRD 定稿前）
 
-1. 是否需要保留已删除 skill 的 `skill_metadata` 历史记录？
-2. 首次安装引导是否覆盖通过 marketplace 安装的场景？
-3. 自定义 Agent 路径是否支持环境变量（如 `$HOME`）？
-4. `source_type: 'unknown'` 的迁移 skill 是否需要在 UI 中特殊标识？
+1. **已删除 skill 的元数据历史**：v1 直接删除（`deleteSkill` 调用 `forgetSkillMetadata`），不保留历史；如未来需要审计/恢复，再迁回单独的历史表。
+2. **首次安装引导覆盖范围**：`firstRunPrompted` 是按 sync-target 维度跟踪的；用户首次设置/写入目标即标记为已提示，marketplace 安装走相同 `downloadSkill` 路径，复用同一引导。
+3. **自定义 Agent 路径**：`setSyncTargets` 接受用户输入的绝对路径字符串；不做 `$HOME` 等环境变量展开（`buildDefaultSyncTargetsState` 在初始化时一次性基于 `os.homedir()` 落盘具体路径）。
+4. **`source_type: 'unknown'` 的 UI 标识**：UI 通过 `SkillSourceInfo` 展示 `sourceType`，renderer 不再额外加 badge；用户在 Settings 中可手动删除重建或重新 `downloadSkill` 时覆盖。
