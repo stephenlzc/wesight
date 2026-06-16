@@ -80,6 +80,7 @@
 - [x] 编写 `skillManager.registry.test.ts`：CRUD 和迁移（Agent-5 完成 `79a1226`：8 项测试覆盖 rowToSkillSource 往返、detect/classify 协同、CRUD 生命周期、migration 一次性标志、sync_targets 顺序/模式）
 - [x] 编写 `skillSyncResolver.test.ts`：symlink/copy 决策、路径冲突检测（Agent-1 完成 `b1a27fd`）
 - [x] 编写 `skillManager.sync.lifecycle.test.ts`：安装/删除/升级端到端测试（使用临时目录）（Agent-3 完成 `5e72803`：5 项测试覆盖 install+sync、delete+forget、upgrade 更新 updated_at、legacy migration 幂等性、forced copy 模式）
+- [x] 扩充 `skillMetadataSync.test.ts`：冲突/失败/错误路径（Agent-2 完成 `a61c121`：7 项测试覆盖 foreign/managed-different-source 冲突、applySync throw 错误传播、全失败时 metadata 不写入、removeSkillFromTargets 错误吞咽、custom 目标保留、partial success 时 metadata upsert 一次）
 - [x] 运行 `npm run lint` 并清理新增警告（Agent-2 已运行 lint，无新增警告）
 
 ### 文档与收尾
