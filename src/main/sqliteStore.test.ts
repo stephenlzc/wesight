@@ -236,3 +236,69 @@ test('sync targets getter discards malformed entries from kv', () => {
 
   store.close();
 });
+
+test('skill_metadata sync_targets filter drops non-array JSON payloads', () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wesight-skill-metadata-nonarr-'));
+  tempDirs.push(userDataDir);
+  const store = SqliteStore.create(userDataDir);
+  const now = Date.now();
+
+  store.getDatabase()
+    .prepare(`INSERT INTO skill_metadata
+      (id, source_type, installed_at, updated_at, sync_targets)
+      VALUES (?, ?, ?, ?, ?)`)
+    .run('solo', 'github', now, now, JSON.stringify({ agent: 'claude-code', path: '/p', mode: 'symlink' }));
+
+  const fetched = store.getSkillMetadata('solo');
+  expect(fetched?.syncTargets).toEqual([]);
+  store.close();
+});
+
+test('skill_metadata sync_targets filter drops entries with bad shape', () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wesight-skill-metadata-badshape-'));
+  tempDirs.push(userDataDir);
+  const store = SqliteStore.create(userDataDir);
+  const now = Date.now();
+
+  store.getDatabase()
+    .prepare(`INSERT INTO skill_metadata
+      (id, source_type, installed_at, updated_at, sync_targets)
+      VALUES (?, ?, ?, ?, ?)`)
+    .run('messy', 'github', now, now, JSON.stringify([
+      { agent: 'claude-code', path: '/a', mode: 'symlink' },
+      null,
+      'string-not-object',
+      { agent: 'kimi' /* missing path and mode */ },
+      { agent: 'codex', path: '/b' /* missing mode */ },
+      { agent: 'openclaw', path: '/c', mode: 'hardlink' /* bad mode */ },
+      { path: '/d', mode: 'copy' /* missing agent */ },
+    ]));
+
+  const fetched = store.getSkillMetadata('messy');
+  expect(fetched?.syncTargets).toEqual([
+    { agent: 'claude-code', path: '/a', mode: 'symlink' },
+  ]);
+  store.close();
+});
+
+test('listSkillMetadata returns rows ordered by id ASC', () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wesight-skill-metadata-order-'));
+  tempDirs.push(userDataDir);
+  const store = SqliteStore.create(userDataDir);
+  const now = Date.now();
+
+  // Insert out of order to make sure the query enforces sort
+  ['zzz-skill', 'aaa-skill', 'mmm-skill'].forEach((id) => {
+    store.upsertSkillMetadata({
+      id,
+      sourceType: 'github',
+      installedAt: now,
+      updatedAt: now,
+      syncTargets: [],
+    });
+  });
+
+  const ids = store.listSkillMetadata().map((row) => row.id);
+  expect(ids).toEqual(['aaa-skill', 'mmm-skill', 'zzz-skill']);
+  store.close();
+});
