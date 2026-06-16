@@ -15,8 +15,74 @@ type ChangePayload<T = unknown> = {
   oldValue: T | undefined;
 };
 
+type SkillSyncTargetRow = {
+  agent: string;
+  path: string;
+  mode: 'symlink' | 'copy';
+};
+
+export type SkillMetadataRow = {
+  id: string;
+  name?: string;
+  version?: string;
+  sourceType: string;
+  sourceUrl?: string;
+  sourceRef?: string;
+  author?: string;
+  license?: string;
+  homepage?: string;
+  installedAt: number;
+  updatedAt: number;
+  fileHash?: string;
+  remoteVersion?: string;
+  lastCheckAt?: number;
+  dirty?: boolean;
+  syncTargets: SkillSyncTargetRow[];
+};
+
+const mapSkillMetadataRow = (row: Record<string, unknown>): SkillMetadataRow => {
+  let syncTargets: SkillSyncTargetRow[] = [];
+  const raw = row.sync_targets;
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        syncTargets = parsed.filter((entry): entry is SkillSyncTargetRow => (
+          entry
+          && typeof entry === 'object'
+          && typeof (entry as SkillSyncTargetRow).agent === 'string'
+          && typeof (entry as SkillSyncTargetRow).path === 'string'
+          && ((entry as SkillSyncTargetRow).mode === 'symlink' || (entry as SkillSyncTargetRow).mode === 'copy')
+        ));
+      }
+    } catch {
+      syncTargets = [];
+    }
+  }
+
+  return {
+    id: String(row.id),
+    name: row.name ? String(row.name) : undefined,
+    version: row.version ? String(row.version) : undefined,
+    sourceType: String(row.source_type ?? 'unknown'),
+    sourceUrl: row.source_url ? String(row.source_url) : undefined,
+    sourceRef: row.source_ref ? String(row.source_ref) : undefined,
+    author: row.author ? String(row.author) : undefined,
+    license: row.license ? String(row.license) : undefined,
+    homepage: row.homepage ? String(row.homepage) : undefined,
+    installedAt: Number(row.installed_at) || 0,
+    updatedAt: Number(row.updated_at) || 0,
+    fileHash: row.file_hash ? String(row.file_hash) : undefined,
+    remoteVersion: row.remote_version ? String(row.remote_version) : undefined,
+    lastCheckAt: row.last_check_at ? Number(row.last_check_at) : undefined,
+    dirty: Boolean(row.dirty),
+    syncTargets,
+  };
+};
+
 const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
 const CODEX_CONFIG_SOURCE_DEFAULT_MIGRATION_KEY = 'cowork.codexConfigSource.defaultLocalCli.v1.completed';
+const SKILL_METADATA_MIGRATION_KEY = 'skills.metadata.v1.completed';
 const DEFAULT_AGENT_DB_NAME = 'Default Agent';
 const DEFAULT_AGENT_ENGINE = DefaultCoworkAgentEngine;
 
@@ -289,6 +355,9 @@ export class SqliteStore {
       );
     `);
 
+    // Create skill metadata table (issue #52, phase 1)
+    this.initializeSkillMetadataSchema();
+
     // Migrations - safely add columns if they don't exist
     try {
       // Check if execution_mode column exists
@@ -455,6 +524,119 @@ export class SqliteStore {
     this.migrateCodexConfigSourceDefault();
     this.migrateLegacyMemoryFileToUserMemories();
     this.migrateFromElectronStore(basePath);
+  }
+
+  private initializeSkillMetadataSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS skill_metadata (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        version TEXT,
+        source_type TEXT NOT NULL DEFAULT 'unknown',
+        source_url TEXT,
+        source_ref TEXT,
+        author TEXT,
+        license TEXT,
+        homepage TEXT,
+        installed_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        file_hash TEXT,
+        remote_version TEXT,
+        last_check_at INTEGER,
+        dirty INTEGER NOT NULL DEFAULT 0,
+        sync_targets TEXT NOT NULL DEFAULT '[]'
+      );
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_skill_metadata_source_type
+      ON skill_metadata(source_type);
+    `);
+  }
+
+  upsertSkillMetadata(row: SkillMetadataRow): void {
+    const now = Date.now();
+    this.db
+      .prepare(`
+        INSERT INTO skill_metadata (
+          id, name, version, source_type, source_url, source_ref,
+          author, license, homepage, installed_at, updated_at,
+          file_hash, remote_version, last_check_at, dirty, sync_targets
+        ) VALUES (
+          @id, @name, @version, @sourceType, @sourceUrl, @sourceRef,
+          @author, @license, @homepage, @installedAt, @updatedAt,
+          @fileHash, @remoteVersion, @lastCheckAt, @dirty, @syncTargets
+        )
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          version = excluded.version,
+          source_type = excluded.source_type,
+          source_url = excluded.source_url,
+          source_ref = excluded.source_ref,
+          author = excluded.author,
+          license = excluded.license,
+          homepage = excluded.homepage,
+          updated_at = excluded.updated_at,
+          file_hash = excluded.file_hash,
+          remote_version = excluded.remote_version,
+          last_check_at = excluded.last_check_at,
+          dirty = excluded.dirty,
+          sync_targets = excluded.sync_targets
+      `)
+      .run({
+        id: row.id,
+        name: row.name ?? null,
+        version: row.version ?? null,
+        sourceType: row.sourceType ?? 'unknown',
+        sourceUrl: row.sourceUrl ?? null,
+        sourceRef: row.sourceRef ?? null,
+        author: row.author ?? null,
+        license: row.license ?? null,
+        homepage: row.homepage ?? null,
+        installedAt: row.installedAt ?? now,
+        updatedAt: row.updatedAt ?? now,
+        fileHash: row.fileHash ?? null,
+        remoteVersion: row.remoteVersion ?? null,
+        lastCheckAt: row.lastCheckAt ?? null,
+        dirty: row.dirty ? 1 : 0,
+        syncTargets: JSON.stringify(row.syncTargets ?? []),
+      });
+  }
+
+  getSkillMetadata(id: string): SkillMetadataRow | null {
+    const row = this.db
+      .prepare('SELECT * FROM skill_metadata WHERE id = ?')
+      .get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return mapSkillMetadataRow(row);
+  }
+
+  listSkillMetadata(): SkillMetadataRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM skill_metadata ORDER BY id ASC')
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapSkillMetadataRow);
+  }
+
+  deleteSkillMetadata(id: string): void {
+    this.db.prepare('DELETE FROM skill_metadata WHERE id = ?').run(id);
+  }
+
+  countSkillMetadata(): number {
+    const row = this.db.prepare('SELECT COUNT(*) as count FROM skill_metadata').get() as { count: number };
+    return row.count;
+  }
+
+  /**
+   * Returns true if the legacy skill-metadata migration has already been run
+   * (so we can skip scanning existing skills on subsequent boots).
+   */
+  isSkillMetadataMigrationComplete(): boolean {
+    return this.get<string>(SKILL_METADATA_MIGRATION_KEY) === '1';
+  }
+
+  markSkillMetadataMigrationComplete(): void {
+    this.set(SKILL_METADATA_MIGRATION_KEY, '1');
   }
 
   onDidChange<T = unknown>(
