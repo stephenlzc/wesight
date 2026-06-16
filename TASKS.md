@@ -27,9 +27,9 @@
 
 ### 数据层与类型
 - [x] 在 `src/main/sqliteStore.ts` 中新增 `skill_metadata` 表及迁移逻辑（Agent-5/8 已完成基础提交 `f94fb2a`）
-- [ ] 在 `src/main/skillManager.ts` 中新增 `SkillMetadata` 类型和 registry CRUD 方法
-- [ ] 向后兼容扩展 `SkillRecord`（`src/main/skillManager.ts`）和 renderer `Skill` 类型（`src/renderer/types/skill.ts`）
-- [ ] 实现首次启动时旧 skill 迁移到 `skill_metadata`（`source_type: 'unknown'`）
+- [x] 在 `src/main/skillManager.ts` 中新增 `SkillMetadata` 类型和 registry CRUD 方法（Agent-5 完成 `2880c77`，含 `getSkillMetadata`/`listSkillMetadata`/`upsertSkillMetadata`/`deleteSkillMetadata`/`migrateLegacySkills`/`toSkillSource`/`detectSourceFromInput`）
+- [x] 向后兼容扩展 `SkillRecord`（`src/main/skillManager.ts`）和 renderer `Skill` 类型（`src/renderer/types/skill.ts`）（Agent-5 完成 `a690504`）
+- [x] 实现首次启动时旧 skill 迁移到 `skill_metadata`（`source_type: 'unknown'`）（Agent-5 `migrateLegacySkills()` 在 `2880c77` 中实现）
 
 ### 来源记录
 - [ ] 在 `downloadSkill()` 结束时写入/更新 `skill_metadata`
