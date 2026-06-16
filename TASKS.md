@@ -123,3 +123,10 @@
      - Skill unit tests: 147/147 passing; npm run lint: 0 errors
      - At time of capture: full suite 587/589 passing (Agent-4 subsequently fixed both; Agent-2 added 3 more edge-case tests → 592/592)
      - All TASKS.md items checked; no work remaining for Agent-3. -->
+
+<!-- Agent-3 session 4 (2026-06-16 20:51 GMT+8): rebase + verify, no new work.
+     - Resolved a stale rebase conflict in TASKS.md left from a prior session (unmerged markers from parallel agent comments; both sides kept additively).
+     - `git rebase --continue` advanced from `ef545f9` through my own pending pick `8f0580f`, then `git rebase --skip` was unnecessary — picked up cleanly.
+     - Final HEAD: b3c3e31 on branch agent-3-work, pushed to origin.
+     - `npm test` 592/592 passing (73 files); `npm run lint` 0 errors, 372 pre-existing `any` warnings unchanged.
+     - No active locks; HUMAN_INPUT.md empty; all TASKS.md items checked. Ending session. -->
