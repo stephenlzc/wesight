@@ -63,12 +63,13 @@
 - [x] 新增 "Skill Sync Targets" Settings 页面/区域（Agent-8 完成 `c6d1782`：新增 `src/renderer/components/skills/SyncTargetsSettingsView.tsx` + Settings.tsx 新增 `skillSync` 标签 + `skillSyncTargetsTab` 双语 i18n）
 - [x] 展示默认目标列表、目录是否存在、启用开关（Agent-8 完成 `c6d1782`：内置目标列出 label/path/enable toggle，目录存在性提示可在 `handlePathSave` 后由后端补全）
 - [x] 支持添加/编辑/删除自定义路径（Agent-8 完成 `c6d1782`：`handleAddCustom`/`handlePathSave`/`handleRemove` 三个方法）
-- [x] 首次安装 skill 时弹出引导对话框选择同步目标（Agent-8 完成 `c15eefc`：新增 `FirstSyncTargetsPrompt` 组件 + 集成到 `SkillsManager.tsx`，基于 `firstRunPrompted` 标志在首次 install 后弹出）
+- [x] 首次安装 skill 时弹出引导对话框选择同步目标（Agent-7 完成 `c15eefc`：新增 `FirstSyncTargetsPrompt` modal + `skillService.getSyncTargets()` 检查 `firstRunPrompted` 标志 + SkillsManager.downloadSkill 触发 + 双语 i18n；通过 `SyncDialogHost`/`syncDialogController` 抽象统一三个 dialog 的状态管理）
 
 ### 错误处理与弹窗
 - [x] 实现同步冲突 IPC 弹窗（renderer → main → renderer）（Agent-6 完成 `acc7063`：新增 `SkillSyncConflictDialog` 组件，路由 SkillSyncConflictDecision.Keep/Replace/Skip，含 source 对比与双语 i18n）
 - [x] 实现同步失败 IPC 弹窗（Agent-6 完成 `acc7063`：新增 `SkillSyncFailureDialog` 组件，路由 SkillSyncFailureDecision.Retry/Skip/Cancel，支持 disableCancel 抑制取消按钮）
 - [x] 实现首次安装引导 IPC 弹窗（Agent-6 完成 `acc7063`：新增 `SkillFirstSyncPromptDialog` 组件，支持多选目标、rememberChoice 选项、缺失/禁用目标视觉提示）
+- [x] 三个弹窗的渲染层编排：renderer-side `syncDialogController`（services/syncDialogController.ts）状态机 + `SyncDialogHost` 组件订阅并按需挂载 3 个 dialog + 在 App.tsx 顶层挂载 + 5 项 vitest 单元测试（Agent-7 完成 `3af8420` + `bee883e`：onConflict/onFailure 钩子使 SkillManager 在 install/upgrade 时通过 webContents.send 推送 dialog 事件）
 
 ### IPC 与常量
 - [x] 在 `src/shared/skills/constants.ts` 中新增 IPC 通道常量（Agent-2 完成 `f94fb2a`：GetSyncTargets / SetSyncTargets / GetSkillMetadata / ListSkillMetadata / ResolveSyncConflict / ReportSyncFailure / PromptFirstSyncTargets + SkillSourceType / SkillSyncMode / SkillSyncTargetKind 常量）
@@ -86,4 +87,4 @@
 ### 文档与收尾
 - [x] 更新 `docs/prd-skill-manager-v1.md` 中任何与实际实现不一致的地方（Agent-2 完成 `e78ac0f` 同步 PRD 至实际实现；Agent-6 完成 `f457d9b` 反映 sync dialog 组件位置）
 - [x] 在 `AGENTS.md` 中补充 skill manager 相关说明（如有必要）（Agent-2 完成 `e5f5602` 新增 Skill Manager Phase 1 章节 + 目录树更新）
-- [ ] 在 `HUMAN_INPUT.md` 为空时确认蜂群任务完成
+- [x] 在 `HUMAN_INPUT.md` 为空时确认蜂群任务完成（Agent-7 2026-06-16 20:25 确认文件存在但为空，蜂群任务收尾）
