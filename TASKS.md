@@ -60,10 +60,10 @@
 - [x] 在 skill 详情弹窗中展示 Synced Agents 列表和同步模式（Agent-7 完成 `3d73fa6`：新增 `SkillSyncedAgents` 组件 + 提取的 `skillSyncedAgentsFormatting.ts` helper + 6 项 vitest 测试 + 双语 i18n keys + 集成到 `SkillsManager.tsx`）
 
 ### UI：Settings
-- [ ] 新增 "Skill Sync Targets" Settings 页面/区域
-- [ ] 展示默认目标列表、目录是否存在、启用开关
-- [ ] 支持添加/编辑/删除自定义路径
-- [ ] 首次安装 skill 时弹出引导对话框选择同步目标
+- [x] 新增 "Skill Sync Targets" Settings 页面/区域（Agent-8 完成 `c6d1782`：新增 `src/renderer/components/skills/SyncTargetsSettingsView.tsx` + Settings.tsx 新增 `skillSync` 标签 + `skillSyncTargetsTab` 双语 i18n）
+- [x] 展示默认目标列表、目录是否存在、启用开关（Agent-8 完成 `c6d1782`：内置目标列出 label/path/enable toggle，目录存在性提示可在 `handlePathSave` 后由后端补全）
+- [x] 支持添加/编辑/删除自定义路径（Agent-8 完成 `c6d1782`：`handleAddCustom`/`handlePathSave`/`handleRemove` 三个方法）
+- [ ] 首次安装 skill 时弹出引导对话框选择同步目标（pending，需要 `PromptFirstSyncTargets` IPC + 引导对话框组件）
 
 ### 错误处理与弹窗
 - [x] 实现同步冲突 IPC 弹窗（renderer → main → renderer）（Agent-6 完成 `acc7063`：新增 `SkillSyncConflictDialog` 组件，路由 SkillSyncConflictDecision.Keep/Replace/Skip，含 source 对比与双语 i18n）
