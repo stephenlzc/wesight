@@ -4,10 +4,12 @@ import { app, BrowserWindow, session } from 'electron';
 import extractZip from 'extract-zip';
 import fs from 'fs';
 import yaml from 'js-yaml';
+import os from 'os';
 import path from 'path';
 
-import type { SkillSyncMode, SkillSourceType as SkillSourceTypeValue } from '../shared/skills/constants';
-import { SkillsIpcChannel,SkillSourceType } from '../shared/skills/constants';
+import type { SkillSyncMode } from '../shared/skills/constants';
+import { SkillsIpcChannel,SkillSourceType, SkillSyncTargetKind } from '../shared/skills/constants';
+import type { SkillSyncTarget } from '../shared/skills/types';
 import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
 import { getElectronNodeRuntimePath, resolveUserShellPath } from './libs/coworkUtil';
@@ -21,6 +23,7 @@ import type {
 } from './skillHubMarketplace';
 import { fetchSkillHubMarketplace } from './skillHubMarketplace';
 import { SkillMetadataSync } from './libs/skillManager/skillMetadataSync';
+import { buildDefaultSyncTargetsState } from './skillSyncTargets';
 import type { SkillMetadataRow } from './sqliteStore';
 import { SqliteStore } from './sqliteStore';
 
@@ -1478,6 +1481,92 @@ export class SkillManager {
   getSkillSourceInfo(skillId: string): SkillSource | undefined {
     const row = this.getStore().getSkillMetadata(skillId);
     return row ? rowToSkillSource(row) : undefined;
+  }
+
+  /**
+   * Return the user's persisted sync-target list. Reads from the kv store
+   * via `getSkillSyncTargets`, with defaults applied for first-run users.
+   */
+  getSyncTargets(): SkillSyncTarget[] {
+    const stored = this.getStore().getSkillSyncTargets();
+    if (stored.length === 0) {
+      return this.buildDefaultSyncTargets();
+    }
+    // The store returns SkillSyncTargetEntry (agent/path/path/mode) — the
+    // sync-target config has a different shape (id/kind/label/path/enabled).
+    // Bridge the two by reading the kv-stored target list under a separate
+    // key. Falls back to defaults if nothing has been written yet.
+    const configTargets = this.getStore().get<unknown>('skills.syncTargets.config');
+    if (Array.isArray(configTargets)) {
+      return configTargets.filter((t): t is SkillSyncTarget => (
+        Boolean(t) && typeof t === 'object' && typeof (t as SkillSyncTarget).id === 'string'
+      ));
+    }
+    return this.buildDefaultSyncTargets();
+  }
+
+  /**
+   * Persist a new list of sync targets. Validates the entries and
+   * rejects malformed input. Accepts loose input (e.g. from IPC) and
+   * narrows to the strict SkillSyncTarget type internally.
+   */
+  setSyncTargets(targets: Array<{
+    id: string;
+    kind?: string;
+    label?: string;
+    path: string;
+    enabled?: boolean;
+    isCustom?: boolean;
+    builtIn?: boolean;
+  }>): { success: boolean; error?: string } {
+    const validated: SkillSyncTarget[] = [];
+    for (const target of targets) {
+      if (!target || typeof target !== 'object') {
+        return { success: false, error: 'Each sync target must be an object' };
+      }
+      if (!target.id || typeof target.id !== 'string') {
+        return { success: false, error: 'Each sync target must have an id' };
+      }
+      if (!target.path || typeof target.path !== 'string') {
+        return { success: false, error: `Sync target ${target.id} is missing path` };
+      }
+      const kindValue = target.kind && (Object.values(SkillSyncTargetKind) as string[]).includes(target.kind)
+        ? target.kind as SkillSyncTargetKind
+        : SkillSyncTargetKind.Custom;
+      validated.push({
+        id: target.id,
+        kind: kindValue,
+        label: target.label ?? target.id,
+        path: target.path,
+        enabled: Boolean(target.enabled),
+        isCustom: Boolean(target.isCustom),
+        builtIn: target.builtIn,
+      });
+    }
+    this.getStore().set('skills.syncTargets.config', validated);
+    return { success: true };
+  }
+
+  /**
+   * Mark the first-install prompt as completed so the renderer doesn't
+   * show it again. Stored separately from the target list.
+   */
+  markSyncTargetsFirstRunPrompted(): void {
+    this.getStore().setSkillSyncTargetsFirstRunPrompted(true);
+  }
+
+  isSyncTargetsFirstRunPrompted(): boolean {
+    return this.getStore().getSkillSyncTargetsFirstRunPrompted();
+  }
+
+  /**
+   * Build the default sync-target list for first-run users. Mirrors the
+   * pure helper in skillSyncTargets but reads the actual home directory.
+   */
+  private buildDefaultSyncTargets(): SkillSyncTarget[] {
+    // Re-use the pure helper for consistency with the kv migration code.
+    const state = buildDefaultSyncTargetsState(os.homedir());
+    return state.targets;
   }
 
   /**

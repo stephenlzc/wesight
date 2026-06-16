@@ -4145,6 +4145,41 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle(SkillsIpcChannel.GetSyncTargets, () => {
+    try {
+      return {
+        success: true,
+        targets: getSkillManager().getSyncTargets(),
+        firstRunPrompted: getSkillManager().isSyncTargetsFirstRunPrompted(),
+      };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get sync targets' };
+    }
+  });
+
+  ipcMain.handle(SkillsIpcChannel.SetSyncTargets, (_event, targets: unknown) => {
+    try {
+      if (!Array.isArray(targets)) {
+        return { success: false, error: 'Sync targets must be an array' };
+      }
+      const result = getSkillManager().setSyncTargets(targets as Array<{
+        id: string;
+        kind?: string;
+        label?: string;
+        path: string;
+        enabled?: boolean;
+        isCustom?: boolean;
+        builtIn?: boolean;
+      }>);
+      if (result.success) {
+        getSkillManager().markSyncTargetsFirstRunPrompted();
+      }
+      return result;
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set sync targets' };
+    }
+  });
+
   ipcMain.handle('openclaw:engine:getStatus', async () => {
     try {
       const manager = getOpenClawEngineManager();

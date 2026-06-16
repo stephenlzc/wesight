@@ -315,6 +315,43 @@ class SkillService {
       return [];
     }
   }
+
+  async getSyncTargets(): Promise<{
+    targets: Array<{
+      id: string;
+      kind: string;
+      label: string;
+      path: string;
+      enabled: boolean;
+      isCustom: boolean;
+      builtIn?: boolean;
+    }>;
+    firstRunPrompted: boolean;
+  }> {
+    try {
+      const result = await window.electron.skills.getSyncTargets();
+      if (result.success) {
+        return {
+          targets: result.targets ?? [],
+          firstRunPrompted: result.firstRunPrompted === true,
+        };
+      }
+      return { targets: [], firstRunPrompted: false };
+    } catch (error) {
+      console.error('Failed to get sync targets:', error);
+      return { targets: [], firstRunPrompted: false };
+    }
+  }
+
+  async setSyncTargets(targets: unknown[]): Promise<boolean> {
+    try {
+      const result = await window.electron.skills.setSyncTargets(targets);
+      return result.success === true;
+    } catch (error) {
+      console.error('Failed to set sync targets:', error);
+      return false;
+    }
+  }
 }
 
 export const skillService = new SkillService();

@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('electron', {
     installMarketplaceSkill: (skill: any) => ipcRenderer.invoke(SkillsIpcChannel.InstallMarketplaceSkill, skill),
     getSkillMetadata: (skillId: string) => ipcRenderer.invoke(SkillsIpcChannel.GetSkillMetadata, skillId),
     listSkillMetadata: () => ipcRenderer.invoke(SkillsIpcChannel.ListSkillMetadata),
+    getSyncTargets: () => ipcRenderer.invoke(SkillsIpcChannel.GetSyncTargets),
+    setSyncTargets: (targets: unknown[]) => ipcRenderer.invoke(SkillsIpcChannel.SetSyncTargets, targets),
     onChanged: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on(SkillsIpcChannel.Changed, handler);

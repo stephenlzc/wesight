@@ -577,6 +577,21 @@ interface IElectronAPI {
     installMarketplaceSkill: (skill: MarketplaceSkill) => Promise<{ success: boolean; skills?: Skill[]; error?: string; auditReport?: any; pendingInstallId?: string }>;
     getSkillMetadata: (skillId: string) => Promise<{ success: boolean; metadata?: SkillMetadata | null; error?: string }>;
     listSkillMetadata: () => Promise<{ success: boolean; metadata?: SkillMetadata[]; error?: string }>;
+    getSyncTargets: () => Promise<{
+      success: boolean;
+      targets?: Array<{
+        id: string;
+        kind: string;
+        label: string;
+        path: string;
+        enabled: boolean;
+        isCustom: boolean;
+        builtIn?: boolean;
+      }>;
+      firstRunPrompted?: boolean;
+      error?: string;
+    }>;
+    setSyncTargets: (targets: unknown[]) => Promise<{ success: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   };
   mcp: {
