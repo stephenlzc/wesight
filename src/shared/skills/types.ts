@@ -96,3 +96,18 @@ export type SkillSyncResult = {
     reason?: string;
   }>;
 };
+
+export type FirstSyncPromptTarget = {
+  id: string;
+  kind: SkillSyncTargetKind | string;
+  label: string;
+  path: string;
+  enabled: boolean;
+  exists: boolean;
+  isCustom?: boolean;
+};
+
+export type FirstSyncPromptResolution = {
+  selectedTargetIds: string[];
+  rememberChoice: boolean;
+};
