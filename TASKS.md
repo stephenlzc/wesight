@@ -56,7 +56,7 @@
 - [ ] 确保 marketplace 升级流程不受影响
 
 ### UI：Skill 详情
-- [ ] 在 skill 详情弹窗中展示 Source 区域（type/url/ref/author/license/installedAt/updatedAt）
+- [x] 在 skill 详情弹窗中展示 Source 区域（type/url/ref/author/license/installedAt/updatedAt）（Agent-7 完成：新增 `SkillSourceInfo` 组件 + IPC `GetSkillMetadata`/`ListSkillMetadata` + i18n keys + 类型契约测试 `src/shared/skills/skillSource.test.ts`）
 - [ ] 在 skill 详情弹窗中展示 Synced Agents 列表和同步模式
 
 ### UI：Settings
