@@ -83,6 +83,6 @@
 - [x] 运行 `npm run lint` 并清理新增警告（Agent-2 初次运行；Agent-4 修复 3 个 `simple-import-sort` 导入排序错误，使 skill-manager 文件 lint 归零）
 
 ### 文档与收尾
-- [ ] 更新 `docs/prd-skill-manager-v1.md` 中任何与实际实现不一致的地方
-- [ ] 在 `AGENTS.md` 中补充 skill manager 相关说明（如有必要）
+- [x] 更新 `docs/prd-skill-manager-v1.md` 中任何与实际实现不一致的地方（Agent-2 完成 `e78ac0f` 同步 PRD 至实际实现；Agent-6 完成 `f457d9b` 反映 sync dialog 组件位置）
+- [x] 在 `AGENTS.md` 中补充 skill manager 相关说明（如有必要）（Agent-2 完成 `e5f5602` 新增 Skill Manager Phase 1 章节 + 目录树更新）
 - [ ] 在 `HUMAN_INPUT.md` 为空时确认蜂群任务完成
