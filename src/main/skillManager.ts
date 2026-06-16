@@ -6,13 +6,12 @@ import fs from 'fs';
 import yaml from 'js-yaml';
 import path from 'path';
 
-import type { SkillSyncMode } from '../shared/skills/constants';
-import { SkillsIpcChannel,SkillSourceType } from '../shared/skills/constants';
+import { SkillsIpcChannel, SkillSourceType, SkillSyncMode } from '../shared/skills/constants';
 import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
 import { getElectronNodeRuntimePath, resolveUserShellPath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
-import { mergeReports,scanMultipleSkillDirs, scanSkillSecurity } from './libs/skillSecurity/skillSecurityScanner';
+import { mergeReports,scanMultipleSkillDirs } from './libs/skillSecurity/skillSecurityScanner';
 import type { SecurityReportAction,SkillSecurityReport } from './libs/skillSecurity/skillSecurityTypes';
 import type {
   SkillHubMarketplaceOptions,
@@ -221,6 +220,23 @@ export type SkillRecord = {
   version?: string;
   source?: SkillSource;
   syncTargets?: SkillSyncTargetEntry[];
+};
+
+const skillSourceRowToInfo = (row: SkillMetadataRow | null): SkillSource | undefined => {
+  if (!row) return undefined;
+  const type = (Object.values(SkillSourceType) as string[]).includes(row.sourceType)
+    ? (row.sourceType as SkillSource['type'])
+    : SkillSourceType.Unknown;
+  return {
+    type,
+    url: row.sourceUrl,
+    ref: row.sourceRef,
+    author: row.author,
+    license: row.license,
+    homepage: row.homepage,
+    installedAt: row.installedAt,
+    updatedAt: row.updatedAt,
+  };
 };
 
 type SkillStateMap = Record<string, { enabled: boolean }>;
@@ -1349,10 +1365,120 @@ export class SkillManager {
     timer: NodeJS.Timeout;
     isUpgrade?: boolean;
     existingSkillDir?: string;
+    source?: string;
   }>();
   private upgradingSkillIds = new Set<string>();
 
   constructor(private getStore: () => SqliteStore) {}
+
+  /**
+   * Record the source of a freshly installed or upgraded skill.
+   * Falls back gracefully if the store is unavailable.
+   */
+  recordSkillMetadata(
+    skillId: string,
+    source: SkillSource | undefined,
+    options?: { updatedAt?: number; syncTargets?: SkillSyncTargetEntry[] }
+  ): void {
+    const store = this.getStore();
+    const existing = store.getSkillMetadata(skillId);
+    const now = options?.updatedAt ?? Date.now();
+    store.upsertSkillMetadata({
+      id: skillId,
+      name: source ? undefined : existing?.name,
+      version: source ? undefined : existing?.version,
+      sourceType: source?.type ?? existing?.sourceType ?? SkillSourceType.Unknown,
+      sourceUrl: source?.url ?? existing?.sourceUrl,
+      sourceRef: source?.ref ?? existing?.sourceRef,
+      author: source?.author ?? existing?.author,
+      license: source?.license ?? existing?.license,
+      homepage: source?.homepage ?? existing?.homepage,
+      installedAt: existing?.installedAt ?? now,
+      updatedAt: now,
+      dirty: existing?.dirty ?? false,
+      syncTargets: options?.syncTargets ?? existing?.syncTargets ?? [],
+    });
+  }
+
+  /**
+   * Record (or replace) the list of sync targets that this skill is synced to.
+   * Used after the sync resolver successfully creates symlinks/copies.
+   */
+  recordSkillSyncTargets(skillId: string, entries: SkillSyncTargetEntry[]): void {
+    const store = this.getStore();
+    const existing = store.getSkillMetadata(skillId);
+    if (!existing) return;
+    store.upsertSkillMetadata({
+      ...existing,
+      syncTargets: entries,
+      updatedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Drop the registry record for a skill. Called from deleteSkill so the
+   * metadata does not survive a user-initiated removal.
+   */
+  forgetSkillMetadata(skillId: string): void {
+    this.getStore().deleteSkillMetadata(skillId);
+  }
+
+  /**
+   * Look up persisted source metadata for a single skill id.
+   * Returns undefined when nothing is recorded.
+   */
+  getSkillSourceInfo(skillId: string): SkillSource | undefined {
+    return skillSourceRowToInfo(this.getStore().getSkillMetadata(skillId));
+  }
+
+  /**
+   * One-shot migration: scan installed skills and create registry rows for any
+   * that don't have one yet (source_type = 'unknown').
+   */
+  migrateLegacySkillsToRegistry(): void {
+    const store = this.getStore();
+    if (store.isSkillMetadataMigrationComplete()) return;
+
+    const skills = this.listSkillsRaw();
+    const now = Date.now();
+    let inserted = 0;
+    for (const skill of skills) {
+      if (store.getSkillMetadata(skill.id)) continue;
+      store.upsertSkillMetadata({
+        id: skill.id,
+        name: skill.name,
+        version: skill.version,
+        sourceType: SkillSourceType.Unknown,
+        installedAt: skill.updatedAt || now,
+        updatedAt: skill.updatedAt || now,
+        syncTargets: [],
+      });
+      inserted += 1;
+    }
+    store.markSkillMetadataMigrationComplete();
+    console.log(`[SkillManager] Migrated ${inserted} legacy skill(s) to skill_metadata registry`);
+  }
+
+  /**
+   * Best-effort inference of the source type from a download URL.
+   * Used by downloadSkill to record where a skill came from.
+   */
+  inferSourceFromUrl(url: string): SkillSource['type'] {
+    if (!url) return SkillSourceType.Unknown;
+    const trimmed = url.trim();
+    if (parseSkillHubSource(trimmed)) return SkillSourceType.SkillHub;
+    if (parseClawhubUrl(trimmed)) return SkillSourceType.ClawHub;
+    if (isNpmPackageSpec(trimmed)) return SkillSourceType.Npm;
+    if (isRemoteZipUrl(trimmed)) return SkillSourceType.Zip;
+    if (trimmed.startsWith('.') || trimmed.startsWith('/') || trimmed.startsWith('~') || fs.existsSync(trimmed)) {
+      return SkillSourceType.Local;
+    }
+    if (parseGithubRepoSource(trimmed) || parseGithubTreeOrBlobUrl(trimmed) || /^[\w.-]+\/[\w.-]+$/.test(trimmed)) {
+      return SkillSourceType.GitHub;
+    }
+    if (this.normalizeGitSource(trimmed)) return SkillSourceType.GitHub;
+    return SkillSourceType.Unknown;
+  }
 
   getSkillsRoot(): string {
     return path.resolve(app.getPath('userData'), SKILLS_DIR_NAME);
@@ -1562,6 +1688,26 @@ export class SkillManager {
   }
 
   listSkills(): SkillRecord[] {
+    const skills = this.listSkillsRaw();
+    const store = this.getStore();
+    return skills.map(skill => {
+      const meta = store.getSkillMetadata(skill.id);
+      if (!meta) return skill;
+      return {
+        ...skill,
+        version: skill.version ?? meta.version,
+        source: skillSourceRowToInfo(meta),
+        syncTargets: meta.syncTargets,
+      };
+    });
+  }
+
+  /**
+   * List skills directly from disk without consulting the metadata registry.
+   * The migration path uses this so the registry bootstrap doesn't depend on
+   * having registry rows already populated.
+   */
+  listSkillsRaw(): SkillRecord[] {
     const primaryRoot = this.ensureSkillsRoot();
     const state = this.loadSkillStateMap();
     const roots = this.getSkillRoots(primaryRoot);
@@ -1672,6 +1818,7 @@ export class SkillManager {
     const state = this.loadSkillStateMap();
     delete state[id];
     this.saveSkillStateMap(state);
+    this.forgetSkillMetadata(id);
     this.startWatching();
     this.notifySkillsChanged();
     return this.listSkills();
@@ -1850,6 +1997,7 @@ export class SkillManager {
           root,
           skillDirs,
           timer,
+          source: trimmed,
         });
 
         return {
@@ -1861,6 +2009,7 @@ export class SkillManager {
 
       // Safe or scan failed — install directly
       console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
+      const installedIds: string[] = [];
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
         let targetDir = resolveWithin(root, folderName);
@@ -1870,7 +2019,10 @@ export class SkillManager {
           suffix += 1;
         }
         cpRecursiveSync(skillDir, targetDir);
+        installedIds.push(path.basename(targetDir));
       }
+
+      this.recordInstallSources(installedIds, trimmed);
 
       cleanupPathSafely(cleanupPath);
       cleanupPath = null;
@@ -2020,6 +2172,7 @@ export class SkillManager {
           timer,
           isUpgrade: true,
           existingSkillDir,
+          source: downloadUrl,
         });
 
         // Ownership of cleanupPath transferred to pendingInstalls
@@ -2029,6 +2182,7 @@ export class SkillManager {
 
       // Safe — perform upgrade
       this.performSkillUpgrade(matchingSkillDir, existingSkillDir);
+      this.refreshUpgradeSourceMetadata(skillId, downloadUrl);
 
       cleanupPathSafely(cleanupPath);
       cleanupPath = null;
@@ -2039,6 +2193,67 @@ export class SkillManager {
     } catch (error) {
       cleanupPathSafely(cleanupPath);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to upgrade skill' };
+    }
+  }
+
+  /**
+   * Update the registry for an upgraded skill: refresh source URL/ref,
+   * bump updated_at, and inherit version from the on-disk SKILL.md frontmatter.
+   */
+  private refreshUpgradeSourceMetadata(skillId: string, downloadUrl: string): void {
+    const store = this.getStore();
+    const existing = store.getSkillMetadata(skillId);
+    const sourceType = this.inferSourceFromUrl(downloadUrl);
+    const version = this.getSkillVersion(path.dirname(this.listSkillsRaw().find(s => s.id === skillId)?.skillPath ?? '')) || existing?.version;
+
+    const normalized = this.normalizeGitSource(downloadUrl);
+    const ref = normalized?.ref;
+
+    store.upsertSkillMetadata({
+      ...(existing ?? {
+        id: skillId,
+        installedAt: Date.now(),
+        sourceType,
+        syncTargets: [],
+      }),
+      id: skillId,
+      version,
+      sourceType,
+      sourceUrl: downloadUrl,
+      sourceRef: ref ?? existing?.sourceRef,
+      updatedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Bulk helper for install-time metadata writes. Each freshly installed
+   * skill gets a row derived from the download URL and (when available)
+   * any frontmatter hints already on disk.
+   */
+  private recordInstallSources(skillIds: string[], source: string): void {
+    const sourceType = this.inferSourceFromUrl(source);
+    const normalized = this.normalizeGitSource(source);
+    for (const id of skillIds) {
+      const dir = path.join(this.ensureSkillsRoot(), id);
+      const version = this.getSkillVersion(dir);
+      const name = path.basename(dir);
+      this.recordSkillMetadata(id, {
+        type: sourceType,
+        url: source,
+        ref: normalized?.ref,
+        installedAt: Date.now(),
+        updatedAt: Date.now(),
+      }, { syncTargets: [] });
+      // Patch in the version/name after insert if available
+      const store = this.getStore();
+      const existing = store.getSkillMetadata(id);
+      if (existing && (version || name)) {
+        store.upsertSkillMetadata({
+          ...existing,
+          version: version ?? existing.version,
+          name: name ?? existing.name,
+        });
+      }
     }
   }
 
@@ -2125,6 +2340,14 @@ export class SkillManager {
         }
         cpRecursiveSync(skillDir, targetDir);
         installedIds.push(path.basename(targetDir));
+      }
+    }
+
+    if (pending.source) {
+      if (pending.isUpgrade && pending.existingSkillDir) {
+        this.refreshUpgradeSourceMetadata(path.basename(pending.existingSkillDir), pending.source);
+      } else {
+        this.recordInstallSources(installedIds, pending.source);
       }
     }
 
