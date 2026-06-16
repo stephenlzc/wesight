@@ -8,13 +8,14 @@ import os from 'os';
 import path from 'path';
 
 import type { SkillSyncMode } from '../shared/skills/constants';
-import { SkillsIpcChannel,SkillSourceType, SkillSyncConflictDecision, SkillSyncFailureDecision, SkillSyncTargetKind, type SkillSourceType as SkillSourceTypeValue,type SkillSyncMode as SkillSyncModeValue,type SkillsIpcChannel as SkillsIpcChannelValue } from '../shared/skills/constants';
+import { SkillsIpcChannel,type SkillsIpcChannel as SkillsIpcChannelValue,SkillSourceType, type SkillSourceType as SkillSourceTypeValue,SkillSyncConflictDecision, SkillSyncFailureDecision, type SkillSyncMode as SkillSyncModeValue,SkillSyncTargetKind } from '../shared/skills/constants';
 import type { SkillSyncConflict, SkillSyncFailure, SkillSyncResult, SkillSyncTarget } from '../shared/skills/types';
 import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
 import { getElectronNodeRuntimePath, resolveUserShellPath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
 import { SkillMetadataSync } from './libs/skillManager/skillMetadataSync';
+import { SyncDialogCoordinator } from './libs/skillManager/syncDialogCoordinator';
 import { mergeReports,scanMultipleSkillDirs, scanSkillSecurity } from './libs/skillSecurity/skillSecurityScanner';
 import type { SecurityReportAction,SkillSecurityReport } from './libs/skillSecurity/skillSecurityTypes';
 import type {
@@ -2158,13 +2159,10 @@ export class SkillManager {
         const skillId = path.basename(targetDir);
         this.recordInstalledSkillSource(skillId, trimmed);
         try {
-          SkillMetadataSync.syncSkillToTargets(
-            this.getStore(),
-            targetDir,
-            skillId,
-            (this.getStore().getSkillMetadata(skillId)?.sourceType ?? 'unknown') as SkillSourceTypeValue,
-            this.buildSyncDialogHooks(skillId),
-          );
+          await this.syncSkillToTargets(skillId, {
+            resolveConflict: (_id, conflict) => SyncDialogCoordinator.requestConflictResolution(conflict),
+            handleFailure: (_id, failure) => SyncDialogCoordinator.requestFailureResolution(failure),
+          });
         } catch (error) {
           console.warn('[SkillManager] failed to sync newly installed skill:', error);
         }
@@ -2329,7 +2327,7 @@ export class SkillManager {
       // Safe — perform upgrade
       this.performSkillUpgrade(matchingSkillDir, existingSkillDir);
       const upgradedVersion = this.getSkillVersion(existingSkillDir);
-      this.recordUpgradedSkillSource(skillId, downloadUrl, upgradedVersion || undefined);
+      await this.recordUpgradedSkillSource(skillId, downloadUrl, upgradedVersion || undefined);
 
       cleanupPathSafely(cleanupPath);
       cleanupPath = null;
@@ -2386,10 +2384,10 @@ export class SkillManager {
     fs.rmSync(upgradingDir, { recursive: true, force: true });
   }
 
-  confirmPendingInstall(
+  async confirmPendingInstall(
     pendingId: string,
     action: SecurityReportAction
-  ): { success: boolean; skills?: SkillRecord[]; error?: string } {
+  ): Promise<{ success: boolean; skills?: SkillRecord[]; error?: string }> {
     console.log(`[SkillManager] confirmPendingInstall: id=${pendingId}, action=${action}`);
     const pending = this.pendingInstalls.get(pendingId);
     if (!pending) {
@@ -2415,7 +2413,7 @@ export class SkillManager {
         const id = path.basename(pending.existingSkillDir);
         installedIds.push(id);
         const upgradedVersion = this.getSkillVersion(pending.existingSkillDir);
-        this.recordUpgradedSkillSource(id, pending.rootSource ?? '', upgradedVersion || undefined);
+        await this.recordUpgradedSkillSource(id, pending.rootSource ?? '', upgradedVersion || undefined);
       }
     } else {
       // Fresh install path: find unique directory name
@@ -2432,13 +2430,10 @@ export class SkillManager {
         installedIds.push(id);
         this.recordInstalledSkillSource(id, pending.rootSource ?? '');
         try {
-          SkillMetadataSync.syncSkillToTargets(
-            this.getStore(),
-            targetDir,
-            id,
-            (this.getStore().getSkillMetadata(id)?.sourceType ?? 'unknown') as SkillSourceTypeValue,
-            this.buildSyncDialogHooks(id),
-          );
+          await this.syncSkillToTargets(id, {
+            resolveConflict: (_id, conflict) => SyncDialogCoordinator.requestConflictResolution(conflict),
+            handleFailure: (_id, failure) => SyncDialogCoordinator.requestFailureResolution(failure),
+          });
         } catch (error) {
           console.warn('[SkillManager] failed to sync newly installed skill:', error);
         }
@@ -2667,11 +2662,11 @@ export class SkillManager {
    * Update the source fields for an upgraded skill. Keeps the original
    * installedAt; refreshes version/url/ref/updatedAt.
    */
-  recordUpgradedSkillSource(
+  async recordUpgradedSkillSource(
     skillId: string,
     sourceInput: string,
     version?: string,
-  ): void {
+  ): Promise<void> {
     if (this.isBuiltInSkillId(skillId)) {
       return;
     }
@@ -2688,14 +2683,10 @@ export class SkillManager {
     const installed = this.listSkills().find(s => s.id === skillId);
     if (installed) {
       try {
-        const skillDir = path.dirname(installed.skillPath);
-        SkillMetadataSync.syncSkillToTargets(
-          this.getStore(),
-          skillDir,
-          skillId,
-          classification.type as SkillSourceTypeValue,
-          this.buildSyncDialogHooks(skillId),
-        );
+        await this.syncSkillToTargets(skillId, {
+          resolveConflict: (_id, conflict) => SyncDialogCoordinator.requestConflictResolution(conflict),
+          handleFailure: (_id, failure) => SyncDialogCoordinator.requestFailureResolution(failure),
+        });
       } catch (error) {
         console.warn(`[SkillManager] failed to re-sync after upgrade for ${skillId}:`, error);
       }
