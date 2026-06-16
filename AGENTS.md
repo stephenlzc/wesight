@@ -86,13 +86,17 @@ src/main/
 ├── main.ts              # Entry point, IPC handlers
 ├── sqliteStore.ts       # SQLite database (kv + cowork tables)
 ├── coworkStore.ts       # Cowork session/message CRUD operations
-├── skillManager.ts      # Skill loading and management
+├── skillManager.ts      # Skill loading, metadata registry, sync wiring
+├── skillSyncResolver.ts # Pure helpers: detectConflict / decideSyncMode / applySync
+├── skillSyncTargets.ts  # Default target factory + kv reconcile helpers
 ├── im/                  # IM gateway integrations (DingTalk/Feishu/Telegram/Discord)
 └── libs/
     ├── agentEngine/
     │   ├── coworkEngineRouter.ts    # Routes to built-in or OpenClaw runtime
     │   ├── claudeRuntimeAdapter.ts  # Built-in Claude Agent SDK adapter
     │   └── openclawRuntimeAdapter.ts # OpenClaw gateway adapter
+    ├── skillManager/
+    │   └── skillMetadataSync.ts     # SkillManager-level sync orchestration (install/delete/upgrade)
     ├── coworkRunner.ts          # Claude Agent SDK execution engine
     ├── claudeSdk.ts             # SDK loader utilities
     ├── openclawEngineManager.ts # OpenClaw runtime lifecycle (install/start/status)
@@ -102,6 +106,7 @@ src/main/
 
 src/renderer/
 ├── types/cowork.ts      # Cowork type definitions
+├── types/skill.ts       # Skill / SkillSource / SkillSyncTargetEntry types
 ├── store/slices/
 │   ├── coworkSlice.ts   # Cowork sessions and streaming state
 │   └── artifactSlice.ts # Artifacts state
@@ -115,6 +120,12 @@ src/renderer/
 │   │   ├── CoworkSessionList.tsx   # Session sidebar
 │   │   ├── CoworkSessionDetail.tsx # Message display
 │   │   └── CoworkPermissionModal.tsx # Tool permission UI
+│   ├── skills/          # Skill UI (Phase 1)
+│   │   ├── SkillsManager.tsx       # Top-level skill management view
+│   │   ├── SkillsView.tsx          # List + detail modal
+│   │   ├── SkillSourceInfo.tsx     # Source metadata block in detail modal
+│   │   ├── SkillSyncedAgents.tsx   # Active sync target list
+│   │   └── SyncTargetsSettingsView.tsx # Settings → Skill Sync Targets panel
 │   └── artifacts/       # Artifact renderers
 
 SKILLs/                  # Custom skill definitions for cowork sessions
@@ -173,6 +184,22 @@ Both engines expose identical stream events through `CoworkEngineRouter`, so the
 - **Path alias**: `@` maps to `src/renderer/` in Vite config for imports.
 - **Skills**: Custom skill definitions in `SKILLs/` directory, configured via `skills.config.json`
 
+### Skill Manager (Phase 1)
+
+`src/main/skillManager.ts` is the orchestrator. It keeps three concerns separate:
+
+1. **Metadata registry** (SQLite `skill_metadata` table). Methods: `getSkillMetadata` / `listSkillMetadata` / `upsertSkillMetadata` / `deleteSkillMetadata` / `recordSkillMetadata` / `migrateLegacySkills`. One-shot legacy migration runs the first time `migrateLegacySkills()` is invoked and is gated by `isSkillMetadataMigrationComplete()`.
+2. **Source recording on lifecycle events**. `recordInstalledSkillSource` and `recordUpgradedSkillSource` classify the input via `classifySourceInput` and write a row. `recordUpgradedSkillSource` also re-syncs the skill to its targets. `forgetSkillMetadata` is called from `deleteSkill`.
+3. **Sync target config** (kv). `getSyncTargets` / `setSyncTargets` read and write `skills.syncTargets.config`; first-run prompt state lives in `skills.syncTargets.firstRunPrompted` (`isSyncTargetsFirstRunPrompted` / `markSyncTargetsFirstRunPrompted`). All built-in targets default to disabled.
+
+Pure cross-agent sync logic lives in `src/main/skillSyncResolver.ts` (`decideSyncMode`, `detectConflict`, `applySync`, `removeTarget`, `detectWindowsDeveloperMode`, `defaultTargetPath`). Windows detects developer mode; macOS/Linux use `fs.symlink('dir')`; EPERM on symlink auto-degrades to recursive copy.
+
+`src/main/libs/skillManager/skillMetadataSync.ts` is the bridge between the manager and the resolver: it loads the enabled target list, runs per-target sync, and writes per-skill outcomes back into `skill_metadata.sync_targets`. Conflicts and per-target failures are recorded in the outcome list; v1 does not yet prompt the user — dialog IPC channels (`ResolveSyncConflict`, `ReportSyncFailure`, `PromptFirstSyncTargets`) are declared and will be wired to a renderer dialog in v2.
+
+IPC channels: `src/shared/skills/constants.ts` exposes `SkillsIpcChannel`. Renderer-side types live in `src/shared/skills/types.ts` and `src/renderer/types/skill.ts`. UI components: `SkillSourceInfo` (source metadata) and `SkillSyncedAgents` (active sync targets) inside the skill detail modal; `SkillSyncTargetsSettings` in Settings.
+
+Tests live next to the source: `sqliteStore.test.ts`, `skillManager.registry.test.ts`, `skillSyncResolver.test.ts`, `skillSyncTargets.test.ts`, `skillMetadataSync.test.ts`, `skillManager.sync.lifecycle.test.ts`. When adding new sync code, extend the lifecycle suite (it uses temp dirs and exercises install/delete/upgrade against real filesystem operations).
+
 ### Artifacts System
 
 The Artifacts feature provides rich preview of code outputs similar to Claude's artifacts:
@@ -204,6 +231,7 @@ The Artifacts feature provides rich preview of code outputs similar to Claude's 
 - App config stored in SQLite `kv` table
 - Cowork config stored in `cowork_config` table (workingDirectory, systemPrompt, executionMode, **agentEngine**)
 - Cowork sessions and messages stored in `cowork_sessions` and `cowork_messages` tables
+- Skill metadata (Phase 1) stored in `skill_metadata` table (id / name / version / source_type / source_url / source_ref / author / license / homepage / installed_at / updated_at / sync_targets JSON). Sync target config lives in kv keys `skills.syncTargets.config` and `skills.syncTargets.firstRunPrompted`. Legacy migration runs once and is guarded by `skills.metadata.v1.completed`.
 - Scheduled tasks stored in `scheduled_tasks` table (cron expressions, task content)
 - Database file: `wesight.sqlite` in user data directory
 - OpenClaw pinned version declared in `package.json` under `"openclaw": { "version": "...", "repo": "..." }`; update the version field and re-run to upgrade
