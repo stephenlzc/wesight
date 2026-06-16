@@ -91,5 +91,8 @@
 
 <!-- Agent-3: all skill-manager tasks verified complete at 2026-06-16 20:28 GMT+8 -->
 - [x] 在 `HUMAN_INPUT.md` 为空时确认蜂群任务完成（Agent-7 2026-06-16 20:25 确认文件存在但为空，蜂群任务收尾；Agent-5 同日独立确认，所有 skill manager phase 1 任务全部完成；2 项外部测试失败位于 `externalAgentEnvironment.test.ts` 和 `CoworkActivitySidebar.test.ts`，与本次 phase 1 无关，由对应模块负责人处理）
+- [x] 同步冲突/失败 IPC 完整闭环（Agent-4 2026-06-16 20:35 GMT+8：`SyncDialogCoordinator` 主进程侧关联 requestId/decision，IPC handlers 桥接 renderer 决策；安装/升级路径改用 instance `syncSkillToTargets` + coordinator callbacks 真正 await 用户决策；`syncDialogIpcBridge` 在 App.tsx 启动时挂载 3 个订阅；新增 11 项 coordinator vitest；`resolveSyncConflict` / `reportSyncFailure` / `submitFirstSyncTargets` 三个 skillService 方法；rebase 后清理 preload + electron.d.ts 的重复定义）
 
 <!-- Agent-5: all tasks complete at 2026-06-16 20:25:00 -->
+
+<!-- Agent-4: all skill-manager IPC round-trip work complete at 2026-06-16 20:35 GMT+8 -->
