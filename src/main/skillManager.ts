@@ -331,6 +331,43 @@ const compareVersions = (a: string, b: string): number => {
   return 0;
 };
 
+/**
+ * Convert a stored SkillMetadataRow into the renderer-facing SkillSource.
+ * Pure function so it can be unit-tested without Electron dependencies.
+ */
+const rowToSkillSource = (row: SkillMetadataRow): SkillSource => {
+  return {
+    type: (row.sourceType as SkillSourceType) || SkillSourceType.Unknown,
+    url: row.sourceUrl,
+    ref: row.sourceRef,
+    author: row.author,
+    license: row.license,
+    homepage: row.homepage,
+    installedAt: row.installedAt,
+    updatedAt: row.updatedAt,
+  };
+};
+
+/**
+ * Build a SkillSource from a normalized download spec. Stamps installedAt
+ * and updatedAt with the current time.
+ */
+const detectSourceFromInput = (input: {
+  raw: string;
+  type: SkillSourceType;
+  url?: string;
+  ref?: string;
+}): SkillSource => {
+  const now = Date.now();
+  return {
+    type: input.type,
+    url: input.url,
+    ref: input.ref,
+    installedAt: now,
+    updatedAt: now,
+  };
+};
+
 const resolveWithin = (root: string, target: string): string => {
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(root, target);
@@ -2325,16 +2362,7 @@ export class SkillManager {
    * used by the Skill type.
    */
   toSkillSource(row: SkillMetadataRow): SkillSource {
-    return {
-      type: (row.sourceType as SkillSourceType) || SkillSourceType.Unknown,
-      url: row.sourceUrl,
-      ref: row.sourceRef,
-      author: row.author,
-      license: row.license,
-      homepage: row.homepage,
-      installedAt: row.installedAt,
-      updatedAt: row.updatedAt,
-    };
+    return rowToSkillSource(row);
   }
 
   /**
@@ -2348,14 +2376,7 @@ export class SkillManager {
     url?: string;
     ref?: string;
   }): SkillSource {
-    const now = Date.now();
-    return {
-      type: input.type,
-      url: input.url,
-      ref: input.ref,
-      installedAt: now,
-      updatedAt: now,
-    };
+    return detectSourceFromInput(input);
   }
 
   private parseSkillDir(
@@ -2947,4 +2968,7 @@ export const __skillManagerTestUtils = {
   extractDescription,
   parseClawhubUrl,
   parseSkillHubSource,
+  compareVersions,
+  rowToSkillSource,
+  detectSourceFromInput,
 };
