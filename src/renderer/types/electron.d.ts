@@ -604,26 +604,6 @@ interface IElectronAPI {
       callback: (payload: { requestId: string; targets: unknown[] }) => void,
     ) => () => void;
     onChanged: (callback: () => void) => () => void;
-    promptFirstSyncTargets: () => Promise<{ success: boolean; prompted?: boolean; skipped?: boolean; targets?: SkillSyncTarget[]; error?: string }>;
-    resolveSyncConflict: (payload: { skillId: string; agent: string; decision: string }) => Promise<{ success: boolean; error?: string }>;
-    reportSyncFailure: (payload: { skillId: string; agent: string; decision: string; reason?: string }) => Promise<{ success: boolean; error?: string }>;
-    onSyncConflict: (callback: (payload: {
-      skillId: string;
-      skillName?: string;
-      agent: string;
-      path: string;
-      existingSourceType?: string;
-      incomingSourceType: string;
-    }) => void) => () => void;
-    onSyncFailure: (callback: (payload: {
-      skillId: string;
-      skillName?: string;
-      agent: string;
-      path: string;
-      mode: string;
-      reason: string;
-      error: string;
-    }) => void) => () => void;
   };
   mcp: {
     list: () => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;

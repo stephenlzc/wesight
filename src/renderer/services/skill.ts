@@ -352,6 +352,44 @@ class SkillService {
       return false;
     }
   }
+
+  async resolveSyncConflict(requestId: string, decision: string): Promise<boolean> {
+    try {
+      const result = await window.electron.skills.resolveSyncConflict({ requestId, decision });
+      return result.success === true;
+    } catch (error) {
+      console.error('Failed to resolve sync conflict:', error);
+      return false;
+    }
+  }
+
+  async reportSyncFailure(requestId: string, decision: string): Promise<boolean> {
+    try {
+      const result = await window.electron.skills.reportSyncFailure({ requestId, decision });
+      return result.success === true;
+    } catch (error) {
+      console.error('Failed to report sync failure:', error);
+      return false;
+    }
+  }
+
+  async submitFirstSyncTargets(
+    requestId: string,
+    selectedTargetIds: string[],
+    rememberChoice: boolean,
+  ): Promise<boolean> {
+    try {
+      const result = await window.electron.skills.promptFirstSyncTargets({
+        requestId,
+        selectedTargetIds,
+        rememberChoice,
+      });
+      return result.success === true;
+    } catch (error) {
+      console.error('Failed to submit first-sync targets:', error);
+      return false;
+    }
+  }
 }
 
 export const skillService = new SkillService();
