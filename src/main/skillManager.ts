@@ -6,8 +6,8 @@ import fs from 'fs';
 import yaml from 'js-yaml';
 import path from 'path';
 
-import { SkillsIpcChannel } from '../shared/skills/constants';
-import type { SkillSourceType, SkillSyncMode } from '../shared/skills/constants';
+import type { SkillSyncMode } from '../shared/skills/constants';
+import { SkillsIpcChannel,SkillSourceType } from '../shared/skills/constants';
 import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
 import { getElectronNodeRuntimePath, resolveUserShellPath } from './libs/coworkUtil';
@@ -20,6 +20,7 @@ import type {
   SkillHubMarketplaceSkill,
 } from './skillHubMarketplace';
 import { fetchSkillHubMarketplace } from './skillHubMarketplace';
+import type { SkillMetadataRow } from './sqliteStore';
 import { SqliteStore } from './sqliteStore';
 
 /**
@@ -1531,6 +1532,14 @@ export class SkillManager {
     const defaults = this.loadSkillsDefaults(roots);
     const builtInSkillIds = this.listBuiltInSkillIds();
     const skillMap = new Map<string, SkillRecord>();
+    const metadataIndex = new Map<string, SkillMetadataRow>();
+    try {
+      for (const row of this.getStore().listSkillMetadata()) {
+        metadataIndex.set(row.id, row);
+      }
+    } catch (error) {
+      console.warn('[SkillManager] failed to read skill metadata index:', error);
+    }
 
     const openSquillaSkillRoots = this.getOpenSquillaSkillRoots();
     orderedRoots.forEach(root => {
@@ -1547,6 +1556,18 @@ export class SkillManager {
           builtInSkillIds.has(path.basename(dir)) || isOpenSquillaSkill,
         );
         if (!skill) return;
+        const meta = metadataIndex.get(skill.id);
+        if (meta) {
+          skill.source = this.toSkillSource(meta);
+          if (meta.syncTargets && meta.syncTargets.length > 0) {
+            skill.syncTargets = meta.syncTargets.map(entry => ({
+              agent: entry.agent,
+              path: entry.path,
+              mode: entry.mode,
+              syncedAt: meta.updatedAt,
+            }));
+          }
+        }
         skillMap.set(skill.id, skill);
       });
     });
@@ -2205,6 +2226,135 @@ export class SkillManager {
     this.changeListeners.push(listener);
     return () => {
       this.changeListeners = this.changeListeners.filter(l => l !== listener);
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 1: Skill metadata registry CRUD
+  // ---------------------------------------------------------------------------
+
+  getSkillMetadata(id: string): SkillMetadataRow | null {
+    return this.getStore().getSkillMetadata(id);
+  }
+
+  listSkillMetadata(): SkillMetadataRow[] {
+    return this.getStore().listSkillMetadata();
+  }
+
+  /**
+   * Upsert skill metadata. Pass a partial record to merge into the existing
+   * row. The current row is loaded first so that callers can update only
+   * the fields they care about (e.g. version) without losing others.
+   */
+  upsertSkillMetadata(id: string, data: Partial<SkillMetadataRow>): SkillMetadataRow {
+    const store = this.getStore();
+    const existing = store.getSkillMetadata(id);
+    const now = Date.now();
+    const merged: SkillMetadataRow = {
+      id,
+      name: data.name ?? existing?.name,
+      version: data.version ?? existing?.version,
+      sourceType: data.sourceType ?? existing?.sourceType ?? SkillSourceType.Unknown,
+      sourceUrl: data.sourceUrl ?? existing?.sourceUrl,
+      sourceRef: data.sourceRef ?? existing?.sourceRef,
+      author: data.author ?? existing?.author,
+      license: data.license ?? existing?.license,
+      homepage: data.homepage ?? existing?.homepage,
+      installedAt: existing?.installedAt ?? data.installedAt ?? now,
+      updatedAt: data.updatedAt ?? now,
+      fileHash: data.fileHash ?? existing?.fileHash,
+      remoteVersion: data.remoteVersion ?? existing?.remoteVersion,
+      lastCheckAt: data.lastCheckAt ?? existing?.lastCheckAt,
+      dirty: data.dirty ?? existing?.dirty ?? false,
+      syncTargets: data.syncTargets ?? existing?.syncTargets ?? [],
+    };
+    store.upsertSkillMetadata(merged);
+    return merged;
+  }
+
+  deleteSkillMetadata(id: string): void {
+    this.getStore().deleteSkillMetadata(id);
+  }
+
+  /**
+   * One-shot migration: scan installed skills and create a metadata row with
+   * `sourceType: 'unknown'` for any skill that doesn't already have one.
+   * Idempotent — relies on the store-side `isSkillMetadataMigrationComplete`
+   * guard plus the upsert's existing-row check.
+   */
+  migrateLegacySkills(): { migrated: number; skipped: number } {
+    const store = this.getStore();
+    if (store.isSkillMetadataMigrationComplete()) {
+      return { migrated: 0, skipped: 0 };
+    }
+
+    const installed = this.listSkills();
+    let migrated = 0;
+    let skipped = 0;
+    const now = Date.now();
+
+    for (const skill of installed) {
+      if (store.getSkillMetadata(skill.id)) {
+        skipped += 1;
+        continue;
+      }
+      const metadata: SkillMetadataRow = {
+        id: skill.id,
+        name: skill.name,
+        version: skill.version,
+        sourceType: SkillSourceType.Unknown,
+        installedAt: skill.updatedAt || now,
+        updatedAt: skill.updatedAt || now,
+        syncTargets: [],
+      };
+      try {
+        store.upsertSkillMetadata(metadata);
+        migrated += 1;
+      } catch (error) {
+        console.warn(`[SkillManager] failed to migrate skill metadata for ${skill.id}:`, error);
+      }
+    }
+
+    store.markSkillMetadataMigrationComplete();
+    console.log(`[SkillManager] legacy skill metadata migration: migrated=${migrated}, skipped=${skipped}`);
+    return { migrated, skipped };
+  }
+
+  /**
+   * Convert a stored metadata row into the renderer-facing `source` shape
+   * used by the Skill type.
+   */
+  toSkillSource(row: SkillMetadataRow): SkillSource {
+    return {
+      type: (row.sourceType as SkillSourceType) || SkillSourceType.Unknown,
+      url: row.sourceUrl,
+      ref: row.sourceRef,
+      author: row.author,
+      license: row.license,
+      homepage: row.homepage,
+      installedAt: row.installedAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  /**
+   * Derive a SkillSource from a free-form input spec (e.g. a GitHub URL,
+   * npm spec, or local path). The caller passes the normalized source string
+   * and any extra context the parser already produced.
+   */
+  detectSourceFromInput(input: {
+    raw: string;
+    type: SkillSourceType;
+    url?: string;
+    ref?: string;
+  }): SkillSource {
+    const now = Date.now();
+    return {
+      type: input.type,
+      url: input.url,
+      ref: input.ref,
+      installedAt: now,
+      updatedAt: now,
     };
   }
 
