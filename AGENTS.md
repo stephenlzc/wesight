@@ -84,9 +84,11 @@ Uses strict process isolation with IPC communication.
 ```
 src/main/
 ├── main.ts              # Entry point, IPC handlers
-├── sqliteStore.ts       # SQLite database (kv + cowork tables)
+├── sqliteStore.ts       # SQLite database (kv + cowork + skill_metadata tables)
 ├── coworkStore.ts       # Cowork session/message CRUD operations
-├── skillManager.ts      # Skill loading and management
+├── skillManager.ts      # Skill install/upgrade/delete + metadata + sync hooks
+├── skillSyncResolver.ts # Pure sync decisions (symlink vs copy, conflict detect)
+├── skillSyncTargets.ts  # Default sync-target factory + kv reconcile
 ├── im/                  # IM gateway integrations (DingTalk/Feishu/Telegram/Discord)
 └── libs/
     ├── agentEngine/
@@ -98,7 +100,10 @@ src/main/
     ├── openclawEngineManager.ts # OpenClaw runtime lifecycle (install/start/status)
     ├── openclawConfigSync.ts    # Syncs cowork config → OpenClaw config files
     ├── coworkMemoryExtractor.ts # Extracts memory changes from conversations
-    └── coworkMemoryJudge.ts     # Validates memory candidates with scoring/LLM
+    ├── coworkMemoryJudge.ts     # Validates memory candidates with scoring/LLM
+    └── skillManager/
+        ├── skillMetadataSync.ts      # Per-skill sync wrapper (listTargets / syncSkillToTargets / removeSkillFromTargets)
+        └── skillSyncOrchestrator.ts  # Conflict / failure callback orchestrator (v1 hooks ready, dialog wiring pending)
 
 src/renderer/
 ├── types/cowork.ts      # Cowork type definitions
@@ -162,6 +167,39 @@ Both engines expose identical stream events through `CoworkEngineRouter`, so the
 - `cowork:startSession`, `cowork:continueSession`, `cowork:stopSession`
 - `cowork:getSession`, `cowork:listSessions`, `cowork:deleteSession`
 - `cowork:respondToPermission`, `cowork:getConfig`, `cowork:setConfig`
+
+### Skill Manager (Phase 1, Issue #52)
+
+WeSight installs user skills into its own skills root, persists provenance in SQLite, and mirrors the result into the skill directories of configured Agents (Claude Code, Kimi CLI, OpenClaw, Codex CLI, custom). Bundled skills are read-only and never synced.
+
+**Persistence** (`src/main/sqliteStore.ts`):
+- `skill_metadata` table — one row per installed user skill, with `source_type` / `source_url` / `source_ref` / `version` / `installed_at` / `updated_at` and a JSON `sync_targets` column.
+- Reserved columns (`file_hash`, `remote_version`, `last_check_at`, `dirty`) feed the v2-v5 roadmap but are not surfaced in v1.
+- A `isSkillMetadataMigrationComplete` flag guards the one-shot `migrateLegacySkills()` backfill (`source_type: 'unknown'` for pre-existing skills).
+
+**Sync targets** (`src/main/skillSyncTargets.ts` + kv store):
+- `getSyncTargets()` / `setSyncTargets()` read & validate the user-edited list; defaults come from `buildDefaultSyncTargetsState(homeDir)`.
+- A separate `firstRunPrompted` flag is flipped the first time the user saves targets — the renderer uses it to decide whether to show the first-install onboarding.
+
+**Cross-agent sync** (`src/main/skillSyncResolver.ts` + `src/main/libs/skillManager/skillSyncOrchestrator.ts`):
+- `decideSyncMode(platform?, developerMode?)` returns `symlink` on macOS / Linux / Windows-with-developer-mode, `copy` otherwise.
+- `detectConflict()` flags foreign directories, foreign symlinks, and managed-different-source targets; the orchestrator hands conflicts to `onConflict(conflict)` and failures to `onFailure(failure)`.
+- `applySync()` writes a `.wesight-skill-link` marker so the resolver can recognise entries it owns.
+
+**Lifecycle hooks** (`src/main/skillManager.ts`):
+- `recordInstalledSkillSource(skillId, sourceInput)` — called from `downloadSkill()` after a successful install; classifies the source and writes the row.
+- `recordUpgradedSkillSource(skillId, sourceInput, version?)` — called from the upgrade path; refreshes `version` / `source_url` / `source_ref` / `updated_at`.
+- `forgetSkillMetadata(skillId)` — called from `deleteSkill()` so the registry stays in sync with the on-disk state.
+
+**Key IPC Channels** (`src/shared/skills/constants.ts`, namespace `SkillsIpcChannel`):
+- `skills:getSkillMetadata`, `skills:listSkillMetadata` — registry reads.
+- `skills:getSyncTargets`, `skills:setSyncTargets` — target config.
+- `skills:resolveSyncConflict`, `skills:reportSyncFailure`, `skills:promptFirstSyncTargets` — declared for the v1 dialog flow; the orchestrator callbacks are wired in `main.ts`.
+- `skills:changed` — broadcast event for renderer refresh.
+
+**Renderer** (`src/renderer/components/skills/`):
+- `SkillSourceInfo` and `SkillSyncedAgents` render the registry data in the skill detail modal.
+- `SyncTargetsSettingsView` (Settings → Skill Sync Targets) lets the user toggle built-in targets, add / edit / remove custom paths, and shows whether each target directory exists.
 
 ### Key Patterns
 
