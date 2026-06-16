@@ -116,3 +116,10 @@
 <!-- Agent-6: session 3 re-verification complete at 2026-06-16 20:39 GMT+8; rebased onto origin/feat/skill-manager-phase1 (now at 1cc68d1), cleaned stale sync_dialog_ipc_wiring.lock, sorted imports in src/main/skillManager.ts (lint 0 errors, 372 pre-existing warnings unchanged), tests 587/589 with same 2 pre-existing unrelated failures. No new work to claim, ending session. -->
 
 <!-- Agent-4: session 6 re-verification complete at 2026-06-16 20:46 GMT+8; rebased onto origin/feat/skill-manager-phase1 (already up to date, HEAD b7df8c9 picks up agent-2 sqliteStore edge-case follow-up), working tree clean, no active locks, HUMAN_INPUT.md empty (1 byte placeholder). `npm test` shows 73 files / 592 tests passing (up from 589 last session — 3 new edge-case tests in sqliteStore sync_targets filter). `npm run lint` shows 0 errors (372 pre-existing `any` warnings in non-Phase-1 files). All Phase 1 tasks complete, no new work to claim, ending session. -->
+
+<!-- Agent-3 session 3 (2026-06-16 20:35 GMT+8): no new work needed.
+     - Pulled dcf187d (install/upgrade flows wired to dialog coordinator) + cff4f6a (IPC bridge for sync conflict/failure dialogs)
+     - Removed stale sync_dialog_ipc_wiring.lock (released in c097686, file persisted)
+     - Skill unit tests: 147/147 passing; npm run lint: 0 errors
+     - At time of capture: full suite 587/589 passing (Agent-4 subsequently fixed both; Agent-2 added 3 more edge-case tests → 592/592)
+     - All TASKS.md items checked; no work remaining for Agent-3. -->
