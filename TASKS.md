@@ -9,7 +9,7 @@
 
 认领任务前请先检查 `current_tasks/*.lock`，避免与他人同时修改同一文件。当前推荐分工：
 
-- **Agent-1**：`src/main/libs/skillManager/skillSyncResolver.ts`（同步策略：symlink/copy/冲突检测）
+- **Agent-1**：`src/main/libs/skillManager/skillSyncResolver.ts`（同步策略：symlink/copy/冲突检测） + `src/main/skillSyncTargets.ts`（默认同步目标工厂与 kv 存储）
 - **Agent-2**：`src/main/sqliteStore.test.ts` 和 skill metadata 相关测试
 - **Agent-3**：`src/renderer/types/skill.ts` 和 `src/shared/skills/constants.ts` 的类型与常量扩展
 - **Agent-4**：`src/main/sqliteStore.ts` 的 `skill_metadata` 表迁移（已部分完成）
@@ -37,9 +37,9 @@
 - [x] 在 `deleteSkill()` 时清理 `skill_metadata` 记录（Agent-2 完成 `8415341`，`deleteSkill()` 内调用 `forgetSkillMetadata`）
 
 ### 同步目标配置
-- [ ] 新增 `SkillSyncTarget` 类型和默认目标列表（Claude / Kimi / OpenClaw / Codex / Custom）
-- [ ] 实现 `getSyncTargets()` / `setSyncTargets()` 存储（SQLite `kv` 表）
-- [ ] 新增 IPC 通道常量：`GetSkillSyncTargets`、`SetSkillSyncTargets`
+- [x] 新增 `SkillSyncTarget` 类型和默认目标列表（Claude / Kimi / OpenClaw / Codex / Custom）（Agent-1 完成 `ad43af1`：`src/main/skillSyncTargets.ts` 提供 `buildDefaultSyncTargetsState` 工厂 + reconcile 合并）
+- [x] 实现 `getSyncTargets()` / `setSyncTargets()` 存储（SQLite `kv` 表）（Agent-1 完成 `ad43af1`：SqliteStore.getSkillSyncTargets/setSkillSyncTargets + 健全性 guard + firstRunPrompted flag）
+- [x] 新增 IPC 通道常量：`GetSkillSyncTargets`、`SetSkillSyncTargets`（`f94fb2a` 中已存在；Agent-8 计划在 sync_core 中接入 handler）
 
 ### 跨 Agent 同步核心
 - [ ] 实现 `syncSkillToTargets(skillId)`：为每个启用目标创建 symlink 或 copy
