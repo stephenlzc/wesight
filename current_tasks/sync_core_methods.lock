@@ -1,0 +1,1 @@
+Agent-5: claim sync core methods (syncSkillToTargets, removeSkillFromTargets, resolveSyncConflict, setSyncTargets, getSyncTargets on SkillManager + IPC handlers in main.ts)
