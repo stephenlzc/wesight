@@ -9,6 +9,7 @@ import { expect, test } from 'vitest';
 
 import type { SkillMetadata, SkillSource } from './constants';
 import { SkillSourceType } from './constants';
+import type { SkillSyncTargetEntry } from './types';
 
 test('SkillSource accepts the minimum shape (type only)', () => {
   const source: SkillSource = { type: SkillSourceType.Unknown };
@@ -75,4 +76,15 @@ test('SkillSourceType values are stable', () => {
     Local: 'local',
     Unknown: 'unknown',
   });
+});
+
+test('SkillSyncTargetEntry accepts the minimum shape (agent + path + mode)', () => {
+  const entry: SkillSyncTargetEntry = {
+    agent: 'claude-code',
+    path: '~/.claude/skills/web-search',
+    mode: 'symlink',
+  };
+  expect(entry.agent).toBe('claude-code');
+  expect(entry.path).toBe('~/.claude/skills/web-search');
+  expect(entry.mode).toBe('symlink');
 });

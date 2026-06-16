@@ -26,6 +26,7 @@ import TrashIcon from '../icons/TrashIcon';
 import UploadIcon from '../icons/UploadIcon';
 import SkillSecurityReport from './SkillSecurityReport';
 import { SkillSourceInfo } from './SkillSourceInfo';
+import { SkillSyncedAgents } from './SkillSyncedAgents';
 
 type SkillTab = 'installed' | 'marketplace';
 type ImportSourceType = 'github' | 'clawhub';
@@ -1143,6 +1144,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                     <SkillSourceInfo
                       source={selectedSkill.source}
                       fallbackInstalledAt={selectedSkill.updatedAt}
+                    />
+                    <SkillSyncedAgents
+                      targets={selectedSkill.syncTargets}
                     />
                   </>
                 );
