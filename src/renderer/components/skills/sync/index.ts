@@ -2,5 +2,5 @@ export type { FirstSyncPromptResolution, FirstSyncPromptTarget } from './SkillFi
 export { SkillFirstSyncPromptDialog } from './SkillFirstSyncPromptDialog';
 export { SkillSyncConflictDialog } from './SkillSyncConflictDialog';
 export { SkillSyncFailureDialog } from './SkillSyncFailureDialog';
-export { getSourceTypeLabel, getSyncAgentLabel, getSyncModeLabel } from './syncDialogLabels';
 export { SyncDialogHost } from './SyncDialogHost';
+export { getSourceTypeLabel, getSyncAgentLabel, getSyncModeLabel } from './syncDialogLabels';
