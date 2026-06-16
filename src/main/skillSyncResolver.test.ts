@@ -1,15 +1,13 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  SkillSyncMode,
   SkillSourceType,
+  SkillSyncMode,
   SkillSyncTargetKind,
 } from '../shared/skills/constants';
-
 import {
   applySync,
   decideSyncMode,
@@ -222,5 +220,59 @@ describe('applySync + removeTarget', () => {
 
     expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
     expect(fs.existsSync(path.join(target, 'old.txt'))).toBe(false);
+  });
+});
+
+describe('applySync symlink fallback', () => {
+  it('falls back to recursive copy when symlink creation fails with EPERM', async () => {
+    const source = path.join(tmpRoot, 'source');
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, 'SKILL.md'), '# source');
+    const target = path.join(tmpRoot, 'target');
+
+    // Force symlinkSync to throw so the fallback path runs.
+    const symlinkSpy = vi.spyOn(fs, 'symlinkSync').mockImplementation(() => {
+      const err = new Error('operation not permitted') as NodeJS.ErrnoException;
+      err.code = 'EPERM';
+      throw err;
+    });
+
+    try {
+      applySync(source, target, { mode: SkillSyncMode.Symlink, reason: 'test' }, {
+        replaceExisting: false,
+        sourceType: SkillSourceType.Zip,
+      });
+    } finally {
+      symlinkSpy.mockRestore();
+    }
+
+    const lstat = fs.lstatSync(target);
+    expect(lstat.isSymbolicLink()).toBe(false);
+    expect(lstat.isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(target, 'SKILL.md'), 'utf8')).toBe('# source');
+    const info = inspectTarget(target);
+    expect(info.isManaged).toBe(true);
+    expect(info.managedSourceType).toBe(SkillSourceType.Zip);
+  });
+
+  it('rethrows non-permission errors from symlink creation', () => {
+    const source = path.join(tmpRoot, 'source');
+    fs.mkdirSync(source);
+    const target = path.join(tmpRoot, 'target');
+
+    const symlinkSpy = vi.spyOn(fs, 'symlinkSync').mockImplementation(() => {
+      const err = new Error('filesystem does not support symlinks') as NodeJS.ErrnoException;
+      err.code = 'ENOSYS';
+      throw err;
+    });
+
+    try {
+      expect(() => applySync(source, target, { mode: SkillSyncMode.Symlink, reason: 'test' }, {
+        replaceExisting: false,
+        sourceType: SkillSourceType.Local,
+      })).toThrow(/filesystem does not support symlinks/);
+    } finally {
+      symlinkSpy.mockRestore();
+    }
   });
 });
