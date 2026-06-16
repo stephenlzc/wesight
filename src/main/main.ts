@@ -4180,6 +4180,23 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('skills:getSyncTargetsFirstRunPrompted', () => {
+    try {
+      return { success: true, prompted: getStore().getSkillSyncTargetsFirstRunPrompted() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to read first-run flag' };
+    }
+  });
+
+  ipcMain.handle('skills:setSyncTargetsFirstRunPrompted', (_event, prompted: boolean) => {
+    try {
+      getStore().setSkillSyncTargetsFirstRunPrompted(Boolean(prompted));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to write first-run flag' };
+    }
+  });
+
   ipcMain.handle('openclaw:engine:getStatus', async () => {
     try {
       const manager = getOpenClawEngineManager();

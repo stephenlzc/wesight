@@ -345,7 +345,7 @@ class SkillService {
 
   async setSyncTargets(targets: unknown[]): Promise<boolean> {
     try {
-      const result = await window.electron.skills.setSyncTargets(targets);
+      const result = await window.electron.skills.setSyncTargets(targets as never);
       return result.success === true;
     } catch (error) {
       console.error('Failed to set sync targets:', error);

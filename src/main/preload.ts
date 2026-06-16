@@ -40,6 +40,10 @@ contextBridge.exposeInMainWorld('electron', {
     listSkillMetadata: () => ipcRenderer.invoke(SkillsIpcChannel.ListSkillMetadata),
     getSyncTargets: () => ipcRenderer.invoke(SkillsIpcChannel.GetSyncTargets),
     setSyncTargets: (targets: unknown[]) => ipcRenderer.invoke(SkillsIpcChannel.SetSyncTargets, targets),
+    getSyncTargetsFirstRunPrompted: () =>
+      ipcRenderer.invoke('skills:getSyncTargetsFirstRunPrompted'),
+    setSyncTargetsFirstRunPrompted: (prompted: boolean) =>
+      ipcRenderer.invoke('skills:setSyncTargetsFirstRunPrompted', prompted),
     onChanged: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on(SkillsIpcChannel.Changed, handler);

@@ -1476,6 +1476,19 @@ const translations: Record<LanguageType, Record<string, string>> = {
     emailConfigError: '保存配置失败',
     emailHintGmail: '如果开启了两步验证，请使用应用专用密码（App Password）',
     emailHint163: '请使用授权码，而非账户密码。需先在网页端设置中开启 IMAP/SMTP 服务',
+
+    // 技能同步目标
+    skillSyncTargetsTab: '技能同步',
+    skillSyncTargetsTitle: '技能同步目标',
+    skillSyncTargetsDescription: '将已安装的技能同步到其他 Agent 的 skills 目录。默认通过软链；Windows 在无开发者模式时自动改为复制。',
+    skillSyncTargetBuiltIn: '内置',
+    skillSyncEnabled: '已启用',
+    skillSyncDisabled: '未启用',
+    skillSyncTargetsEmpty: '尚未配置同步目标',
+    skillSyncAddCustomTitle: '添加自定义目标',
+    skillSyncAddCustomDescription: '指定任意本地路径作为同步目标；适合自研 Agent 或自托管 CLI。',
+    skillSyncAddCustomLabelPlaceholder: '显示名称（可选）',
+    skillSyncAddCustomPathPlaceholder: '/Users/you/.my-agent/skills',
     emailHintQQ: '请使用授权码，而非账户密码。需先在网页端设置中开启 IMAP/SMTP 服务',
 
     // 文件操作
@@ -3469,6 +3482,19 @@ const translations: Record<LanguageType, Record<string, string>> = {
     emailConfigError: 'Failed to save configuration',
     emailHintGmail: 'If 2FA is enabled, use an App Password instead of your account password',
     emailHint163: 'Use an authorization code, not your account password. Enable IMAP/SMTP in web settings first',
+
+    // Skill Sync Targets
+    skillSyncTargetsTab: 'Skill Sync',
+    skillSyncTargetsTitle: 'Skill Sync Targets',
+    skillSyncTargetsDescription: 'Sync installed skills into other Agent skills directories. Symlinks are used by default; Windows falls back to copy when Developer Mode is disabled.',
+    skillSyncTargetBuiltIn: 'Built-in',
+    skillSyncEnabled: 'Enabled',
+    skillSyncDisabled: 'Disabled',
+    skillSyncTargetsEmpty: 'No sync targets configured yet',
+    skillSyncAddCustomTitle: 'Add Custom Target',
+    skillSyncAddCustomDescription: 'Point sync to any local path. Useful for self-hosted agents or custom CLIs.',
+    skillSyncAddCustomLabelPlaceholder: 'Display name (optional)',
+    skillSyncAddCustomPathPlaceholder: '/Users/you/.my-agent/skills',
     emailHintQQ: 'Use an authorization code, not your account password. Enable IMAP/SMTP in web settings first',
 
     // File operations

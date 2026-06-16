@@ -20,6 +20,7 @@ import type { CoworkStudioAssetsResult } from '@shared/cowork/studioAssets';
 import type { FeishuEngineKeyType, FeishuManagementModeType, FeishuRuntimeOwnershipType, WeixinOwnershipType } from '@shared/im/constants';
 import type { DesktopPetTaskSnapshot, PetConfig, PetPosition } from '@shared/pet/constants';
 import type { SkillMarketplaceSort, SkillMarketplaceSourceType, SkillMetadata, SkillSource, SkillSourceType } from '@shared/skills/constants';
+import type { SkillSyncTarget } from '@shared/skills/types';
 
 interface ApiResponse {
   ok: boolean;
@@ -579,19 +580,13 @@ interface IElectronAPI {
     listSkillMetadata: () => Promise<{ success: boolean; metadata?: SkillMetadata[]; error?: string }>;
     getSyncTargets: () => Promise<{
       success: boolean;
-      targets?: Array<{
-        id: string;
-        kind: string;
-        label: string;
-        path: string;
-        enabled: boolean;
-        isCustom: boolean;
-        builtIn?: boolean;
-      }>;
+      targets?: SkillSyncTarget[];
       firstRunPrompted?: boolean;
       error?: string;
     }>;
-    setSyncTargets: (targets: unknown[]) => Promise<{ success: boolean; error?: string }>;
+    setSyncTargets: (targets: SkillSyncTarget[]) => Promise<{ success: boolean; targets?: SkillSyncTarget[]; error?: string }>;
+    getSyncTargetsFirstRunPrompted: () => Promise<{ success: boolean; prompted?: boolean; error?: string }>;
+    setSyncTargetsFirstRunPrompted: (prompted: boolean) => Promise<{ success: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   };
   mcp: {

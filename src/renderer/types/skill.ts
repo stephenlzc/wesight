@@ -1,4 +1,4 @@
-import type { SkillMarketplaceSort, SkillMarketplaceSourceType, SkillSourceType } from '@shared/skills/constants';
+import type { SkillMarketplaceSort, SkillMarketplaceSourceType, SkillSourceType, SkillSyncTargetKind } from '@shared/skills/constants';
 
 // Skill type definition
 export interface Skill {
@@ -75,3 +75,13 @@ export interface SkillMarketplaceOptions {
   sort?: SkillMarketplaceSort;
   limit?: number;
 }
+
+export type SkillSyncTarget = {
+  id: string;
+  kind: SkillSyncTargetKind | string;
+  label: string;
+  path: string;
+  enabled: boolean;
+  isCustom: boolean;
+  builtIn?: boolean;
+};

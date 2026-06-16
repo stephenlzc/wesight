@@ -88,9 +88,10 @@ import McpManager from './mcp/McpManager';
 import PetSprite, { PetMood } from './pet/PetSprite';
 import { ScheduledTasksView } from './scheduledTasks';
 import EmailSkillConfig from './skills/EmailSkillConfig';
+import SyncTargetsSettingsView from './skills/SyncTargetsSettingsView';
 import ThemedSelect from './ui/ThemedSelect';
 
-type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'agents' | 'shortcuts' | 'im' | 'email' | 'scheduledTasks' | 'mcp' | 'about';
+type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'agents' | 'shortcuts' | 'im' | 'email' | 'scheduledTasks' | 'skillSync' | 'mcp' | 'about';
 
 const COWORK_AGENT_ENGINE_OPTIONS: Array<{
   value: CoworkAgentEngine;
@@ -3097,6 +3098,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       { key: 'im' as TabType,             label: tabLabel('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
       { key: 'email' as TabType,          label: tabLabel('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
       { key: 'scheduledTasks' as TabType, label: tabLabel('scheduledTasksTitle'), icon: <ClockIcon className="h-5 w-5" /> },
+      { key: 'skillSync' as TabType,      label: tabLabel('skillSyncTargetsTab'), icon: <ArrowPathIcon className="h-5 w-5" /> },
       { key: 'mcp' as TabType,            label: tabLabel('mcpServers'),     icon: <ConnectorIcon className="h-5 w-5" /> },
       { key: 'coworkMemory' as TabType,   label: tabLabel('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
       { key: 'coworkAgent' as TabType,    label: tabLabel('coworkAgentTab'),    icon: <UserCircleIcon className="h-5 w-5" /> },
@@ -5213,6 +5215,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
       case 'email':
         return <EmailSkillConfig />;
+
+      case 'skillSync':
+        return <SyncTargetsSettingsView />;
 
       case 'coworkAgentEngine':
         return (
