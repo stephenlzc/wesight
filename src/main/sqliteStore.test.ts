@@ -172,3 +172,67 @@ test('skill_metadata gracefully handles corrupted sync_targets JSON', () => {
 
   store.close();
 });
+
+test('sync targets kv storage round-trips enabled state and filters malformed entries', () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wesight-sync-targets-'));
+  tempDirs.push(userDataDir);
+  const store = SqliteStore.create(userDataDir);
+
+  // Empty by default
+  expect(store.getSkillSyncTargets()).toEqual([]);
+  expect(store.getSkillSyncTargetsFirstRunPrompted()).toBe(false);
+
+  // Round-trip a valid list
+  store.setSkillSyncTargets([
+    {
+      id: 'builtin-claude-code',
+      kind: 'claude-code',
+      label: 'Claude Code',
+      path: '/home/test/.claude/skills',
+      enabled: true,
+      isCustom: false,
+      builtIn: true,
+    },
+    {
+      id: 'custom-extra',
+      kind: 'custom',
+      label: 'My Agent',
+      path: '/opt/my-agent/skills',
+      enabled: false,
+      isCustom: true,
+    },
+  ]);
+  const stored = store.getSkillSyncTargets();
+  expect(stored).toHaveLength(2);
+  expect(stored[0].id).toBe('builtin-claude-code');
+  expect(stored[0].enabled).toBe(true);
+  expect(stored[1].id).toBe('custom-extra');
+
+  // First-run prompted flag
+  store.setSkillSyncTargetsFirstRunPrompted(true);
+  expect(store.getSkillSyncTargetsFirstRunPrompted()).toBe(true);
+
+  store.close();
+});
+
+test('sync targets getter discards malformed entries from kv', () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wesight-sync-targets-bad-'));
+  tempDirs.push(userDataDir);
+  const store = SqliteStore.create(userDataDir);
+
+  // Plant a junk entry directly into kv to simulate corruption / older version
+  store.getDatabase()
+    .prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)')
+    .run('skills.syncTargets', JSON.stringify([
+      { id: 'good', kind: 'custom', label: 'Good', path: '/x', enabled: true, isCustom: true },
+      { id: 'bad', kind: 'custom' /* missing fields */ },
+      'not even an object',
+      null,
+    ]), Date.now());
+
+  const stored = store.getSkillSyncTargets();
+  expect(stored).toHaveLength(1);
+  expect(stored[0].id).toBe('good');
+
+  store.close();
+});

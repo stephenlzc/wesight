@@ -21,6 +21,29 @@ type SkillSyncTargetRow = {
   mode: 'symlink' | 'copy';
 };
 
+export type SkillSyncTargetEntry = {
+  id: string;
+  kind: string;
+  label: string;
+  path: string;
+  enabled: boolean;
+  isCustom: boolean;
+  builtIn?: boolean;
+};
+
+const isSkillSyncTargetEntry = (value: unknown): value is SkillSyncTargetEntry => {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.id === 'string'
+    && typeof v.kind === 'string'
+    && typeof v.label === 'string'
+    && typeof v.path === 'string'
+    && typeof v.enabled === 'boolean'
+    && typeof v.isCustom === 'boolean'
+  );
+};
+
 export type SkillMetadataRow = {
   id: string;
   name?: string;
@@ -83,6 +106,7 @@ const mapSkillMetadataRow = (row: Record<string, unknown>): SkillMetadataRow => 
 const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
 const CODEX_CONFIG_SOURCE_DEFAULT_MIGRATION_KEY = 'cowork.codexConfigSource.defaultLocalCli.v1.completed';
 const SKILL_METADATA_MIGRATION_KEY = 'skills.metadata.v1.completed';
+const SKILL_SYNC_TARGETS_KEY = 'skills.syncTargets';
 const DEFAULT_AGENT_DB_NAME = 'Default Agent';
 const DEFAULT_AGENT_ENGINE = DefaultCoworkAgentEngine;
 
@@ -625,6 +649,31 @@ export class SqliteStore {
   countSkillMetadata(): number {
     const row = this.db.prepare('SELECT COUNT(*) as count FROM skill_metadata').get() as { count: number };
     return row.count;
+  }
+
+  // ---- sync targets configuration (kv) ----
+
+  getSkillSyncTargets(): SkillSyncTargetEntry[] {
+    const raw = this.get<unknown>(SKILL_SYNC_TARGETS_KEY);
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(isSkillSyncTargetEntry);
+  }
+
+  setSkillSyncTargets(targets: SkillSyncTargetEntry[]): void {
+    const cleaned = targets.filter(isSkillSyncTargetEntry);
+    this.set(SKILL_SYNC_TARGETS_KEY, cleaned);
+  }
+
+  /**
+   * True when the user has been prompted at least once to pick sync targets.
+   * The Settings UI uses this to decide whether to show the first-run dialog.
+   */
+  getSkillSyncTargetsFirstRunPrompted(): boolean {
+    return this.get<boolean>('skills.syncTargets.firstRunPrompted') === true;
+  }
+
+  setSkillSyncTargetsFirstRunPrompted(value: boolean): void {
+    this.set('skills.syncTargets.firstRunPrompted', value);
   }
 
   /**
