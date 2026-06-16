@@ -27,6 +27,7 @@ import UploadIcon from '../icons/UploadIcon';
 import SkillSecurityReport from './SkillSecurityReport';
 import { SkillSourceInfo } from './SkillSourceInfo';
 import { SkillSyncedAgents } from './SkillSyncedAgents';
+import FirstSyncTargetsPrompt from './FirstSyncTargetsPrompt';
 
 type SkillTab = 'installed' | 'marketplace';
 type ImportSourceType = 'github' | 'clawhub';
@@ -103,6 +104,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     currentSkillVersion: string;
   } | null>(null);
   const upgradeCancelledRef = useRef(false);
+  const [showFirstSyncPrompt, setShowFirstSyncPrompt] = useState(false);
 
   const addSkillMenuRef = useRef<HTMLDivElement>(null);
   const addSkillButtonRef = useRef<HTMLButtonElement>(null);
@@ -326,6 +328,12 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
     setSkillDownloadSource('');
     setIsAddSkillMenuOpen(false);
     setIsRemoteImportOpen(false);
+
+    // First-install prompt: show once if user hasn't been asked yet.
+    const syncState = await skillService.getSyncTargets();
+    if (!syncState.firstRunPrompted) {
+      setShowFirstSyncPrompt(true);
+    }
   };
 
   const handleUploadSkillZip = async () => {
@@ -1297,6 +1305,13 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
           report={securityReport}
           onAction={handleSecurityReportAction}
           isLoading={isConfirmingInstall}
+        />
+      )}
+
+      {showFirstSyncPrompt && (
+        <FirstSyncTargetsPrompt
+          open={showFirstSyncPrompt}
+          onClose={() => setShowFirstSyncPrompt(false)}
         />
       )}
 

@@ -1512,6 +1512,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillSyncAddCustomDescription: '指定任意本地路径作为同步目标；适合自研 Agent 或自托管 CLI。',
     skillSyncAddCustomLabelPlaceholder: '显示名称（可选）',
     skillSyncAddCustomPathPlaceholder: '/Users/you/.my-agent/skills',
+    skillSyncFirstPromptTitle: '同步新安装的技能',
+    skillSyncFirstPromptDescription: '是否将后续安装的技能自动同步到其他 Agent？勾选要启用的目标，跳过则稍后在「设置 → 技能同步」中配置。',
+    skillSyncFirstPromptSkip: '稍后设置',
+    skillSyncFirstPromptConfirm: '保存并继续',
+    skillSyncFirstPromptEnabledCount: '已选择 {count} 个目标',
     emailHintQQ: '请使用授权码，而非账户密码。需先在网页端设置中开启 IMAP/SMTP 服务',
 
     // 文件操作
@@ -3541,6 +3546,11 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skillSyncAddCustomDescription: 'Point sync to any local path. Useful for self-hosted agents or custom CLIs.',
     skillSyncAddCustomLabelPlaceholder: 'Display name (optional)',
     skillSyncAddCustomPathPlaceholder: '/Users/you/.my-agent/skills',
+    skillSyncFirstPromptTitle: 'Sync new skills',
+    skillSyncFirstPromptDescription: 'Automatically sync new skills to other Agents? Pick the targets you want enabled. Skip to configure later under Settings → Skill Sync.',
+    skillSyncFirstPromptSkip: 'Skip for now',
+    skillSyncFirstPromptConfirm: 'Save and continue',
+    skillSyncFirstPromptEnabledCount: '{count} target(s) selected',
     emailHintQQ: 'Use an authorization code, not your account password. Enable IMAP/SMTP in web settings first',
 
     // File operations
