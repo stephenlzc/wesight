@@ -6,7 +6,6 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 import { SkillSourceType, SkillSyncTargetKind } from '../../../shared/skills/constants';

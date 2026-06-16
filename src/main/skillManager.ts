@@ -14,6 +14,7 @@ import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
 import { getElectronNodeRuntimePath, resolveUserShellPath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
+import { SkillMetadataSync } from './libs/skillManager/skillMetadataSync';
 import { mergeReports,scanMultipleSkillDirs, scanSkillSecurity } from './libs/skillSecurity/skillSecurityScanner';
 import type { SecurityReportAction,SkillSecurityReport } from './libs/skillSecurity/skillSecurityTypes';
 import type {
@@ -22,7 +23,6 @@ import type {
   SkillHubMarketplaceSkill,
 } from './skillHubMarketplace';
 import { fetchSkillHubMarketplace } from './skillHubMarketplace';
-import { SkillMetadataSync } from './libs/skillManager/skillMetadataSync';
 import { buildDefaultSyncTargetsState } from './skillSyncTargets';
 import type { SkillMetadataRow } from './sqliteStore';
 import { SqliteStore } from './sqliteStore';

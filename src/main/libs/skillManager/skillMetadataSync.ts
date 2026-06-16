@@ -20,7 +20,6 @@ import {
   SkillSyncTargetKind,
   type SkillSyncTargetKind as SkillSyncTargetKindValue,
 } from '../../../shared/skills/constants';
-import type { SkillMetadataRow, SqliteStore } from '../../sqliteStore';
 import {
   applySync,
   decideSyncMode,
@@ -30,6 +29,7 @@ import {
   inspectTarget,
   removeTarget,
 } from '../../skillSyncResolver';
+import type { SkillMetadataRow, SqliteStore } from '../../sqliteStore';
 
 const SYNC_TARGETS_KV_KEY = 'skills.syncTargets.v1';
 const FIRST_INSTALL_ONBOARDED_KEY = 'skills.firstInstall.onboarded';
