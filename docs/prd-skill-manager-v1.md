@@ -193,6 +193,12 @@ interface SkillRecord {
 - 内容：失败原因 + 路径
 - 按钮：重试、跳过此 Agent、取消安装
 
+### 6.5 对话框组件（v1 实现位置）
+- 冲突选择：`src/renderer/components/skills/sync/SkillSyncConflictDialog.tsx`
+- 失败处理：`src/renderer/components/skills/sync/SkillSyncFailureDialog.tsx`
+- 首次安装引导：`src/renderer/components/skills/sync/SkillFirstSyncPromptDialog.tsx`
+- 共享 i18n 路由：`src/renderer/components/skills/sync/syncDialogLabels.ts`
+
 ---
 
 ## 7. 接口与 IPC
@@ -272,7 +278,7 @@ class SkillManager {
 - [x] `skill_metadata` 表可用，旧 skill 成功迁移（`migrateLegacySkills` + `isSkillMetadataMigrationComplete`）。
 - [x] 新安装 skill 写入来源信息（`recordInstalledSkillSource` + `classifySourceInput`）。
 - [x] 安装/删除/升级均触发同步，目标目录正确创建/清理/更新（`SkillMetadataSync.syncSkillToTargets` / `removeSkillFromTargets`）。
-- [ ] 冲突和失败场景有弹窗处理（v1 默认跳过/记录 outcome；`ResolveSyncConflict` / `ReportSyncFailure` 通道已声明待 v2 接入）。
+- [x] 冲突和失败场景有弹窗处理（`SkillSyncConflictDialog` / `SkillSyncFailureDialog` / `SkillFirstSyncPromptDialog` 已实现并通过测试；与主进程 orchestrator 的 IPC 接入属于集成阶段）。
 - [x] UI 展示来源和同步目标（`SkillSourceInfo` + `SkillSyncedAgents`）。
 - [x] Settings 可管理同步目标（`SkillSyncTargetsSettings` + `getSyncTargets` / `setSyncTargets`）。
 - [x] 新增单元测试 + 生命周期集成测试通过（`sqliteStore.test.ts` / `skillManager.registry.test.ts` / `skillSyncResolver.test.ts` / `skillManager.sync.lifecycle.test.ts` / `skillSyncTargets.test.ts` / `skillMetadataSync.test.ts`）。
