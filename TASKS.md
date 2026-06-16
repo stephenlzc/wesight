@@ -57,7 +57,7 @@
 
 ### UI：Skill 详情
 - [x] 在 skill 详情弹窗中展示 Source 区域（type/url/ref/author/license/installedAt/updatedAt）（Agent-7 完成：新增 `SkillSourceInfo` 组件 + IPC `GetSkillMetadata`/`ListSkillMetadata` + i18n keys + 类型契约测试 `src/shared/skills/skillSource.test.ts`）
-- [ ] 在 skill 详情弹窗中展示 Synced Agents 列表和同步模式
+- [x] 在 skill 详情弹窗中展示 Synced Agents 列表和同步模式（Agent-7 完成 `3d73fa6`：新增 `SkillSyncedAgents` 组件 + 提取的 `skillSyncedAgentsFormatting.ts` helper + 6 项 vitest 测试 + 双语 i18n keys + 集成到 `SkillsManager.tsx`）
 
 ### UI：Settings
 - [ ] 新增 "Skill Sync Targets" Settings 页面/区域
