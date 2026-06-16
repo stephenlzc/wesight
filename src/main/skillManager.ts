@@ -23,9 +23,6 @@ import type {
   SkillHubMarketplaceSkill,
 } from './skillHubMarketplace';
 import { fetchSkillHubMarketplace } from './skillHubMarketplace';
-import { buildDefaultSyncTargetsState } from './skillSyncTargets';
-import type { SkillMetadataRow } from './sqliteStore';
-import { SqliteStore } from './sqliteStore';
 import {
   applySync,
   decideSyncMode,
@@ -33,6 +30,9 @@ import {
   inspectTarget,
   removeTarget as removeSyncTarget,
 } from './skillSyncResolver';
+import { buildDefaultSyncTargetsState } from './skillSyncTargets';
+import type { SkillMetadataRow } from './sqliteStore';
+import { SqliteStore } from './sqliteStore';
 
 /**
  * Check if a command exists in the given environment.

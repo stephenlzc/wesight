@@ -58,7 +58,7 @@ import {
   type PetPosition,
 } from '../shared/pet/constants';
 import { PlatformRegistry } from '../shared/platform';
-import { SkillsIpcChannel } from '../shared/skills/constants';
+import { SkillsIpcChannel, SkillSyncConflictDecision, SkillSyncFailureDecision } from '../shared/skills/constants';
 import { AgentManager } from './agentManager';
 import { AgentTeamRunner } from './agentTeamRunner';
 import { APP_NAME } from './appConstants';
@@ -4194,6 +4194,63 @@ if (!gotTheLock) {
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to write first-run flag' };
+    }
+  });
+
+  /**
+   * Apply a user decision to a previously surfaced sync conflict. Replays
+   * the sync with the resolved decision so the target directory reflects
+   * the user's choice (keep / replace / skip).
+   */
+  ipcMain.handle(SkillsIpcChannel.ResolveSyncConflict, async (_event, args: { skillId: string; agent: string; decision: string }) => {
+    try {
+      if (!args || typeof args.skillId !== 'string' || typeof args.agent !== 'string' || typeof args.decision !== 'string') {
+        return { success: false, error: 'Invalid conflict resolution arguments' };
+      }
+      const result = await getSkillManager().resolveSyncConflict(
+        args.skillId,
+        args.agent,
+        args.decision as SkillSyncConflictDecision,
+      );
+      return { success: true, result };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to resolve sync conflict' };
+    }
+  });
+
+  /**
+   * Apply a user decision to a previously surfaced sync failure (retry /
+   * skip / cancel). Replays the sync with the chosen decision.
+   */
+  ipcMain.handle(SkillsIpcChannel.ReportSyncFailure, async (_event, args: { skillId: string; agent: string; decision: string }) => {
+    try {
+      if (!args || typeof args.skillId !== 'string' || typeof args.agent !== 'string' || typeof args.decision !== 'string') {
+        return { success: false, error: 'Invalid failure resolution arguments' };
+      }
+      const result = await getSkillManager().reportSyncFailure(
+        args.skillId,
+        args.agent,
+        args.decision as SkillSyncFailureDecision,
+      );
+      return { success: true, result };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to report sync failure' };
+    }
+  });
+
+  /**
+   * Returns the current first-run prompt state. The renderer uses this to
+   * decide whether to show the first-install dialog.
+   */
+  ipcMain.handle(SkillsIpcChannel.PromptFirstSyncTargets, () => {
+    try {
+      return {
+        success: true,
+        prompted: getSkillManager().isSyncTargetsFirstRunPrompted(),
+        targets: getSkillManager().getSyncTargets(),
+      };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to read first-run prompt state' };
     }
   });
 
