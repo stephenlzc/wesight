@@ -192,6 +192,7 @@ import {
   RuntimeTelemetryTracker,
 } from './libs/runtimeTelemetryTracker';
 import { SessionSubscriptionRegistry } from './libs/sessionSubscriptions';
+import { SyncDialogCoordinator } from './libs/skillManager/syncDialogCoordinator';
 import { type MessageUpdatePayload, StreamUpdateCoalescer } from './libs/streamUpdateCoalescer';
 import {
   applySystemProxyEnv,
@@ -4198,41 +4199,40 @@ if (!gotTheLock) {
   });
 
   /**
-   * Apply a user decision to a previously surfaced sync conflict. Replays
-   * the sync with the resolved decision so the target directory reflects
-   * the user's choice (keep / replace / skip).
+   * Renderer hands back the user's decision for a pending sync conflict
+   * prompt. The coordinator uses the requestId to find the matching
+   * awaiter and resolve it.
    */
-  ipcMain.handle(SkillsIpcChannel.ResolveSyncConflict, async (_event, args: { skillId: string; agent: string; decision: string }) => {
+  ipcMain.handle(SkillsIpcChannel.ResolveSyncConflict, (_event, args: { requestId: string; decision: string }) => {
     try {
-      if (!args || typeof args.skillId !== 'string' || typeof args.agent !== 'string' || typeof args.decision !== 'string') {
+      if (!args || typeof args.requestId !== 'string' || typeof args.decision !== 'string') {
         return { success: false, error: 'Invalid conflict resolution arguments' };
       }
-      const result = await getSkillManager().resolveSyncConflict(
-        args.skillId,
-        args.agent,
+      const accepted = SyncDialogCoordinator.acceptConflictDecision(
+        args.requestId,
         args.decision as SkillSyncConflictDecision,
       );
-      return { success: true, result };
+      return { success: true, accepted };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to resolve sync conflict' };
     }
   });
 
   /**
-   * Apply a user decision to a previously surfaced sync failure (retry /
-   * skip / cancel). Replays the sync with the chosen decision.
+   * Renderer hands back the user's decision for a pending sync failure
+   * prompt. The coordinator uses the requestId to find the matching
+   * awaiter and resolve it.
    */
-  ipcMain.handle(SkillsIpcChannel.ReportSyncFailure, async (_event, args: { skillId: string; agent: string; decision: string }) => {
+  ipcMain.handle(SkillsIpcChannel.ReportSyncFailure, (_event, args: { requestId: string; decision: string }) => {
     try {
-      if (!args || typeof args.skillId !== 'string' || typeof args.agent !== 'string' || typeof args.decision !== 'string') {
+      if (!args || typeof args.requestId !== 'string' || typeof args.decision !== 'string') {
         return { success: false, error: 'Invalid failure resolution arguments' };
       }
-      const result = await getSkillManager().reportSyncFailure(
-        args.skillId,
-        args.agent,
+      const accepted = SyncDialogCoordinator.acceptFailureDecision(
+        args.requestId,
         args.decision as SkillSyncFailureDecision,
       );
-      return { success: true, result };
+      return { success: true, accepted };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to report sync failure' };
     }
@@ -4242,8 +4242,18 @@ if (!gotTheLock) {
    * Returns the current first-run prompt state. The renderer uses this to
    * decide whether to show the first-install dialog.
    */
-  ipcMain.handle(SkillsIpcChannel.PromptFirstSyncTargets, () => {
+  ipcMain.handle(SkillsIpcChannel.PromptFirstSyncTargets, (_event, args?: { requestId?: string; selectedTargetIds?: string[]; rememberChoice?: boolean }) => {
     try {
+      // When the renderer delivers a response (requestId is set), the
+      // coordinator resolves the pending prompt.
+      if (args && typeof args.requestId === 'string') {
+        const accepted = SyncDialogCoordinator.acceptFirstSyncTargets(
+          args.requestId,
+          Array.isArray(args.selectedTargetIds) ? args.selectedTargetIds : [],
+          args.rememberChoice === true,
+        );
+        return { success: true, accepted };
+      }
       return {
         success: true,
         prompted: getSkillManager().isSyncTargetsFirstRunPrompted(),

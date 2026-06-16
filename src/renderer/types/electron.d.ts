@@ -587,6 +587,22 @@ interface IElectronAPI {
     setSyncTargets: (targets: SkillSyncTarget[]) => Promise<{ success: boolean; targets?: SkillSyncTarget[]; error?: string }>;
     getSyncTargetsFirstRunPrompted: () => Promise<{ success: boolean; prompted?: boolean; error?: string }>;
     setSyncTargetsFirstRunPrompted: (prompted: boolean) => Promise<{ success: boolean; error?: string }>;
+    resolveSyncConflict: (payload: { requestId: string; decision: string }) => Promise<{ success: boolean; error?: string }>;
+    reportSyncFailure: (payload: { requestId: string; decision: string }) => Promise<{ success: boolean; error?: string }>;
+    promptFirstSyncTargets: (payload: {
+      requestId: string;
+      selectedTargetIds: string[];
+      rememberChoice: boolean;
+    }) => Promise<{ success: boolean; error?: string }>;
+    onSyncConflictRequest: (
+      callback: (payload: { requestId: string; conflict: unknown }) => void,
+    ) => () => void;
+    onSyncFailureRequest: (
+      callback: (payload: { requestId: string; failure: unknown }) => void,
+    ) => () => void;
+    onFirstSyncPromptRequest: (
+      callback: (payload: { requestId: string; targets: unknown[] }) => void,
+    ) => () => void;
     onChanged: (callback: () => void) => () => void;
     promptFirstSyncTargets: () => Promise<{ success: boolean; prompted?: boolean; skipped?: boolean; targets?: SkillSyncTarget[]; error?: string }>;
     resolveSyncConflict: (payload: { skillId: string; agent: string; decision: string }) => Promise<{ success: boolean; error?: string }>;

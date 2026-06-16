@@ -35,8 +35,8 @@
  * skill IPC surface treats windows.
  */
 
-import { BrowserWindow, type WebContents } from 'electron';
 import { randomUUID } from 'crypto';
+import { BrowserWindow, type WebContents } from 'electron';
 
 import {
   SkillSyncConflictDecision,

@@ -44,6 +44,30 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('skills:getSyncTargetsFirstRunPrompted'),
     setSyncTargetsFirstRunPrompted: (prompted: boolean) =>
       ipcRenderer.invoke('skills:setSyncTargetsFirstRunPrompted', prompted),
+    resolveSyncConflict: (payload: { requestId: string; decision: string }) =>
+      ipcRenderer.invoke(SkillsIpcChannel.ResolveSyncConflict, payload),
+    reportSyncFailure: (payload: { requestId: string; decision: string }) =>
+      ipcRenderer.invoke(SkillsIpcChannel.ReportSyncFailure, payload),
+    promptFirstSyncTargets: (payload: {
+      requestId: string;
+      selectedTargetIds: string[];
+      rememberChoice: boolean;
+    }) => ipcRenderer.invoke(SkillsIpcChannel.PromptFirstSyncTargets, payload),
+    onSyncConflictRequest: (callback: (payload: { requestId: string; conflict: unknown }) => void) => {
+      const handler = (_event: IpcRendererEvent, payload: { requestId: string; conflict: unknown }) => callback(payload);
+      ipcRenderer.on('skills:syncDialog:conflict', handler);
+      return () => ipcRenderer.removeListener('skills:syncDialog:conflict', handler);
+    },
+    onSyncFailureRequest: (callback: (payload: { requestId: string; failure: unknown }) => void) => {
+      const handler = (_event: IpcRendererEvent, payload: { requestId: string; failure: unknown }) => callback(payload);
+      ipcRenderer.on('skills:syncDialog:failure', handler);
+      return () => ipcRenderer.removeListener('skills:syncDialog:failure', handler);
+    },
+    onFirstSyncPromptRequest: (callback: (payload: { requestId: string; targets: unknown[] }) => void) => {
+      const handler = (_event: IpcRendererEvent, payload: { requestId: string; targets: unknown[] }) => callback(payload);
+      ipcRenderer.on('skills:syncDialog:firstSync', handler);
+      return () => ipcRenderer.removeListener('skills:syncDialog:firstSync', handler);
+    },
     onChanged: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on(SkillsIpcChannel.Changed, handler);
