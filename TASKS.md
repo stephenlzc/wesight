@@ -79,7 +79,7 @@
 - [x] 编写 `sqliteStore.test.ts` 中 `skill_metadata` 表的测试（Agent-2 完成 `eb36fe6`：schema/CRUD/migration/corrupt-JSON 共 5 项）
 - [x] 编写 `skillManager.registry.test.ts`：CRUD 和迁移（Agent-5 完成 `79a1226`：8 项测试覆盖 rowToSkillSource 往返、detect/classify 协同、CRUD 生命周期、migration 一次性标志、sync_targets 顺序/模式）
 - [x] 编写 `skillSyncResolver.test.ts`：symlink/copy 决策、路径冲突检测（Agent-1 完成 `b1a27fd`）
-- [ ] 编写 `skillManager.sync.lifecycle.test.ts`：安装/删除/升级端到端测试（使用临时目录）
+- [x] 编写 `skillManager.sync.lifecycle.test.ts`：安装/删除/升级端到端测试（使用临时目录）（Agent-3 完成 `5e72803`：5 项测试覆盖 install+sync、delete+forget、upgrade 更新 updated_at、legacy migration 幂等性、forced copy 模式）
 - [x] 运行 `npm run lint` 并清理新增警告（Agent-2 已运行 lint，无新增警告）
 
 ### 文档与收尾
