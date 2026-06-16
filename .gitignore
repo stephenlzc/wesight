@@ -52,3 +52,7 @@ sandbox/
 **/**/post-commit
 openspec/
 .superpowers/
+agent_logs/
+
+# Agent-8: ephemeral tmp dir
+.tmp/
