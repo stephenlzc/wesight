@@ -1418,6 +1418,126 @@ export class SkillManager {
 
   constructor(private getStore: () => SqliteStore) {}
 
+  /**
+   * Record the source of a freshly installed or upgraded skill.
+   * Falls back gracefully if the store is unavailable.
+   */
+  recordSkillMetadata(
+    skillId: string,
+    source: SkillSource | undefined,
+    options?: { updatedAt?: number; syncTargets?: SkillSyncTargetEntry[] }
+  ): void {
+    const store = this.getStore();
+    const existing = store.getSkillMetadata(skillId);
+    const now = options?.updatedAt ?? Date.now();
+    store.upsertSkillMetadata({
+      id: skillId,
+      name: source ? undefined : existing?.name,
+      version: source ? undefined : existing?.version,
+      sourceType: source?.type ?? existing?.sourceType ?? SkillSourceType.Unknown,
+      sourceUrl: source?.url ?? existing?.sourceUrl,
+      sourceRef: source?.ref ?? existing?.sourceRef,
+      author: source?.author ?? existing?.author,
+      license: source?.license ?? existing?.license,
+      homepage: source?.homepage ?? existing?.homepage,
+      installedAt: existing?.installedAt ?? now,
+      updatedAt: now,
+      dirty: existing?.dirty ?? false,
+      syncTargets: options?.syncTargets ?? existing?.syncTargets ?? [],
+    });
+  }
+
+  /**
+   * Record (or replace) the list of sync targets that this skill is synced to.
+   * Used after the sync resolver successfully creates symlinks/copies.
+   */
+  recordSkillSyncTargets(skillId: string, entries: SkillSyncTargetEntry[]): void {
+    const store = this.getStore();
+    const existing = store.getSkillMetadata(skillId);
+    if (!existing) return;
+    store.upsertSkillMetadata({
+      ...existing,
+      syncTargets: entries,
+      updatedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Drop the registry record for a skill. Called from deleteSkill so the
+   * metadata does not survive a user-initiated removal.
+   */
+  forgetSkillMetadata(skillId: string): void {
+    this.getStore().deleteSkillMetadata(skillId);
+  }
+
+  /**
+   * Look up persisted source metadata for a single skill id.
+   * Returns undefined when nothing is recorded.
+   */
+  getSkillSourceInfo(skillId: string): SkillSource | undefined {
+    const row = this.getStore().getSkillMetadata(skillId);
+    return row ? rowToSkillSource(row) : undefined;
+  }
+
+  /**
+   * One-shot migration: scan installed skills and create registry rows for any
+   * that don't have one yet (source_type = 'unknown').
+   */
+  migrateLegacySkillsToRegistry(): { migrated: number; skipped: number } {
+    const store = this.getStore();
+    if (store.isSkillMetadataMigrationComplete()) {
+      return { migrated: 0, skipped: 0 };
+    }
+
+    const installed = this.listSkills();
+    let migrated = 0;
+    let skipped = 0;
+    const now = Date.now();
+
+    for (const skill of installed) {
+      if (store.getSkillMetadata(skill.id)) {
+        skipped += 1;
+        continue;
+      }
+      store.upsertSkillMetadata({
+        id: skill.id,
+        name: skill.name,
+        version: skill.version,
+        sourceType: SkillSourceType.Unknown,
+        installedAt: skill.updatedAt || now,
+        updatedAt: skill.updatedAt || now,
+        syncTargets: [],
+      });
+      migrated += 1;
+    }
+    store.markSkillMetadataMigrationComplete();
+    if (migrated > 0) {
+      console.log(`[SkillManager] Migrated ${migrated} legacy skill(s) to skill_metadata registry`);
+    }
+    return { migrated, skipped };
+  }
+
+  /**
+   * Best-effort inference of the source type from a download URL.
+   * Used by downloadSkill to record where a skill came from.
+   */
+  inferSourceFromUrl(url: string): SkillSource['type'] {
+    if (!url) return SkillSourceType.Unknown;
+    const trimmed = url.trim();
+    if (parseSkillHubSource(trimmed)) return SkillSourceType.SkillHub;
+    if (parseClawhubUrl(trimmed)) return SkillSourceType.ClawHub;
+    if (isNpmPackageSpec(trimmed)) return SkillSourceType.Npm;
+    if (isRemoteZipUrl(trimmed)) return SkillSourceType.Zip;
+    if (trimmed.startsWith('.') || trimmed.startsWith('/') || trimmed.startsWith('~') || fs.existsSync(trimmed)) {
+      return SkillSourceType.Local;
+    }
+    if (parseGithubRepoSource(trimmed) || parseGithubTreeOrBlobUrl(trimmed) || /^[\w.-]+\/[\w.-]+$/.test(trimmed)) {
+      return SkillSourceType.GitHub;
+    }
+    if (this.normalizeGitSource(trimmed)) return SkillSourceType.GitHub;
+    return SkillSourceType.Unknown;
+  }
+
   getSkillsRoot(): string {
     return path.resolve(app.getPath('userData'), SKILLS_DIR_NAME);
   }
