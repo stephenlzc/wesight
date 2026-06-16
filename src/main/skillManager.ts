@@ -222,23 +222,6 @@ export type SkillRecord = {
   syncTargets?: SkillSyncTargetEntry[];
 };
 
-const skillSourceRowToInfo = (row: SkillMetadataRow | null): SkillSource | undefined => {
-  if (!row) return undefined;
-  const type = (Object.values(SkillSourceType) as string[]).includes(row.sourceType)
-    ? (row.sourceType as SkillSource['type'])
-    : SkillSourceType.Unknown;
-  return {
-    type,
-    url: row.sourceUrl,
-    ref: row.sourceRef,
-    author: row.author,
-    license: row.license,
-    homepage: row.homepage,
-    installedAt: row.installedAt,
-    updatedAt: row.updatedAt,
-  };
-};
-
 type SkillStateMap = Record<string, { enabled: boolean }>;
 
 type EmailConnectivityCheckCode = 'imap_connection' | 'smtp_connection';
@@ -1428,7 +1411,8 @@ export class SkillManager {
    * Returns undefined when nothing is recorded.
    */
   getSkillSourceInfo(skillId: string): SkillSource | undefined {
-    return skillSourceRowToInfo(this.getStore().getSkillMetadata(skillId));
+    const row = this.getStore().getSkillMetadata(skillId);
+    return row ? rowToSkillSource(row) : undefined;
   }
 
   /**
@@ -1696,7 +1680,7 @@ export class SkillManager {
       return {
         ...skill,
         version: skill.version ?? meta.version,
-        source: skillSourceRowToInfo(meta),
+        source: meta ? rowToSkillSource(meta) : undefined,
         syncTargets: meta.syncTargets,
       };
     });
