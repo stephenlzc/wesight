@@ -7,6 +7,7 @@ import yaml from 'js-yaml';
 import path from 'path';
 
 import { SkillsIpcChannel } from '../shared/skills/constants';
+import type { SkillSourceType, SkillSyncMode } from '../shared/skills/constants';
 import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
 import { getElectronNodeRuntimePath, resolveUserShellPath } from './libs/coworkUtil';
@@ -188,6 +189,24 @@ function buildSkillEnv(): Record<string, string | undefined> {
   return env;
 }
 
+export type SkillSource = {
+  type: SkillSourceType;
+  url?: string;
+  ref?: string;
+  author?: string;
+  license?: string;
+  homepage?: string;
+  installedAt?: number;
+  updatedAt?: number;
+};
+
+export type SkillSyncTargetEntry = {
+  agent: string;
+  path: string;
+  mode: SkillSyncMode;
+  syncedAt?: number;
+};
+
 export type SkillRecord = {
   id: string;
   name: string;
@@ -199,6 +218,8 @@ export type SkillRecord = {
   prompt: string;
   skillPath: string;
   version?: string;
+  source?: SkillSource;
+  syncTargets?: SkillSyncTargetEntry[];
 };
 
 type SkillStateMap = Record<string, { enabled: boolean }>;
