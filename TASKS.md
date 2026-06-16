@@ -60,15 +60,15 @@
 - [x] 在 skill 详情弹窗中展示 Synced Agents 列表和同步模式（Agent-7 完成 `3d73fa6`：新增 `SkillSyncedAgents` 组件 + 提取的 `skillSyncedAgentsFormatting.ts` helper + 6 项 vitest 测试 + 双语 i18n keys + 集成到 `SkillsManager.tsx`）
 
 ### UI：Settings
-- [ ] 新增 "Skill Sync Targets" Settings 页面/区域
-- [ ] 展示默认目标列表、目录是否存在、启用开关
-- [ ] 支持添加/编辑/删除自定义路径
-- [ ] 首次安装 skill 时弹出引导对话框选择同步目标
+- [x] 新增 "Skill Sync Targets" Settings 页面/区域（Agent-8 完成 `c6d1782`：`SyncTargetsSettingsView` + 新增 "skillSync" tab + IPC handler + preload + i18n keys + service API）
+- [x] 展示默认目标列表、目录是否存在、启用开关（`SyncTargetsSettingsView` per-row toggle + exists 标记）
+- [x] 支持添加/编辑/删除自定义路径（`SyncTargetsSettingsView` inline path editing + add/remove）
+- [x] 首次安装 skill 时弹出引导对话框选择同步目标（Agent-8 完成 `b7e345d`：`FirstSyncTargetsPrompt` modal 在 `SkillsManager.downloadSkill` 首次安装时展示，pre-select built-ins）
 
 ### 错误处理与弹窗
-- [ ] 实现同步冲突 IPC 弹窗（renderer → main → renderer）
-- [ ] 实现同步失败 IPC 弹窗
-- [ ] 实现首次安装引导 IPC 弹窗
+- [x] 实现同步冲突 IPC 弹窗（renderer → main → renderer）（Agent-7 完成 `4aac3a9` + `eb19a96` + `fac27ef`：`SkillSyncConflictDialog` 组件 + `skillSyncDialogBridge.promptConflict` + main.ts `ResolveSyncConflict` handler + 共享 `SyncConflictPrompt` broadcast 通道）
+- [x] 实现同步失败 IPC 弹窗（`SkillSyncFailureDialog` 组件 + `skillSyncDialogBridge.promptFailure` + main.ts `ReportSyncFailure` handler + `SyncFailurePrompt` 通道）
+- [x] 实现首次安装引导 IPC 弹窗（`FirstSyncTargetsPrompt` modal + main.ts `PromptFirstSyncTargets` handler；通过 `isSyncTargetsFirstRunPrompted` 状态判断）
 
 ### IPC 与常量
 - [x] 在 `src/shared/skills/constants.ts` 中新增 IPC 通道常量（Agent-2 完成 `f94fb2a`：GetSyncTargets / SetSyncTargets / GetSkillMetadata / ListSkillMetadata / ResolveSyncConflict / ReportSyncFailure / PromptFirstSyncTargets + SkillSourceType / SkillSyncMode / SkillSyncTargetKind 常量）
@@ -86,4 +86,6 @@
 ### 文档与收尾
 - [x] 更新 `docs/prd-skill-manager-v1.md` 中任何与实际实现不一致的地方（Agent-2 完成 `e78ac0f`：修正 7.1 IPC 通道命名 `skill:*` → `skills:*`、补全 `SkillsIpcChannel` 常量；7.2 替换为 `SkillManager` 实际方法集；9 里程碑勾选已交付项、保留唯一未交付项；11 待确认事项锁定 v1 决策）
 - [x] 在 `AGENTS.md` 中补充 skill manager 相关说明（如有必要）（Agent-2 完成 `e5f5602`：新增 "Skill Manager (Phase 1, Issue #52)" 小节，覆盖持久化、sync-targets、跨 Agent 同步、生命周期 hook、IPC 通道、渲染层组件；同步更新 Key Directories 文件树）
-- [ ] 在 `HUMAN_INPUT.md` 为空时确认蜂群任务完成
+- [x] 在 `HUMAN_INPUT.md` 为空时确认蜂群任务完成（Agent-2 在 2026-06-16 20:21 检查 `HUMAN_INPUT.md` 为空；蜂群任务（Phase 1 Skill Manager）所有可拆分的子任务均已在各 agent 的分支上交付，详见上方各项 commit 引用）
+
+<!-- Agent-2: all tasks complete at 2026-06-16 20:21:30 -->
