@@ -1,9 +1,10 @@
 # PRD: Unified Skill Manager — Phase 1 (Issue #52)
 
 > 状态：基于 deep-interview 定稿  
-> 分支：`feat/skill-manager-unified`  
+> 分支：`feat/skill-manager-phase1`  
 > 覆盖：GitHub issue #52（Skill Metadata Registry + Cross-Agent Sync）  
-> 关联：#53–#56 预留扩展点，v1 不实现
+> 关联：#53–#56 预留扩展点，v1 不实现  
+> 实施记录：见 `TASKS.md` 与 `git log feat/skill-manager-phase1`
 
 ---
 
