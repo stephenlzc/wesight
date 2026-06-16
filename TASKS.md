@@ -42,18 +42,18 @@
 - [x] 新增 IPC 通道常量：`GetSkillSyncTargets`、`SetSkillSyncTargets`（`f94fb2a` 中已存在；Agent-8 计划在 sync_core 中接入 handler）
 
 ### 跨 Agent 同步核心
-- [ ] 实现 `syncSkillToTargets(skillId)`：为每个启用目标创建 symlink 或 copy
-- [ ] 实现 `removeSkillFromTargets(skillId)`：删除目标目录中的 symlink/copy
-- [ ] 实现 `resolveSyncConflict()`：检测目标已存在同 id skill 时询问用户
-- [ ] 实现 Windows 开发者模式检测和 symlink/copy 降级策略
-- [ ] 实现同步失败处理：弹窗重试/跳过/取消，取消时回滚安装
+- [x] 实现 `syncSkillToTargets(skillId)`：为每个启用目标创建 symlink 或 copy（Agent-6 完成 `76206d9`：封装在 `src/main/libs/skillManager/skillMetadataSync.ts`，委托 `skillSyncResolver.applySync`）
+- [x] 实现 `removeSkillFromTargets(skillId)`：删除目标目录中的 symlink/copy（Agent-6 完成 `76206d9`：封装在 `SkillMetadataSync.removeSkillFromTargets`，委托 `skillSyncResolver.removeTarget`）
+- [x] 实现 `resolveSyncConflict()`：检测目标已存在同 id skill 时询问用户（Agent-1 完成 `c5fca4f`/`b1a27fd`：`skillSyncResolver.detectConflict` 返回 conflict reason）
+- [x] 实现 Windows 开发者模式检测和 symlink/copy 降级策略（Agent-1 完成 `b1a27fd`：`detectWindowsDeveloperMode` + `decideSyncMode`，以及 `applySync` 的 EPERM 自动降级）
+- [~] 实现同步失败处理：弹窗重试/跳过/取消，取消时回滚安装（agent-1 提供 `detectConflict` 返回 reason；IPC 弹窗与取消回滚由后续 agent 接入 UI）
 
 ### 生命周期集成
-- [ ] 在安装 skill 成功后调用 `syncSkillToTargets()`
-- [ ] 在删除 skill 时调用 `removeSkillFromTargets()`
-- [ ] 在升级 skill 时更新 metadata 并重新同步
-- [ ] 确保 bundled skills 不会被同步出去
-- [ ] 确保 marketplace 升级流程不受影响
+- [x] 在安装 skill 成功后调用 `syncSkillToTargets()`（Agent-6 完成 `76206d9`：`recordInstalledSkillSource` 之后 + safe-install 路径中）
+- [x] 在删除 skill 时调用 `removeSkillFromTargets()`（Agent-6 完成 `76206d9`：`deleteSkill` 在清 metadata 前调用）
+- [x] 在升级 skill 时更新 metadata 并重新同步（Agent-6 完成 `76206d9`：`recordUpgradedSkillSource` 内部 re-sync）
+- [x] 确保 bundled skills 不会被同步出去（`recordInstalledSkillSource` / `recordUpgradedSkillSource` 在 `isBuiltInSkillId` 时直接 return）
+- [x] 确保 marketplace 升级流程不受影响（`installMarketplaceSkill` 仍走 `downloadSkill`，主路径同步逻辑无侵入）
 
 ### UI：Skill 详情
 - [x] 在 skill 详情弹窗中展示 Source 区域（type/url/ref/author/license/installedAt/updatedAt）（Agent-7 完成：新增 `SkillSourceInfo` 组件 + IPC `GetSkillMetadata`/`ListSkillMetadata` + i18n keys + 类型契约测试 `src/shared/skills/skillSource.test.ts`）
