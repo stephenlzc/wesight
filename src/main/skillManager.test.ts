@@ -11,7 +11,7 @@ import { expect, test } from 'vitest';
 import { SkillSourceType } from '../shared/skills/constants';
 import { __skillManagerTestUtils } from './skillManager';
 
-const { compareVersions, rowToSkillSource, detectSourceFromInput } = __skillManagerTestUtils;
+const { compareVersions, rowToSkillSource, detectSourceFromInput, classifySourceInput } = __skillManagerTestUtils;
 
 // ---------------------------------------------------------------------------
 // Mirror of parseClawhubUrl from skillManager.ts
@@ -247,4 +247,64 @@ test('detectSourceFromInput: missing url and ref are left undefined', () => {
   expect(source.type).toBe('local');
   expect(source.url).toBeUndefined();
   expect(source.ref).toBeUndefined();
+});
+
+// ---------------------------------------------------------------------------
+// classifySourceInput
+// ---------------------------------------------------------------------------
+
+test('classifySourceInput: empty string maps to unknown', () => {
+  expect(classifySourceInput('')).toEqual({ type: 'unknown' });
+  expect(classifySourceInput('   ')).toEqual({ type: 'unknown' });
+});
+
+test('classifySourceInput: skillhub shorthand detected', () => {
+  expect(classifySourceInput('skillhub:docs-writer')).toEqual({
+    type: 'skillhub',
+    url: 'skillhub:docs-writer',
+  });
+});
+
+test('classifySourceInput: skillhub URL detected', () => {
+  expect(classifySourceInput('https://skillhub.lol/skills/docs-writer')).toEqual({
+    type: 'skillhub',
+    url: 'https://skillhub.lol/skills/docs-writer',
+  });
+});
+
+test('classifySourceInput: clawhub URL detected', () => {
+  expect(classifySourceInput('https://clawhub.ai/steipete/slack')).toEqual({
+    type: 'clawhub',
+    url: 'https://clawhub.ai/steipete/slack',
+  });
+});
+
+test('classifySourceInput: github URL detected', () => {
+  expect(classifySourceInput('https://github.com/owner/repo')).toEqual({
+    type: 'github',
+    url: 'https://github.com/owner/repo',
+  });
+});
+
+test('classifySourceInput: github URL with subpath detected', () => {
+  expect(classifySourceInput('https://github.com/owner/repo/tree/main/skills/foo')).toEqual({
+    type: 'github',
+    url: 'https://github.com/owner/repo/tree/main/skills/foo',
+  });
+});
+
+test('classifySourceInput: owner/repo shortform maps to unknown', () => {
+  // parseGithubRepoSource only matches full URLs and SSH form, so the
+  // shortform (owner/repo) is intentionally classified as unknown.
+  expect(classifySourceInput('owner/repo')).toEqual({
+    type: 'unknown',
+    url: 'owner/repo',
+  });
+});
+
+test('classifySourceInput: unrecognized URL maps to unknown', () => {
+  expect(classifySourceInput('https://example.com/something')).toEqual({
+    type: 'unknown',
+    url: 'https://example.com/something',
+  });
 });
