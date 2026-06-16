@@ -14,14 +14,15 @@ import { SkillSyncTargetKind } from '../shared/skills/constants';
 import type { SkillSyncTargetsState } from '../shared/skills/types';
 import { defaultTargetPath } from './skillSyncResolver';
 
-const DEFAULT_TARGET_LABELS: Record<string, string> = {
+const DEFAULT_TARGET_LABELS: Record<SkillSyncTargetKind, string> = {
   [SkillSyncTargetKind.ClaudeCode]: 'Claude Code',
   [SkillSyncTargetKind.Kimi]: 'Kimi CLI',
   [SkillSyncTargetKind.OpenClaw]: 'OpenClaw',
   [SkillSyncTargetKind.Codex]: 'Codex CLI',
+  [SkillSyncTargetKind.Custom]: 'Custom',
 };
 
-export const BUILT_IN_SYNC_TARGET_KINDS: string[] = [
+export const BUILT_IN_SYNC_TARGET_KINDS: SkillSyncTargetKind[] = [
   SkillSyncTargetKind.ClaudeCode,
   SkillSyncTargetKind.Kimi,
   SkillSyncTargetKind.OpenClaw,
@@ -66,7 +67,7 @@ export function reconcileSyncTargets(
   defaults: SkillSyncTargetsState,
   overrides: Array<{
     id?: string;
-    kind?: string;
+    kind?: SkillSyncTargetKind;
     label?: string;
     path?: string;
     enabled?: boolean;
