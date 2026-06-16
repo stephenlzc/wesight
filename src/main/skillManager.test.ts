@@ -1,10 +1,17 @@
 /**
- * Unit tests for marketplace source parsers in skillManager.ts.
+ * Unit tests for marketplace source parsers and metadata registry helpers
+ * in skillManager.ts.
  *
- * Logic is mirrored inline because skillManager.ts imports Electron APIs
- * which cannot be loaded outside the Electron main process.
+ * Pure utility functions are pulled from `__skillManagerTestUtils` because
+ * the main module imports Electron APIs which cannot run under vitest.
+ * Parsers that don't depend on Electron are mirrored inline (kept short).
  */
-import { expect,test } from 'vitest';
+import { expect, test } from 'vitest';
+
+import { SkillSourceType } from '../shared/skills/constants';
+import { __skillManagerTestUtils } from './skillManager';
+
+const { compareVersions, rowToSkillSource, detectSourceFromInput, classifySourceInput } = __skillManagerTestUtils;
 
 // ---------------------------------------------------------------------------
 // Mirror of parseClawhubUrl from skillManager.ts
@@ -131,4 +138,201 @@ test('skillhub: API host URL extracts slug', () => {
 
 test('skillhub: non-skillhub input returns null', () => {
   expect(parseSkillHubSource('https://github.com/owner/repo')).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// compareVersions
+// ---------------------------------------------------------------------------
+
+test('compareVersions: equal versions return 0', () => {
+  expect(compareVersions('1.0.0', '1.0.0')).toBe(0);
+});
+
+test('compareVersions: major wins over minor', () => {
+  expect(compareVersions('2.0.0', '1.9.9')).toBe(1);
+  expect(compareVersions('1.9.9', '2.0.0')).toBe(-1);
+});
+
+test('compareVersions: minor wins over patch', () => {
+  expect(compareVersions('1.2.0', '1.1.9')).toBe(1);
+});
+
+test('compareVersions: missing segments are treated as 0', () => {
+  expect(compareVersions('1.0', '1.0.0')).toBe(0);
+  expect(compareVersions('1.0.1', '1.0')).toBe(1);
+});
+
+test('compareVersions: non-numeric segments are treated as 0', () => {
+  expect(compareVersions('1.x.0', '1.0.0')).toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// rowToSkillSource
+// ---------------------------------------------------------------------------
+
+test('rowToSkillSource: maps all fields', () => {
+  const now = Date.now();
+  const source = rowToSkillSource({
+    id: 'foo',
+    sourceType: 'github',
+    sourceUrl: 'https://github.com/a/b',
+    sourceRef: 'main',
+    author: 'Alice',
+    license: 'MIT',
+    homepage: 'https://example.com',
+    installedAt: now,
+    updatedAt: now,
+    syncTargets: [],
+  });
+  expect(source).toEqual({
+    type: 'github',
+    url: 'https://github.com/a/b',
+    ref: 'main',
+    author: 'Alice',
+    license: 'MIT',
+    homepage: 'https://example.com',
+    installedAt: now,
+    updatedAt: now,
+  });
+});
+
+test('rowToSkillSource: missing sourceType falls back to unknown', () => {
+  const source = rowToSkillSource({
+    id: 'foo',
+    sourceType: '',
+    installedAt: 0,
+    updatedAt: 0,
+    syncTargets: [],
+  });
+  expect(source.type).toBe(SkillSourceType.Unknown);
+});
+
+test('rowToSkillSource: preserves unknown source type', () => {
+  const source = rowToSkillSource({
+    id: 'legacy',
+    sourceType: 'unknown',
+    installedAt: 0,
+    updatedAt: 0,
+    syncTargets: [],
+  });
+  expect(source.type).toBe('unknown');
+});
+
+// ---------------------------------------------------------------------------
+// detectSourceFromInput
+// ---------------------------------------------------------------------------
+
+test('detectSourceFromInput: stamps installedAt and updatedAt to now', () => {
+  const before = Date.now();
+  const source = detectSourceFromInput({
+    raw: 'https://github.com/a/b',
+    type: SkillSourceType.GitHub,
+    url: 'https://github.com/a/b',
+    ref: 'main',
+  });
+  const after = Date.now();
+  expect(source.type).toBe('github');
+  expect(source.url).toBe('https://github.com/a/b');
+  expect(source.ref).toBe('main');
+  expect(source.installedAt).toBeGreaterThanOrEqual(before);
+  expect(source.installedAt).toBeLessThanOrEqual(after);
+  expect(source.updatedAt).toBe(source.installedAt);
+});
+
+test('detectSourceFromInput: missing url and ref are left undefined', () => {
+  const source = detectSourceFromInput({
+    raw: '/local/path',
+    type: SkillSourceType.Local,
+  });
+  expect(source.type).toBe('local');
+  expect(source.url).toBeUndefined();
+  expect(source.ref).toBeUndefined();
+});
+
+// ---------------------------------------------------------------------------
+// classifySourceInput
+// ---------------------------------------------------------------------------
+
+test('classifySourceInput: empty string maps to unknown', () => {
+  expect(classifySourceInput('')).toEqual({ type: 'unknown' });
+  expect(classifySourceInput('   ')).toEqual({ type: 'unknown' });
+});
+
+test('classifySourceInput: skillhub shorthand detected', () => {
+  expect(classifySourceInput('skillhub:docs-writer')).toEqual({
+    type: 'skillhub',
+    url: 'skillhub:docs-writer',
+  });
+});
+
+test('classifySourceInput: skillhub URL detected', () => {
+  expect(classifySourceInput('https://skillhub.lol/skills/docs-writer')).toEqual({
+    type: 'skillhub',
+    url: 'https://skillhub.lol/skills/docs-writer',
+  });
+});
+
+test('classifySourceInput: clawhub URL detected', () => {
+  expect(classifySourceInput('https://clawhub.ai/steipete/slack')).toEqual({
+    type: 'clawhub',
+    url: 'https://clawhub.ai/steipete/slack',
+  });
+});
+
+test('classifySourceInput: github URL detected', () => {
+  expect(classifySourceInput('https://github.com/owner/repo')).toEqual({
+    type: 'github',
+    url: 'https://github.com/owner/repo',
+  });
+});
+
+test('classifySourceInput: github URL with subpath detected', () => {
+  expect(classifySourceInput('https://github.com/owner/repo/tree/main/skills/foo')).toEqual({
+    type: 'github',
+    url: 'https://github.com/owner/repo/tree/main/skills/foo',
+  });
+});
+
+test('classifySourceInput: owner/repo shortform maps to unknown', () => {
+  // parseGithubRepoSource only matches full URLs and SSH form, so the
+  // shortform (owner/repo) is intentionally classified as unknown.
+  expect(classifySourceInput('owner/repo')).toEqual({
+    type: 'unknown',
+    url: 'owner/repo',
+  });
+});
+
+test('classifySourceInput: unrecognized URL maps to unknown', () => {
+  expect(classifySourceInput('https://example.com/something')).toEqual({
+    type: 'unknown',
+    url: 'https://example.com/something',
+  });
+});
+
+test('classifySourceInput: github ssh URL detected', () => {
+  expect(classifySourceInput('git@github.com:owner/repo.git')).toEqual({
+    type: 'github',
+    url: 'git@github.com:owner/repo.git',
+  });
+});
+
+test('classifySourceInput: github URL preserves query string', () => {
+  expect(classifySourceInput('https://github.com/owner/repo?ref=main')).toEqual({
+    type: 'github',
+    url: 'https://github.com/owner/repo?ref=main',
+  });
+});
+
+test('classifySourceInput: local path that exists maps to local', () => {
+  // __dirname exists at test time and is a real path on disk.
+  const result = classifySourceInput(__dirname);
+  expect(result.type).toBe('local');
+  expect(result.url).toBe(__dirname);
+});
+
+test('classifySourceInput: leading/trailing whitespace is trimmed', () => {
+  expect(classifySourceInput('  skillhub:docs-writer  ')).toEqual({
+    type: 'skillhub',
+    url: 'skillhub:docs-writer',
+  });
 });

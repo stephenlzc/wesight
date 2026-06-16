@@ -58,7 +58,7 @@ import {
   type PetPosition,
 } from '../shared/pet/constants';
 import { PlatformRegistry } from '../shared/platform';
-import { SkillsIpcChannel } from '../shared/skills/constants';
+import { SkillsIpcChannel, SkillSyncConflictDecision, SkillSyncFailureDecision } from '../shared/skills/constants';
 import { AgentManager } from './agentManager';
 import { AgentTeamRunner } from './agentTeamRunner';
 import { APP_NAME } from './appConstants';
@@ -192,6 +192,7 @@ import {
   RuntimeTelemetryTracker,
 } from './libs/runtimeTelemetryTracker';
 import { SessionSubscriptionRegistry } from './libs/sessionSubscriptions';
+import { SyncDialogCoordinator } from './libs/skillManager/syncDialogCoordinator';
 import { type MessageUpdatePayload, StreamUpdateCoalescer } from './libs/streamUpdateCoalescer';
 import {
   applySystemProxyEnv,
@@ -4127,6 +4128,140 @@ if (!gotTheLock) {
 
   ipcMain.handle(SkillsIpcChannel.InstallMarketplaceSkill, async (_event, skill) => {
     return getSkillManager().installMarketplaceSkill(skill);
+  });
+
+  ipcMain.handle(SkillsIpcChannel.GetSkillMetadata, (_event, skillId: string) => {
+    try {
+      return { success: true, metadata: getSkillManager().getSkillMetadata(skillId) };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to read skill metadata' };
+    }
+  });
+
+  ipcMain.handle(SkillsIpcChannel.ListSkillMetadata, () => {
+    try {
+      return { success: true, metadata: getSkillManager().listSkillMetadata() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to list skill metadata' };
+    }
+  });
+
+  ipcMain.handle(SkillsIpcChannel.GetSyncTargets, () => {
+    try {
+      return {
+        success: true,
+        targets: getSkillManager().getSyncTargets(),
+        firstRunPrompted: getSkillManager().isSyncTargetsFirstRunPrompted(),
+      };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get sync targets' };
+    }
+  });
+
+  ipcMain.handle(SkillsIpcChannel.SetSyncTargets, (_event, targets: unknown) => {
+    try {
+      if (!Array.isArray(targets)) {
+        return { success: false, error: 'Sync targets must be an array' };
+      }
+      const result = getSkillManager().setSyncTargets(targets as Array<{
+        id: string;
+        kind?: string;
+        label?: string;
+        path: string;
+        enabled?: boolean;
+        isCustom?: boolean;
+        builtIn?: boolean;
+      }>);
+      if (result.success) {
+        getSkillManager().markSyncTargetsFirstRunPrompted();
+      }
+      return result;
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set sync targets' };
+    }
+  });
+
+  ipcMain.handle('skills:getSyncTargetsFirstRunPrompted', () => {
+    try {
+      return { success: true, prompted: getStore().getSkillSyncTargetsFirstRunPrompted() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to read first-run flag' };
+    }
+  });
+
+  ipcMain.handle('skills:setSyncTargetsFirstRunPrompted', (_event, prompted: boolean) => {
+    try {
+      getStore().setSkillSyncTargetsFirstRunPrompted(Boolean(prompted));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to write first-run flag' };
+    }
+  });
+
+  /**
+   * Renderer hands back the user's decision for a pending sync conflict
+   * prompt. The coordinator uses the requestId to find the matching
+   * awaiter and resolve it.
+   */
+  ipcMain.handle(SkillsIpcChannel.ResolveSyncConflict, (_event, args: { requestId: string; decision: string }) => {
+    try {
+      if (!args || typeof args.requestId !== 'string' || typeof args.decision !== 'string') {
+        return { success: false, error: 'Invalid conflict resolution arguments' };
+      }
+      const accepted = SyncDialogCoordinator.acceptConflictDecision(
+        args.requestId,
+        args.decision as SkillSyncConflictDecision,
+      );
+      return { success: true, accepted };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to resolve sync conflict' };
+    }
+  });
+
+  /**
+   * Renderer hands back the user's decision for a pending sync failure
+   * prompt. The coordinator uses the requestId to find the matching
+   * awaiter and resolve it.
+   */
+  ipcMain.handle(SkillsIpcChannel.ReportSyncFailure, (_event, args: { requestId: string; decision: string }) => {
+    try {
+      if (!args || typeof args.requestId !== 'string' || typeof args.decision !== 'string') {
+        return { success: false, error: 'Invalid failure resolution arguments' };
+      }
+      const accepted = SyncDialogCoordinator.acceptFailureDecision(
+        args.requestId,
+        args.decision as SkillSyncFailureDecision,
+      );
+      return { success: true, accepted };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to report sync failure' };
+    }
+  });
+
+  /**
+   * Returns the current first-run prompt state. The renderer uses this to
+   * decide whether to show the first-install dialog.
+   */
+  ipcMain.handle(SkillsIpcChannel.PromptFirstSyncTargets, (_event, args?: { requestId?: string; selectedTargetIds?: string[]; rememberChoice?: boolean }) => {
+    try {
+      // When the renderer delivers a response (requestId is set), the
+      // coordinator resolves the pending prompt.
+      if (args && typeof args.requestId === 'string') {
+        const accepted = SyncDialogCoordinator.acceptFirstSyncTargets(
+          args.requestId,
+          Array.isArray(args.selectedTargetIds) ? args.selectedTargetIds : [],
+          args.rememberChoice === true,
+        );
+        return { success: true, accepted };
+      }
+      return {
+        success: true,
+        prompted: getSkillManager().isSyncTargetsFirstRunPrompted(),
+        targets: getSkillManager().getSyncTargets(),
+      };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to read first-run prompt state' };
+    }
   });
 
   ipcMain.handle('openclaw:engine:getStatus', async () => {

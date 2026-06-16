@@ -1,4 +1,4 @@
-import type { SkillMarketplaceSort, SkillMarketplaceSourceType } from '@shared/skills/constants';
+import type { SkillMarketplaceSort, SkillMarketplaceSourceType, SkillSourceType, SkillSyncTargetKind } from '@shared/skills/constants';
 
 // Skill type definition
 export interface Skill {
@@ -12,6 +12,26 @@ export interface Skill {
   prompt: string;         // System prompt content
   skillPath: string;      // Absolute path to SKILL.md
   version?: string;       // Skill version from SKILL.md frontmatter
+  source?: SkillSource;   // Provenance information (added in Phase 1)
+  syncTargets?: SkillSyncTargetEntry[]; // Active sync destinations (added in Phase 1)
+}
+
+export interface SkillSource {
+  type: SkillSourceType;
+  url?: string;
+  ref?: string;
+  author?: string;
+  license?: string;
+  homepage?: string;
+  installedAt?: number;
+  updatedAt?: number;
+}
+
+export interface SkillSyncTargetEntry {
+  agent: string;
+  path: string;
+  mode: 'symlink' | 'copy';
+  syncedAt?: number;
 }
 
 export type LocalizedText = { en: string; zh: string };
@@ -55,3 +75,13 @@ export interface SkillMarketplaceOptions {
   sort?: SkillMarketplaceSort;
   limit?: number;
 }
+
+export type SkillSyncTarget = {
+  id: string;
+  kind: SkillSyncTargetKind | string;
+  label: string;
+  path: string;
+  enabled: boolean;
+  isCustom: boolean;
+  builtIn?: boolean;
+};

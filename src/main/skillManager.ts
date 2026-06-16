@@ -4,13 +4,18 @@ import { app, BrowserWindow, session } from 'electron';
 import extractZip from 'extract-zip';
 import fs from 'fs';
 import yaml from 'js-yaml';
+import os from 'os';
 import path from 'path';
 
-import { SkillsIpcChannel } from '../shared/skills/constants';
+import type { SkillSyncMode } from '../shared/skills/constants';
+import { SkillsIpcChannel,type SkillsIpcChannel as SkillsIpcChannelValue,SkillSourceType, type SkillSourceType as SkillSourceTypeValue,SkillSyncConflictDecision, SkillSyncFailureDecision, type SkillSyncMode as SkillSyncModeValue,SkillSyncTargetKind } from '../shared/skills/constants';
+import type { SkillSyncConflict, SkillSyncFailure, SkillSyncResult, SkillSyncTarget } from '../shared/skills/types';
 import { cpRecursiveSync } from './fsCompat';
 import { t } from './i18n';
 import { getElectronNodeRuntimePath, resolveUserShellPath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
+import { SkillMetadataSync } from './libs/skillManager/skillMetadataSync';
+import { SyncDialogCoordinator } from './libs/skillManager/syncDialogCoordinator';
 import { mergeReports,scanMultipleSkillDirs, scanSkillSecurity } from './libs/skillSecurity/skillSecurityScanner';
 import type { SecurityReportAction,SkillSecurityReport } from './libs/skillSecurity/skillSecurityTypes';
 import type {
@@ -19,6 +24,15 @@ import type {
   SkillHubMarketplaceSkill,
 } from './skillHubMarketplace';
 import { fetchSkillHubMarketplace } from './skillHubMarketplace';
+import {
+  applySync,
+  decideSyncMode,
+  detectConflict,
+  inspectTarget,
+  removeTarget as removeSyncTarget,
+} from './skillSyncResolver';
+import { buildDefaultSyncTargetsState } from './skillSyncTargets';
+import type { SkillMetadataRow } from './sqliteStore';
 import { SqliteStore } from './sqliteStore';
 
 /**
@@ -188,6 +202,24 @@ function buildSkillEnv(): Record<string, string | undefined> {
   return env;
 }
 
+export type SkillSource = {
+  type: SkillSourceType;
+  url?: string;
+  ref?: string;
+  author?: string;
+  license?: string;
+  homepage?: string;
+  installedAt?: number;
+  updatedAt?: number;
+};
+
+export type SkillSyncTargetEntry = {
+  agent: string;
+  path: string;
+  mode: SkillSyncMode;
+  syncedAt?: number;
+};
+
 export type SkillRecord = {
   id: string;
   name: string;
@@ -199,6 +231,14 @@ export type SkillRecord = {
   prompt: string;
   skillPath: string;
   version?: string;
+  /**
+   * Provenance from the `skill_metadata` table. Populated when the
+   * unified Skill Manager has recorded where this skill came from;
+   * `undefined` for legacy installs that predate the metadata table
+   * (or skills that have no recorded source).
+   */
+  source?: SkillSource;
+  syncTargets?: SkillSyncTargetEntry[];
 };
 
 type SkillStateMap = Record<string, { enabled: boolean }>;
@@ -307,6 +347,100 @@ const compareVersions = (a: string, b: string): number => {
     if (na < nb) return -1;
   }
   return 0;
+};
+
+/**
+ * Convert a stored SkillMetadataRow into the renderer-facing SkillSource.
+ * Pure function so it can be unit-tested without Electron dependencies.
+ */
+const rowToSkillSource = (row: SkillMetadataRow): SkillSource => {
+  return {
+    type: (row.sourceType as SkillSourceType) || SkillSourceType.Unknown,
+    url: row.sourceUrl,
+    ref: row.sourceRef,
+    author: row.author,
+    license: row.license,
+    homepage: row.homepage,
+    installedAt: row.installedAt,
+    updatedAt: row.updatedAt,
+  };
+};
+
+/**
+ * Build a SkillSource from a normalized download spec. Stamps installedAt
+ * and updatedAt with the current time.
+ */
+const detectSourceFromInput = (input: {
+  raw: string;
+  type: SkillSourceType;
+  url?: string;
+  ref?: string;
+}): SkillSource => {
+  const now = Date.now();
+  return {
+    type: input.type,
+    url: input.url,
+    ref: input.ref,
+    installedAt: now,
+    updatedAt: now,
+  };
+};
+
+/**
+ * Classify a raw user-provided source string into a SkillSourceType plus the
+ * relevant parsed bits (URL, ref). Local paths and unrecognized URLs map to
+ * `local` / `unknown`.
+ *
+ * Pure-ish function: only depends on `fs.existsSync` for local path
+ * detection. Does not perform network lookups; only structural
+ * classification.
+ */
+const classifySourceInput = (raw: string): {
+  type: SkillSourceType;
+  url?: string;
+  ref?: string;
+} => {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { type: SkillSourceType.Unknown };
+  }
+
+  // SkillHub shorthand / URL
+  if (parseSkillHubSource(trimmed)) {
+    return { type: SkillSourceType.SkillHub, url: trimmed };
+  }
+
+  // ClawHub URL
+  if (parseClawhubUrl(trimmed)) {
+    return { type: SkillSourceType.ClawHub, url: trimmed };
+  }
+
+  // npm spec
+  if (isNpmPackageSpec(trimmed)) {
+    return { type: SkillSourceType.Npm, url: trimmed };
+  }
+
+  // Remote zip URL (must be after npm so npm specifiers that look like
+  // paths are not misclassified as remote zips).
+  if (isRemoteZipUrl(trimmed)) {
+    return { type: SkillSourceType.Zip, url: trimmed };
+  }
+
+  // Existing local file or directory
+  try {
+    if (fs.existsSync(trimmed)) {
+      return { type: SkillSourceType.Local, url: trimmed };
+    }
+  } catch {
+    // fs.existsSync can throw on odd paths; treat as unknown.
+  }
+
+  // Fallback: treat as a GitHub-style git URL
+  if (parseGithubRepoSource(trimmed)) {
+    return { type: SkillSourceType.GitHub, url: trimmed };
+  }
+
+  return { type: SkillSourceType.Unknown, url: trimmed };
 };
 
 const resolveWithin = (root: string, target: string): string => {
@@ -1290,10 +1424,210 @@ export class SkillManager {
     timer: NodeJS.Timeout;
     isUpgrade?: boolean;
     existingSkillDir?: string;
+    rootSource?: string;
   }>();
   private upgradingSkillIds = new Set<string>();
 
   constructor(private getStore: () => SqliteStore) {}
+
+  /**
+   * Record the source of a freshly installed or upgraded skill.
+   * Falls back gracefully if the store is unavailable.
+   */
+  recordSkillMetadata(
+    skillId: string,
+    source: SkillSource | undefined,
+    options?: { updatedAt?: number; syncTargets?: SkillSyncTargetEntry[] }
+  ): void {
+    const store = this.getStore();
+    const existing = store.getSkillMetadata(skillId);
+    const now = options?.updatedAt ?? Date.now();
+    store.upsertSkillMetadata({
+      id: skillId,
+      name: source ? undefined : existing?.name,
+      version: source ? undefined : existing?.version,
+      sourceType: source?.type ?? existing?.sourceType ?? SkillSourceType.Unknown,
+      sourceUrl: source?.url ?? existing?.sourceUrl,
+      sourceRef: source?.ref ?? existing?.sourceRef,
+      author: source?.author ?? existing?.author,
+      license: source?.license ?? existing?.license,
+      homepage: source?.homepage ?? existing?.homepage,
+      installedAt: existing?.installedAt ?? now,
+      updatedAt: now,
+      dirty: existing?.dirty ?? false,
+      syncTargets: options?.syncTargets ?? existing?.syncTargets ?? [],
+    });
+  }
+
+  /**
+   * Record (or replace) the list of sync targets that this skill is synced to.
+   * Used after the sync resolver successfully creates symlinks/copies.
+   */
+  recordSkillSyncTargets(skillId: string, entries: SkillSyncTargetEntry[]): void {
+    const store = this.getStore();
+    const existing = store.getSkillMetadata(skillId);
+    if (!existing) return;
+    store.upsertSkillMetadata({
+      ...existing,
+      syncTargets: entries,
+      updatedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Drop the registry record for a skill. Called from deleteSkill so the
+   * metadata does not survive a user-initiated removal.
+   */
+  forgetSkillMetadata(skillId: string): void {
+    this.getStore().deleteSkillMetadata(skillId);
+  }
+
+  /**
+   * Look up persisted source metadata for a single skill id.
+   * Returns undefined when nothing is recorded.
+   */
+  getSkillSourceInfo(skillId: string): SkillSource | undefined {
+    const row = this.getStore().getSkillMetadata(skillId);
+    return row ? rowToSkillSource(row) : undefined;
+  }
+
+  /**
+   * Return the user's persisted sync-target list. Reads from the kv store
+   * (key: `skills.syncTargets.config`) with defaults applied for first-run
+   * users who have not yet picked any targets.
+   */
+  getSyncTargets(): SkillSyncTarget[] {
+    const configTargets = this.getStore().get<unknown>('skills.syncTargets.config');
+    if (Array.isArray(configTargets) && configTargets.length > 0) {
+      return configTargets.filter((t): t is SkillSyncTarget => (
+        Boolean(t) && typeof t === 'object' && typeof (t as SkillSyncTarget).id === 'string'
+      ));
+    }
+    return this.buildDefaultSyncTargets();
+  }
+
+  /**
+   * Persist a new list of sync targets. Validates the entries and
+   * rejects malformed input. Accepts loose input (e.g. from IPC) and
+   * narrows to the strict SkillSyncTarget type internally.
+   */
+  setSyncTargets(targets: Array<{
+    id: string;
+    kind?: string;
+    label?: string;
+    path: string;
+    enabled?: boolean;
+    isCustom?: boolean;
+    builtIn?: boolean;
+  }>): { success: boolean; error?: string } {
+    const validated: SkillSyncTarget[] = [];
+    for (const target of targets) {
+      if (!target || typeof target !== 'object') {
+        return { success: false, error: 'Each sync target must be an object' };
+      }
+      if (!target.id || typeof target.id !== 'string') {
+        return { success: false, error: 'Each sync target must have an id' };
+      }
+      if (!target.path || typeof target.path !== 'string') {
+        return { success: false, error: `Sync target ${target.id} is missing path` };
+      }
+      const kindValue = target.kind && (Object.values(SkillSyncTargetKind) as string[]).includes(target.kind)
+        ? target.kind as SkillSyncTargetKind
+        : SkillSyncTargetKind.Custom;
+      validated.push({
+        id: target.id,
+        kind: kindValue,
+        label: target.label ?? target.id,
+        path: target.path,
+        enabled: Boolean(target.enabled),
+        isCustom: Boolean(target.isCustom),
+        builtIn: target.builtIn,
+      });
+    }
+    this.getStore().set('skills.syncTargets.config', validated);
+    return { success: true };
+  }
+
+  /**
+   * Mark the first-install prompt as completed so the renderer doesn't
+   * show it again. Stored separately from the target list.
+   */
+  markSyncTargetsFirstRunPrompted(): void {
+    this.getStore().setSkillSyncTargetsFirstRunPrompted(true);
+  }
+
+  isSyncTargetsFirstRunPrompted(): boolean {
+    return this.getStore().getSkillSyncTargetsFirstRunPrompted();
+  }
+
+  /**
+   * Build the default sync-target list for first-run users. Mirrors the
+   * pure helper in skillSyncTargets but reads the actual home directory.
+   */
+  private buildDefaultSyncTargets(): SkillSyncTarget[] {
+    // Re-use the pure helper for consistency with the kv migration code.
+    const state = buildDefaultSyncTargetsState(os.homedir());
+    return state.targets;
+  }
+
+  /**
+   * One-shot migration: scan installed skills and create registry rows for any
+   * that don't have one yet (source_type = 'unknown').
+   */
+  migrateLegacySkillsToRegistry(): { migrated: number; skipped: number } {
+    const store = this.getStore();
+    if (store.isSkillMetadataMigrationComplete()) {
+      return { migrated: 0, skipped: 0 };
+    }
+
+    const installed = this.listSkills();
+    let migrated = 0;
+    let skipped = 0;
+    const now = Date.now();
+
+    for (const skill of installed) {
+      if (store.getSkillMetadata(skill.id)) {
+        skipped += 1;
+        continue;
+      }
+      store.upsertSkillMetadata({
+        id: skill.id,
+        name: skill.name,
+        version: skill.version,
+        sourceType: SkillSourceType.Unknown,
+        installedAt: skill.updatedAt || now,
+        updatedAt: skill.updatedAt || now,
+        syncTargets: [],
+      });
+      migrated += 1;
+    }
+    store.markSkillMetadataMigrationComplete();
+    if (migrated > 0) {
+      console.log(`[SkillManager] Migrated ${migrated} legacy skill(s) to skill_metadata registry`);
+    }
+    return { migrated, skipped };
+  }
+
+  /**
+   * Best-effort inference of the source type from a download URL.
+   * Used by downloadSkill to record where a skill came from.
+   */
+  inferSourceFromUrl(url: string): SkillSource['type'] {
+    if (!url) return SkillSourceType.Unknown;
+    const trimmed = url.trim();
+    if (parseSkillHubSource(trimmed)) return SkillSourceType.SkillHub;
+    if (parseClawhubUrl(trimmed)) return SkillSourceType.ClawHub;
+    if (isNpmPackageSpec(trimmed)) return SkillSourceType.Npm;
+    if (isRemoteZipUrl(trimmed)) return SkillSourceType.Zip;
+    if (trimmed.startsWith('.') || trimmed.startsWith('/') || trimmed.startsWith('~') || fs.existsSync(trimmed)) {
+      return SkillSourceType.Local;
+    }
+    if (parseGithubRepoSource(trimmed) || parseGithubTreeOrBlobUrl(trimmed) || /^[\w.-]+\/[\w.-]+$/.test(trimmed)) {
+      return SkillSourceType.GitHub;
+    }
+    if (this.normalizeGitSource(trimmed)) return SkillSourceType.GitHub;
+    return SkillSourceType.Unknown;
+  }
 
   getSkillsRoot(): string {
     return path.resolve(app.getPath('userData'), SKILLS_DIR_NAME);
@@ -1510,6 +1844,14 @@ export class SkillManager {
     const defaults = this.loadSkillsDefaults(roots);
     const builtInSkillIds = this.listBuiltInSkillIds();
     const skillMap = new Map<string, SkillRecord>();
+    const metadataIndex = new Map<string, SkillMetadataRow>();
+    try {
+      for (const row of this.getStore().listSkillMetadata()) {
+        metadataIndex.set(row.id, row);
+      }
+    } catch (error) {
+      console.warn('[SkillManager] failed to read skill metadata index:', error);
+    }
 
     const openSquillaSkillRoots = this.getOpenSquillaSkillRoots();
     orderedRoots.forEach(root => {
@@ -1526,6 +1868,18 @@ export class SkillManager {
           builtInSkillIds.has(path.basename(dir)) || isOpenSquillaSkill,
         );
         if (!skill) return;
+        const meta = metadataIndex.get(skill.id);
+        if (meta) {
+          skill.source = this.toSkillSource(meta);
+          if (meta.syncTargets && meta.syncTargets.length > 0) {
+            skill.syncTargets = meta.syncTargets.map(entry => ({
+              agent: entry.agent,
+              path: entry.path,
+              mode: entry.mode,
+              syncedAt: meta.updatedAt,
+            }));
+          }
+        }
         skillMap.set(skill.id, skill);
       });
     });
@@ -1593,6 +1947,16 @@ export class SkillManager {
     const state = this.loadSkillStateMap();
     delete state[id];
     this.saveSkillStateMap(state);
+    try {
+      SkillMetadataSync.removeSkillFromTargets(this.getStore(), id);
+    } catch (error) {
+      console.warn(`[SkillManager] failed to remove sync targets for ${id}:`, error);
+    }
+    try {
+      this.deleteSkillMetadata(id);
+    } catch (error) {
+      console.warn(`[SkillManager] failed to clean up metadata for ${id}:`, error);
+    }
     this.startWatching();
     this.notifySkillsChanged();
     return this.listSkills();
@@ -1771,6 +2135,7 @@ export class SkillManager {
           root,
           skillDirs,
           timer,
+          rootSource: trimmed,
         });
 
         return {
@@ -1791,6 +2156,16 @@ export class SkillManager {
           suffix += 1;
         }
         cpRecursiveSync(skillDir, targetDir);
+        const skillId = path.basename(targetDir);
+        this.recordInstalledSkillSource(skillId, trimmed);
+        try {
+          await this.syncSkillToTargets(skillId, {
+            resolveConflict: (_id, conflict) => SyncDialogCoordinator.requestConflictResolution(conflict),
+            handleFailure: (_id, failure) => SyncDialogCoordinator.requestFailureResolution(failure),
+          });
+        } catch (error) {
+          console.warn('[SkillManager] failed to sync newly installed skill:', error);
+        }
       }
 
       cleanupPathSafely(cleanupPath);
@@ -1941,6 +2316,7 @@ export class SkillManager {
           timer,
           isUpgrade: true,
           existingSkillDir,
+          rootSource: downloadUrl,
         });
 
         // Ownership of cleanupPath transferred to pendingInstalls
@@ -1950,6 +2326,8 @@ export class SkillManager {
 
       // Safe — perform upgrade
       this.performSkillUpgrade(matchingSkillDir, existingSkillDir);
+      const upgradedVersion = this.getSkillVersion(existingSkillDir);
+      await this.recordUpgradedSkillSource(skillId, downloadUrl, upgradedVersion || undefined);
 
       cleanupPathSafely(cleanupPath);
       cleanupPath = null;
@@ -2006,10 +2384,10 @@ export class SkillManager {
     fs.rmSync(upgradingDir, { recursive: true, force: true });
   }
 
-  confirmPendingInstall(
+  async confirmPendingInstall(
     pendingId: string,
     action: SecurityReportAction
-  ): { success: boolean; skills?: SkillRecord[]; error?: string } {
+  ): Promise<{ success: boolean; skills?: SkillRecord[]; error?: string }> {
     console.log(`[SkillManager] confirmPendingInstall: id=${pendingId}, action=${action}`);
     const pending = this.pendingInstalls.get(pendingId);
     if (!pending) {
@@ -2032,7 +2410,10 @@ export class SkillManager {
     if (pending.isUpgrade && pending.existingSkillDir) {
       for (const skillDir of pending.skillDirs) {
         this.performSkillUpgrade(skillDir, pending.existingSkillDir);
-        installedIds.push(path.basename(pending.existingSkillDir));
+        const id = path.basename(pending.existingSkillDir);
+        installedIds.push(id);
+        const upgradedVersion = this.getSkillVersion(pending.existingSkillDir);
+        await this.recordUpgradedSkillSource(id, pending.rootSource ?? '', upgradedVersion || undefined);
       }
     } else {
       // Fresh install path: find unique directory name
@@ -2045,7 +2426,17 @@ export class SkillManager {
           suffix += 1;
         }
         cpRecursiveSync(skillDir, targetDir);
-        installedIds.push(path.basename(targetDir));
+        const id = path.basename(targetDir);
+        installedIds.push(id);
+        this.recordInstalledSkillSource(id, pending.rootSource ?? '');
+        try {
+          await this.syncSkillToTargets(id, {
+            resolveConflict: (_id, conflict) => SyncDialogCoordinator.requestConflictResolution(conflict),
+            handleFailure: (_id, failure) => SyncDialogCoordinator.requestFailureResolution(failure),
+          });
+        } catch (error) {
+          console.warn('[SkillManager] failed to sync newly installed skill:', error);
+        }
       }
     }
 
@@ -2164,6 +2555,45 @@ export class SkillManager {
     }, WATCH_DEBOUNCE_MS);
   }
 
+  private buildSyncDialogHooks(skillId: string): {
+    onConflict: (info: {
+      target: { kind: string };
+      targetPath: string;
+      conflict: { reason: string; existingSourceType?: SkillSourceTypeValue };
+    }) => void;
+    onFailure: (info: {
+      target: { kind: string };
+      targetPath: string;
+      mode: SkillSyncModeValue;
+      reason: string;
+      error: string;
+    }) => void;
+  } {
+    return {
+      onConflict: ({ target, targetPath, conflict }) => {
+        this.emitSyncDialogEvent(SkillsIpcChannel.ResolveSyncConflict, {
+          skillId,
+          skillName: skillId,
+          agent: target.kind,
+          path: targetPath,
+          existingSourceType: conflict.existingSourceType,
+          incomingSourceType: (this.getStore().getSkillMetadata(skillId)?.sourceType ?? 'unknown') as SkillSourceTypeValue,
+        });
+      },
+      onFailure: ({ target, targetPath, mode, reason, error }) => {
+        this.emitSyncDialogEvent(SkillsIpcChannel.ReportSyncFailure, {
+          skillId,
+          skillName: skillId,
+          agent: target.kind,
+          path: targetPath,
+          mode,
+          reason,
+          error,
+        });
+      },
+    };
+  }
+
   private notifySkillsChanged(): void {
     BrowserWindow.getAllWindows().forEach(win => {
       if (!win.isDestroyed()) {
@@ -2180,11 +2610,522 @@ export class SkillManager {
     }
   }
 
+  /**
+   * Emit a sync-dialog event to every renderer. The renderer-side
+   * `SyncDialogHost` listens on these channels and surfaces the
+   * corresponding modal so the user can decide what to do.
+   */
+  private emitSyncDialogEvent(
+    channel: SkillsIpcChannelValue,
+    payload: Record<string, unknown>,
+  ): void {
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send(channel, payload);
+      }
+    });
+  }
+
   onSkillsChanged(listener: () => void): () => void {
     this.changeListeners.push(listener);
     return () => {
       this.changeListeners = this.changeListeners.filter(l => l !== listener);
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 1: Skill metadata registry CRUD
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Record the source of a freshly installed skill. Called after a successful
+   * install (or after `confirmPendingInstall` for at-risk installs). Does
+   * nothing for built-in skills — the user did not pick a source for those.
+   */
+  recordInstalledSkillSource(skillId: string, sourceInput: string): void {
+    if (this.isBuiltInSkillId(skillId)) {
+      return;
+    }
+    const classification = classifySourceInput(sourceInput);
+    const now = Date.now();
+    this.upsertSkillMetadata(skillId, {
+      name: skillId,
+      sourceType: classification.type,
+      sourceUrl: classification.url,
+      sourceRef: classification.ref,
+      installedAt: now,
+      updatedAt: now,
+    });
+  }
+
+  /**
+   * Update the source fields for an upgraded skill. Keeps the original
+   * installedAt; refreshes version/url/ref/updatedAt.
+   */
+  async recordUpgradedSkillSource(
+    skillId: string,
+    sourceInput: string,
+    version?: string,
+  ): Promise<void> {
+    if (this.isBuiltInSkillId(skillId)) {
+      return;
+    }
+    const classification = classifySourceInput(sourceInput);
+    this.upsertSkillMetadata(skillId, {
+      name: skillId,
+      version,
+      sourceType: classification.type,
+      sourceUrl: classification.url,
+      sourceRef: classification.ref,
+      updatedAt: Date.now(),
+    });
+    // Re-sync so symlinks pick up the new content
+    const installed = this.listSkills().find(s => s.id === skillId);
+    if (installed) {
+      try {
+        await this.syncSkillToTargets(skillId, {
+          resolveConflict: (_id, conflict) => SyncDialogCoordinator.requestConflictResolution(conflict),
+          handleFailure: (_id, failure) => SyncDialogCoordinator.requestFailureResolution(failure),
+        });
+      } catch (error) {
+        console.warn(`[SkillManager] failed to re-sync after upgrade for ${skillId}:`, error);
+      }
+    }
+  }
+
+  getSkillMetadata(id: string): SkillMetadataRow | null {
+    return this.getStore().getSkillMetadata(id);
+  }
+
+  listSkillMetadata(): SkillMetadataRow[] {
+    return this.getStore().listSkillMetadata();
+  }
+
+  /**
+   * Upsert skill metadata. Pass a partial record to merge into the existing
+   * row. The current row is loaded first so that callers can update only
+   * the fields they care about (e.g. version) without losing others.
+   */
+  upsertSkillMetadata(id: string, data: Partial<SkillMetadataRow>): SkillMetadataRow {
+    const store = this.getStore();
+    const existing = store.getSkillMetadata(id);
+    const now = Date.now();
+    const merged: SkillMetadataRow = {
+      id,
+      name: data.name ?? existing?.name,
+      version: data.version ?? existing?.version,
+      sourceType: data.sourceType ?? existing?.sourceType ?? SkillSourceType.Unknown,
+      sourceUrl: data.sourceUrl ?? existing?.sourceUrl,
+      sourceRef: data.sourceRef ?? existing?.sourceRef,
+      author: data.author ?? existing?.author,
+      license: data.license ?? existing?.license,
+      homepage: data.homepage ?? existing?.homepage,
+      installedAt: existing?.installedAt ?? data.installedAt ?? now,
+      updatedAt: data.updatedAt ?? now,
+      fileHash: data.fileHash ?? existing?.fileHash,
+      remoteVersion: data.remoteVersion ?? existing?.remoteVersion,
+      lastCheckAt: data.lastCheckAt ?? existing?.lastCheckAt,
+      dirty: data.dirty ?? existing?.dirty ?? false,
+      syncTargets: data.syncTargets ?? existing?.syncTargets ?? [],
+    };
+    store.upsertSkillMetadata(merged);
+    return merged;
+  }
+
+  deleteSkillMetadata(id: string): void {
+    this.getStore().deleteSkillMetadata(id);
+  }
+
+  /**
+   * One-shot migration: scan installed skills and create a metadata row with
+   * `sourceType: 'unknown'` for any skill that doesn't already have one.
+   * Idempotent — relies on the store-side `isSkillMetadataMigrationComplete`
+   * guard plus the upsert's existing-row check.
+   */
+  migrateLegacySkills(): { migrated: number; skipped: number } {
+    const store = this.getStore();
+    if (store.isSkillMetadataMigrationComplete()) {
+      return { migrated: 0, skipped: 0 };
+    }
+
+    const installed = this.listSkills();
+    let migrated = 0;
+    let skipped = 0;
+    const now = Date.now();
+
+    for (const skill of installed) {
+      if (store.getSkillMetadata(skill.id)) {
+        skipped += 1;
+        continue;
+      }
+      const metadata: SkillMetadataRow = {
+        id: skill.id,
+        name: skill.name,
+        version: skill.version,
+        sourceType: SkillSourceType.Unknown,
+        installedAt: skill.updatedAt || now,
+        updatedAt: skill.updatedAt || now,
+        syncTargets: [],
+      };
+      try {
+        store.upsertSkillMetadata(metadata);
+        migrated += 1;
+      } catch (error) {
+        console.warn(`[SkillManager] failed to migrate skill metadata for ${skill.id}:`, error);
+      }
+    }
+
+    store.markSkillMetadataMigrationComplete();
+    console.log(`[SkillManager] legacy skill metadata migration: migrated=${migrated}, skipped=${skipped}`);
+    return { migrated, skipped };
+  }
+
+  // -------------------------------------------------------------------------
+  // Sync target configuration (kv-backed)
+  // -------------------------------------------------------------------------
+
+  /**
+   * List configured sync targets. Thin alias for `getSyncTargets()` so
+   * callers can drive the conflict-resolution flow without ambiguity.
+   */
+  listSyncTargets(): SkillSyncTarget[] {
+    return this.getSyncTargets();
+  }
+
+  // -------------------------------------------------------------------------
+  // Sync execution — calls into skillSyncResolver with conflict/failure
+  // callbacks so the renderer can drive the user-facing dialogs.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Sync a single installed skill to every enabled sync target. Returns a
+   * per-target result so the caller can drive conflict / failure dialogs.
+   *
+   * Bundled skills (built into the app) are never synced — they ship with
+   * the binary and should not leak into user agent directories.
+   *
+   * Conflict and failure handling are delegated to the caller via the
+   * `resolveConflict` / `handleFailure` callbacks. Without those, conflicts
+   * are skipped and failures are surfaced as `success: false` in the result.
+   */
+  async syncSkillToTargets(
+    skillId: string,
+    options: {
+      resolveConflict?: (
+        skillId: string,
+        conflict: SkillSyncConflict
+      ) => SkillSyncConflictDecision | Promise<SkillSyncConflictDecision>;
+      handleFailure?: (
+        skillId: string,
+        failure: SkillSyncFailure
+      ) => SkillSyncFailureDecision | Promise<SkillSyncFailureDecision>;
+      modeOverride?: SkillSyncMode;
+    } = {},
+  ): Promise<SkillSyncResult> {
+    if (this.isBuiltInSkillId(skillId)) {
+      return { skillId, attempts: [] };
+    }
+
+    const targets = this.listSyncTargets().filter(t => t.enabled);
+    if (targets.length === 0) {
+      return { skillId, attempts: [] };
+    }
+
+    const sourceDir = resolveWithin(this.getSkillsRoot(), skillId);
+    if (!fs.existsSync(sourceDir)) {
+      throw new Error(`Skill not found: ${skillId}`);
+    }
+
+    const metadata = this.getStore().getSkillMetadata(skillId);
+    const sourceType = (metadata?.sourceType ?? SkillSourceType.Unknown) as SkillSourceType;
+
+    const decision = options.modeOverride
+      ? { mode: options.modeOverride, reason: 'override' }
+      : decideSyncMode();
+
+    const attempts: SkillSyncResult['attempts'] = [];
+    const newEntries: SkillMetadataRow['syncTargets'] = [];
+
+    for (const target of targets) {
+      const targetPath = path.join(target.path, skillId);
+      const attempt = await this.applySyncAttempt({
+        skillId,
+        target,
+        targetPath,
+        sourceDir,
+        sourceType,
+        decision,
+        resolveConflict: options.resolveConflict,
+        handleFailure: options.handleFailure,
+      });
+      attempts.push(attempt);
+      if (attempt.success) {
+        newEntries.push({
+          agent: target.kind,
+          path: targetPath,
+          mode: decision.mode,
+        });
+      }
+    }
+
+    if (metadata) {
+      this.recordSkillSyncTargets(skillId, newEntries);
+    }
+
+    return { skillId, attempts };
+  }
+
+  /**
+   * Internal: run a single sync attempt, including conflict/failure recovery.
+   */
+  private async applySyncAttempt(input: {
+    skillId: string;
+    target: SkillSyncTarget;
+    targetPath: string;
+    sourceDir: string;
+    sourceType: SkillSourceType;
+    decision: { mode: SkillSyncMode; reason: string };
+    resolveConflict?: (
+      skillId: string,
+      conflict: SkillSyncConflict
+    ) => SkillSyncConflictDecision | Promise<SkillSyncConflictDecision>;
+    handleFailure?: (
+      skillId: string,
+      failure: SkillSyncFailure
+    ) => SkillSyncFailureDecision | Promise<SkillSyncFailureDecision>;
+  }): Promise<SkillSyncResult['attempts'][number]> {
+    const { skillId, target, targetPath, sourceDir, sourceType, decision, resolveConflict, handleFailure } = input;
+
+    const conflict = detectConflict(targetPath, sourceType, sourceDir);
+    if (conflict.hasConflict && resolveConflict) {
+      const decision2 = await resolveConflict(skillId, {
+        skillId,
+        agent: target.kind,
+        path: targetPath,
+        existingSourceType: conflict.existingSourceType,
+        incomingSourceType: conflict.incomingSourceType,
+      });
+      if (decision2 === SkillSyncConflictDecision.Skip) {
+        return {
+          agent: target.kind,
+          path: targetPath,
+          mode: decision.mode,
+          success: false,
+          reason: 'user-skipped',
+        };
+      }
+      if (decision2 === SkillSyncConflictDecision.Keep) {
+        return {
+          agent: target.kind,
+          path: targetPath,
+          mode: decision.mode,
+          success: true,
+          reason: 'kept-existing',
+        };
+      }
+      // 'replace' = fall through with replaceExisting=true.
+    }
+
+    try {
+      applySync(sourceDir, targetPath, decision, {
+        replaceExisting: conflict.hasConflict,
+        sourceType,
+      });
+      return {
+        agent: target.kind,
+        path: targetPath,
+        mode: decision.mode,
+        success: true,
+      };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      console.warn(`[SkillManager] sync to ${target.kind} failed for ${skillId}: ${reason}`);
+
+      if (!handleFailure) {
+        return {
+          agent: target.kind,
+          path: targetPath,
+          mode: decision.mode,
+          success: false,
+          reason,
+        };
+      }
+
+      let attempt: SkillSyncFailureDecision = SkillSyncFailureDecision.Retry;
+      let lastReason = reason;
+      while (attempt === SkillSyncFailureDecision.Retry) {
+        attempt = await handleFailure(skillId, {
+          skillId,
+          agent: target.kind,
+          path: targetPath,
+          mode: decision.mode,
+          reason: lastReason,
+        });
+        if (attempt === SkillSyncFailureDecision.Retry) {
+          try {
+            applySync(sourceDir, targetPath, decision, {
+              replaceExisting: conflict.hasConflict,
+              sourceType,
+            });
+            return {
+              agent: target.kind,
+              path: targetPath,
+              mode: decision.mode,
+              success: true,
+            };
+          } catch (retryError) {
+            lastReason = retryError instanceof Error ? retryError.message : 'unknown error';
+            console.warn(`[SkillManager] sync retry to ${target.kind} failed for ${skillId}: ${lastReason}`);
+            if (lastReason === reason) break;
+          }
+        }
+      }
+
+      if (attempt === SkillSyncFailureDecision.Cancel) {
+        throw new Error(`sync canceled by user for ${skillId} on ${target.kind}`);
+      }
+
+      return {
+        agent: target.kind,
+        path: targetPath,
+        mode: decision.mode,
+        success: false,
+        reason,
+      };
+    }
+  }
+
+  /**
+   * Remove a skill from every sync target it was synced to. Reads the
+   * `sync_targets` column so we don't have to enumerate configured targets.
+   * Returns the list of removals actually performed.
+   */
+  removeSkillFromTargets(skillId: string): SkillSyncResult {
+    const metadata = this.getStore().getSkillMetadata(skillId);
+    const entries = metadata?.syncTargets ?? [];
+    if (entries.length === 0) {
+      return { skillId, attempts: [] };
+    }
+
+    const attempts: SkillSyncResult['attempts'] = [];
+    for (const entry of entries) {
+      const targetPath = entry.path;
+      const inspection = inspectTarget(targetPath);
+      if (!inspection.exists) {
+        attempts.push({
+          agent: entry.agent,
+          path: targetPath,
+          mode: entry.mode as SkillSyncMode,
+          success: true,
+          reason: 'absent',
+        });
+        continue;
+      }
+      try {
+        removeSyncTarget(targetPath);
+        attempts.push({
+          agent: entry.agent,
+          path: targetPath,
+          mode: entry.mode as SkillSyncMode,
+          success: true,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'unknown error';
+        attempts.push({
+          agent: entry.agent,
+          path: targetPath,
+          mode: entry.mode as SkillSyncMode,
+          success: false,
+          reason,
+        });
+      }
+    }
+
+    if (metadata) {
+      this.recordSkillSyncTargets(skillId, []);
+    }
+    return { skillId, attempts };
+  }
+
+  /**
+   * Apply a user decision to an existing sync conflict. Currently this is
+   * informational: the conflict is resolved when `syncSkillToTargets` runs
+   * with a `resolveConflict` callback, so this method just records the
+   * decision in metadata for later auditing and returns the next sync
+   * result.
+   */
+  async resolveSyncConflict(
+    skillId: string,
+    agent: string,
+    decision: SkillSyncConflictDecision,
+  ): Promise<SkillSyncResult> {
+    console.log(`[SkillManager] resolveSyncConflict: ${skillId}/${agent} → ${decision}`);
+    // Re-run sync with the resolved decision so the next attempt respects
+    // the user's choice. We pass an inline resolver that returns the
+    // supplied decision.
+    return this.syncSkillToTargets(skillId, {
+      resolveConflict: (_id, conflict) => {
+        if (conflict.agent === agent) return decision;
+        return SkillSyncConflictDecision.Keep;
+      },
+    });
+  }
+
+  /**
+   * Apply a user decision to a sync failure (retry / skip / cancel).
+   * Mirrors `resolveSyncConflict` but routes through the failure handler.
+   */
+  async reportSyncFailure(
+    skillId: string,
+    agent: string,
+    decision: SkillSyncFailureDecision,
+  ): Promise<SkillSyncResult> {
+    console.log(`[SkillManager] reportSyncFailure: ${skillId}/${agent} → ${decision}`);
+    return this.syncSkillToTargets(skillId, {
+      handleFailure: (_id, failure) => {
+        if (failure.agent === agent) return decision;
+        return SkillSyncFailureDecision.Skip;
+      },
+    });
+  }
+
+  /**
+   * Sync every installed user skill to its enabled targets. Bundled skills
+   * are skipped. Used after the user enables a target in Settings or
+   * changes its path.
+   */
+  async syncAllSkillsToTargets(): Promise<{ synced: number; results: SkillSyncResult[] }> {
+    const skills = this.listSkills().filter(s => !s.isBuiltIn);
+    const results: SkillSyncResult[] = [];
+    let synced = 0;
+    for (const skill of skills) {
+      const result = await this.syncSkillToTargets(skill.id);
+      results.push(result);
+      if (result.attempts.some(a => a.success)) synced += 1;
+    }
+    return { synced, results };
+  }
+
+  /**
+   * Convert a stored metadata row into the renderer-facing `source` shape
+   * used by the Skill type.
+   */
+  toSkillSource(row: SkillMetadataRow): SkillSource {
+    return rowToSkillSource(row);
+  }
+
+  /**
+   * Derive a SkillSource from a free-form input spec (e.g. a GitHub URL,
+   * npm spec, or local path). The caller passes the normalized source string
+   * and any extra context the parser already produced.
+   */
+  detectSourceFromInput(input: {
+    raw: string;
+    type: SkillSourceType;
+    url?: string;
+    ref?: string;
+  }): SkillSource {
+    return detectSourceFromInput(input);
   }
 
   private parseSkillDir(
@@ -2776,4 +3717,8 @@ export const __skillManagerTestUtils = {
   extractDescription,
   parseClawhubUrl,
   parseSkillHubSource,
+  compareVersions,
+  rowToSkillSource,
+  detectSourceFromInput,
+  classifySourceInput,
 };
