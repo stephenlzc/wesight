@@ -66,9 +66,9 @@
 - [ ] 首次安装 skill 时弹出引导对话框选择同步目标
 
 ### 错误处理与弹窗
-- [ ] 实现同步冲突 IPC 弹窗（renderer → main → renderer）
-- [ ] 实现同步失败 IPC 弹窗
-- [ ] 实现首次安装引导 IPC 弹窗
+- [x] 实现同步冲突 IPC 弹窗（renderer → main → renderer）（Agent-6 完成 `acc7063`：新增 `SkillSyncConflictDialog` 组件，路由 SkillSyncConflictDecision.Keep/Replace/Skip，含 source 对比与双语 i18n）
+- [x] 实现同步失败 IPC 弹窗（Agent-6 完成 `acc7063`：新增 `SkillSyncFailureDialog` 组件，路由 SkillSyncFailureDecision.Retry/Skip/Cancel，支持 disableCancel 抑制取消按钮）
+- [x] 实现首次安装引导 IPC 弹窗（Agent-6 完成 `acc7063`：新增 `SkillFirstSyncPromptDialog` 组件，支持多选目标、rememberChoice 选项、缺失/禁用目标视觉提示）
 
 ### IPC 与常量
 - [x] 在 `src/shared/skills/constants.ts` 中新增 IPC 通道常量（Agent-2 完成 `f94fb2a`：GetSyncTargets / SetSyncTargets / GetSkillMetadata / ListSkillMetadata / ResolveSyncConflict / ReportSyncFailure / PromptFirstSyncTargets + SkillSourceType / SkillSyncMode / SkillSyncTargetKind 常量）
