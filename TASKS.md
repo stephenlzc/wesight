@@ -7,6 +7,64 @@
 
 ## 任务列表
 
-<!-- Agent会自行维护这个列表 -->
-<!-- 在这里添加初始任务 -->
+### 数据层与类型
+- [ ] 在 `src/main/sqliteStore.ts` 中新增 `skill_metadata` 表及迁移逻辑
+- [ ] 在 `src/main/skillManager.ts` 中新增 `SkillMetadata` 类型和 registry CRUD 方法
+- [ ] 向后兼容扩展 `SkillRecord`（`src/main/skillManager.ts`）和 renderer `Skill` 类型（`src/renderer/types/skill.ts`）
+- [ ] 实现首次启动时旧 skill 迁移到 `skill_metadata`（`source_type: 'unknown'`）
 
+### 来源记录
+- [ ] 在 `downloadSkill()` 结束时写入/更新 `skill_metadata`
+- [ ] 在 `performSkillUpgrade()` 结束时更新 `skill_metadata` 的 `version`、`source_url`、`source_ref`、`updated_at`
+- [ ] 在 `deleteSkill()` 时清理 `skill_metadata` 记录
+
+### 同步目标配置
+- [ ] 新增 `SkillSyncTarget` 类型和默认目标列表（Claude / Kimi / OpenClaw / Codex / Custom）
+- [ ] 实现 `getSyncTargets()` / `setSyncTargets()` 存储（SQLite `kv` 表）
+- [ ] 新增 IPC 通道常量：`GetSkillSyncTargets`、`SetSkillSyncTargets`
+
+### 跨 Agent 同步核心
+- [ ] 实现 `syncSkillToTargets(skillId)`：为每个启用目标创建 symlink 或 copy
+- [ ] 实现 `removeSkillFromTargets(skillId)`：删除目标目录中的 symlink/copy
+- [ ] 实现 `resolveSyncConflict()`：检测目标已存在同 id skill 时询问用户
+- [ ] 实现 Windows 开发者模式检测和 symlink/copy 降级策略
+- [ ] 实现同步失败处理：弹窗重试/跳过/取消，取消时回滚安装
+
+### 生命周期集成
+- [ ] 在安装 skill 成功后调用 `syncSkillToTargets()`
+- [ ] 在删除 skill 时调用 `removeSkillFromTargets()`
+- [ ] 在升级 skill 时更新 metadata 并重新同步
+- [ ] 确保 bundled skills 不会被同步出去
+- [ ] 确保 marketplace 升级流程不受影响
+
+### UI：Skill 详情
+- [ ] 在 skill 详情弹窗中展示 Source 区域（type/url/ref/author/license/installedAt/updatedAt）
+- [ ] 在 skill 详情弹窗中展示 Synced Agents 列表和同步模式
+
+### UI：Settings
+- [ ] 新增 "Skill Sync Targets" Settings 页面/区域
+- [ ] 展示默认目标列表、目录是否存在、启用开关
+- [ ] 支持添加/编辑/删除自定义路径
+- [ ] 首次安装 skill 时弹出引导对话框选择同步目标
+
+### 错误处理与弹窗
+- [ ] 实现同步冲突 IPC 弹窗（renderer → main → renderer）
+- [ ] 实现同步失败 IPC 弹窗
+- [ ] 实现首次安装引导 IPC 弹窗
+
+### IPC 与常量
+- [ ] 在 `src/shared/skills/constants.ts` 中新增 IPC 通道常量
+- [ ] 在 `src/main/main.ts` 中注册新的 IPC handlers
+- [ ] 在 `src/renderer/services/skill.ts` 中暴露新的渲染层 API
+
+### 测试
+- [ ] 编写 `sqliteStore.test.ts` 中 `skill_metadata` 表的测试
+- [ ] 编写 `skillManager.registry.test.ts`：CRUD 和迁移
+- [ ] 编写 `skillSyncResolver.test.ts`：symlink/copy 决策、路径冲突检测
+- [ ] 编写 `skillManager.sync.lifecycle.test.ts`：安装/删除/升级端到端测试（使用临时目录）
+- [ ] 运行 `npm run lint` 并清理新增警告
+
+### 文档与收尾
+- [ ] 更新 `docs/prd-skill-manager-v1.md` 中任何与实际实现不一致的地方
+- [ ] 在 `AGENTS.md` 中补充 skill manager 相关说明（如有必要）
+- [ ] 在 `HUMAN_INPUT.md` 为空时确认蜂群任务完成
