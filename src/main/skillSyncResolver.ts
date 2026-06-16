@@ -186,7 +186,7 @@ function readMarker(targetPath: string): MarkerReadResult {
     if (!raw.startsWith(WESIGHT_LINK_MARKER_VALUE)) {
       return { isManaged: false };
     }
-    const sourceType = raw.replace(WESIGHT_LINK_MARKER_VALUE, '').trim() || undefined;
+    const sourceType = raw.slice(WESIGHT_LINK_MARKER_VALUE.length).replace(/^:/, '').trim() || undefined;
     return {
       isManaged: true,
       sourceType: sourceType as SkillSourceType | undefined,
