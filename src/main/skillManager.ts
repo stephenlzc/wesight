@@ -219,6 +219,12 @@ export type SkillRecord = {
   prompt: string;
   skillPath: string;
   version?: string;
+  /**
+   * Provenance from the `skill_metadata` table. Populated when the
+   * unified Skill Manager has recorded where this skill came from;
+   * `undefined` for legacy installs that predate the metadata table
+   * (or skills that have no recorded source).
+   */
   source?: SkillSource;
   syncTargets?: SkillSyncTargetEntry[];
 };

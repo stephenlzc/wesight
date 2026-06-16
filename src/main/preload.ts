@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('electron', {
     fetchMarketplace: (options?: any) => ipcRenderer.invoke(SkillsIpcChannel.FetchMarketplace, options),
     searchMarketplace: (options?: any) => ipcRenderer.invoke(SkillsIpcChannel.SearchMarketplace, options),
     installMarketplaceSkill: (skill: any) => ipcRenderer.invoke(SkillsIpcChannel.InstallMarketplaceSkill, skill),
+    getSkillMetadata: (skillId: string) => ipcRenderer.invoke(SkillsIpcChannel.GetSkillMetadata, skillId),
+    listSkillMetadata: () => ipcRenderer.invoke(SkillsIpcChannel.ListSkillMetadata),
     onChanged: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on(SkillsIpcChannel.Changed, handler);

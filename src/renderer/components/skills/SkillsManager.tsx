@@ -25,6 +25,7 @@ import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
 import UploadIcon from '../icons/UploadIcon';
 import SkillSecurityReport from './SkillSecurityReport';
+import { SkillSourceInfo } from './SkillSourceInfo';
 
 type SkillTab = 'installed' | 'marketplace';
 type ImportSourceType = 'github' | 'clawhub';
@@ -1139,6 +1140,10 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
                         </button>
                       </div>
                     )}
+                    <SkillSourceInfo
+                      source={selectedSkill.source}
+                      fallbackInstalledAt={selectedSkill.updatedAt}
+                    />
                   </>
                 );
               })()}

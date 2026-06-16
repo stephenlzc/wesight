@@ -73,6 +73,40 @@ export const SkillSourceType = {
 
 export type SkillSourceType = typeof SkillSourceType[keyof typeof SkillSourceType];
 
+/**
+ * Provenance descriptor for an installed skill. Sourced from the
+ * `skill_metadata` table; surfaced to the renderer so the skill-detail
+ * UI can show how the skill was obtained.
+ */
+export type SkillSource = {
+  type: SkillSourceType;
+  url?: string;
+  ref?: string;
+  author?: string;
+  license?: string;
+};
+
+/**
+ * Full metadata row exposed to the renderer. Includes the provenance
+ * descriptor plus install/update timestamps. Fields beyond those
+ * (fileHash, remoteVersion, lastCheckAt, dirty, syncTargets) are
+ * reserved for the future cross-agent sync work (#53-#56) and are
+ * intentionally not surfaced to the UI in v1.
+ */
+export type SkillMetadata = {
+  id: string;
+  name?: string;
+  version?: string;
+  sourceType: SkillSourceType;
+  sourceUrl?: string;
+  sourceRef?: string;
+  author?: string;
+  license?: string;
+  homepage?: string;
+  installedAt: number;
+  updatedAt: number;
+};
+
 export const SkillSyncMode = {
   Symlink: 'symlink',
   Copy: 'copy',

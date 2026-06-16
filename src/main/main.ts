@@ -4129,6 +4129,22 @@ if (!gotTheLock) {
     return getSkillManager().installMarketplaceSkill(skill);
   });
 
+  ipcMain.handle(SkillsIpcChannel.GetSkillMetadata, (_event, skillId: string) => {
+    try {
+      return { success: true, metadata: getSkillManager().getSkillMetadata(skillId) };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to read skill metadata' };
+    }
+  });
+
+  ipcMain.handle(SkillsIpcChannel.ListSkillMetadata, () => {
+    try {
+      return { success: true, metadata: getSkillManager().listSkillMetadata() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to list skill metadata' };
+    }
+  });
+
   ipcMain.handle('openclaw:engine:getStatus', async () => {
     try {
       const manager = getOpenClawEngineManager();

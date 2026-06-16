@@ -1,3 +1,5 @@
+import type { SkillMetadata } from '@shared/skills/constants';
+
 import { LocalizedText, LocalSkillInfo, MarketplaceSkill, MarketTag, Skill, SkillMarketplaceOptions } from '../types/skill';
 import { i18nService } from './i18n';
 
@@ -284,6 +286,34 @@ class SkillService {
     const marketDesc = this.marketplaceSkillDescriptions.get(skillId);
     if (marketDesc != null) return resolveLocalizedText(marketDesc);
     return fallback;
+  }
+
+  async getSkillMetadata(skillId: string): Promise<SkillMetadata | null> {
+    try {
+      const result = await window.electron.skills.getSkillMetadata(skillId);
+      if (result.success) {
+        return result.metadata ?? null;
+      }
+      console.warn('Failed to load skill metadata:', result.error);
+      return null;
+    } catch (error) {
+      console.error('Failed to load skill metadata:', error);
+      return null;
+    }
+  }
+
+  async listSkillMetadata(): Promise<SkillMetadata[]> {
+    try {
+      const result = await window.electron.skills.listSkillMetadata();
+      if (result.success) {
+        return result.metadata ?? [];
+      }
+      console.warn('Failed to list skill metadata:', result.error);
+      return [];
+    } catch (error) {
+      console.error('Failed to list skill metadata:', error);
+      return [];
+    }
   }
 }
 

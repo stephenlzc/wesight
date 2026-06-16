@@ -19,7 +19,7 @@ import type { CoworkModelOverride, CoworkSessionRuntimeSnapshot } from '@shared/
 import type { CoworkStudioAssetsResult } from '@shared/cowork/studioAssets';
 import type { FeishuEngineKeyType, FeishuManagementModeType, FeishuRuntimeOwnershipType, WeixinOwnershipType } from '@shared/im/constants';
 import type { DesktopPetTaskSnapshot, PetConfig, PetPosition } from '@shared/pet/constants';
-import type { SkillMarketplaceSort, SkillMarketplaceSourceType } from '@shared/skills/constants';
+import type { SkillMarketplaceSort, SkillMarketplaceSourceType, SkillMetadata, SkillSource, SkillSourceType } from '@shared/skills/constants';
 
 interface ApiResponse {
   ok: boolean;
@@ -575,6 +575,8 @@ interface IElectronAPI {
     fetchMarketplace: (options?: SkillMarketplaceOptions) => Promise<SkillMarketplaceResponse>;
     searchMarketplace: (options?: SkillMarketplaceOptions) => Promise<SkillMarketplaceResponse>;
     installMarketplaceSkill: (skill: MarketplaceSkill) => Promise<{ success: boolean; skills?: Skill[]; error?: string; auditReport?: any; pendingInstallId?: string }>;
+    getSkillMetadata: (skillId: string) => Promise<{ success: boolean; metadata?: SkillMetadata | null; error?: string }>;
+    listSkillMetadata: () => Promise<{ success: boolean; metadata?: SkillMetadata[]; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   };
   mcp: {
