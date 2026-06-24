@@ -93,6 +93,7 @@ import {
   OpenClawRuntimeAdapter,
   type PermissionRequest,
 } from './libs/agentEngine';
+import { buildAgentRuntimePrompt, normalizeRuntimeAgentId } from './libs/agentRuntimePrompt';
 import { formatApiFetchLogPayload } from './libs/apiFetchLogSanitizer';
 import { cancelActiveDownload,downloadUpdate, installUpdate } from './libs/appUpdateInstaller';
 import { clearServerModelMetadata,getCurrentApiConfig, resolveCurrentApiConfig, setAuthTokensGetter, setServerBaseUrlGetter, setStoreGetter, updateServerModelMetadata } from './libs/claudeSettings';
@@ -2850,12 +2851,20 @@ const getIMGatewayManager = () => {
 function mergeCoworkSystemPrompt(
   engine: CoworkAgentEngine,
   systemPrompt?: string,
+  agentId?: string | null,
 ): string | undefined {
-  const sections = [
-    buildScheduledTaskEnginePrompt(engine),
-    systemPrompt?.trim() || '',
-  ].filter(Boolean);
-  return sections.length > 0 ? sections.join('\n\n') : undefined;
+  const normalizedAgentId = normalizeRuntimeAgentId(agentId);
+  const agent = normalizedAgentId !== 'main' && !normalizedAgentId.startsWith('team:')
+    ? getAgentManager().getAgent(normalizedAgentId)
+    : null;
+  return buildAgentRuntimePrompt({
+    engine,
+    agent,
+    agentId: normalizedAgentId,
+    baseSystemPrompt: systemPrompt,
+    extraSections: [buildScheduledTaskEnginePrompt(engine)],
+    context: 'chat',
+  });
 }
 
 // 获取正确的预加载脚本路径
@@ -4479,6 +4488,7 @@ if (!gotTheLock) {
       const systemPrompt = mergeCoworkSystemPrompt(
         activeEngine,
         options.systemPrompt ?? config.systemPrompt,
+        options.teamId ? undefined : targetAgentId,
       );
       const selectedWorkspaceRoot = (options.cwd || config.workingDirectory || '').trim();
 
@@ -4689,7 +4699,8 @@ if (!gotTheLock) {
       runtime.continueSession(options.sessionId, options.prompt, {
         systemPrompt: mergeCoworkSystemPrompt(
           activeEngine,
-          options.systemPrompt ?? existingSession?.systemPrompt,
+          existingSession?.systemPrompt || options.systemPrompt,
+          existingSession?.agentId || 'main',
         ),
         skillIds: options.activeSkillIds,
         imageAttachments: options.imageAttachments,

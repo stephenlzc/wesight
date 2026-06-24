@@ -14,6 +14,14 @@ import { i18nService } from '../../services/i18n';
 import type { FeishuInstanceConfig, FeishuInstanceStatus, FeishuOpenClawConfig, IMConnectivityTestResult } from '../../types/im';
 import TrashIcon from '../icons/TrashIcon';
 
+interface FeishuAgentOption {
+  id: string;
+  name: string;
+  icon: string;
+  agentEngine: CoworkAgentEngineType;
+  skillIds: string[];
+}
+
 interface FeishuInstanceSettingsProps {
   instance: FeishuInstanceConfig;
   instanceStatus: FeishuInstanceStatus | undefined;
@@ -21,7 +29,10 @@ interface FeishuInstanceSettingsProps {
   isAgentEngineSupported: boolean;
   isLocalOpenClawOwned?: boolean;
   readOnly?: boolean;
+  agents: FeishuAgentOption[];
+  agentBinding: string;
   enabledInstanceCount: number;
+  onAgentBindingChange: (value: string) => Promise<void>;
   onConfigChange: (update: Partial<FeishuOpenClawConfig>) => void;
   onSave: (override?: Partial<FeishuOpenClawConfig>) => Promise<void>;
   onRename: (newName: string) => void;
@@ -32,6 +43,14 @@ interface FeishuInstanceSettingsProps {
   connectivityResults: Record<string, IMConnectivityTestResult>;
   language: 'zh' | 'en';
 }
+
+const agentEngineLabel = (engine: CoworkAgentEngineType): string => {
+  if (engine === CoworkAgentEngine.OpenClaw) return i18nService.t('imFeishuAgentEngineOpenClaw');
+  if (engine === CoworkAgentEngine.Hermes) return i18nService.t('imFeishuAgentEngineHermes');
+  if (engine === CoworkAgentEngine.ClaudeCode) return i18nService.t('imFeishuAgentEngineClaudeCode');
+  if (engine === CoworkAgentEngine.Codex) return i18nService.t('imFeishuAgentEngineCodex');
+  return i18nService.t('imFeishuAgentEngineUnsupported');
+};
 
 // Reusable guide card component for platform setup instructions
 const PlatformGuide: React.FC<{
@@ -140,7 +159,10 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
   isAgentEngineSupported,
   isLocalOpenClawOwned = false,
   readOnly = false,
+  agents,
+  agentBinding,
   enabledInstanceCount,
+  onAgentBindingChange,
   onConfigChange,
   onSave,
   onRename,
@@ -157,6 +179,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
   const [groupAllowIdInput, setGroupAllowIdInput] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState(instance.instanceName);
+  const selectedAgent = agents.find(agent => `agent:${agent.id}` === agentBinding);
 
   // QR code scanning state
   const [qrStatus, setQrStatus] = useState<'idle' | 'loading' | 'showing' | 'success' | 'error'>('idle');
@@ -257,6 +280,7 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
         : agentEngine === CoworkAgentEngine.Codex
           ? i18nService.t('imFeishuAgentEngineCodex')
           : i18nService.t('imFeishuAgentEngineUnsupported');
+  const selectedAgentEngineLabel = selectedAgent ? agentEngineLabel(selectedAgent.agentEngine) : null;
   const hermesSingleInstanceBlocked = agentEngine === CoworkAgentEngine.Hermes
     && !instance.enabled
     && enabledInstanceCount > 0;
@@ -298,6 +322,41 @@ const FeishuInstanceSettings: React.FC<FeishuInstanceSettingsProps> = ({
           <div className="mt-1 text-secondary">
             {i18nService.t('imFeishuLocalRuntimeReadonlyHint')}
           </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-border-subtle bg-surface-elevated p-3 space-y-2">
+        <label className="block text-xs font-medium text-foreground">
+          {i18nService.t('imFeishuRespondingAgent')}
+        </label>
+        <select
+          value={agentBinding}
+          onChange={(event) => {
+            void onAgentBindingChange(event.target.value);
+          }}
+          disabled={isReadOnly}
+          className="w-full px-3 py-2 text-sm rounded-lg border border-border-subtle bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          <option value="main">
+            {i18nService.t('imFeishuDefaultAgentOption')}
+          </option>
+          {agents.map(agent => (
+            <option key={agent.id} value={`agent:${agent.id}`}>
+              {agent.icon} {agent.name} · {agentEngineLabel(agent.agentEngine)} · {agent.skillIds.length} {i18nService.t('imFeishuSkillCount')}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-secondary">
+          {selectedAgent && selectedAgentEngineLabel
+            ? i18nService.t('imFeishuAgentBindingHintCustom')
+              .replace('{name}', selectedAgent.name)
+              .replace('{engine}', selectedAgentEngineLabel)
+            : i18nService.t('imFeishuAgentBindingHintDefault')}
+        </p>
+        {isReadOnly && (
+          <p className="text-xs text-secondary">
+            {i18nService.t('imFeishuAgentBindingReadonlyHint')}
+          </p>
         )}
       </div>
 

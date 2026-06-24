@@ -934,6 +934,13 @@ export class IMStore {
     const normalizedEngineKey = isFeishuEngineKey(engineKey) ? engineKey : DEFAULT_FEISHU_ENGINE_KEY;
     const now = Date.now();
     this.db.prepare('DELETE FROM im_config WHERE key = ?').run(buildFeishuConfigKey(normalizedEngineKey, instanceId));
+    const settings = this.getIMSettings();
+    const bindingKey = `feishu:${instanceId}`;
+    if (settings.platformAgentBindings?.[bindingKey]) {
+      const nextBindings = { ...settings.platformAgentBindings };
+      delete nextBindings[bindingKey];
+      this.setIMSettings({ platformAgentBindings: nextBindings });
+    }
     // Clean up session mappings for this instance
     this.db
       .prepare('DELETE FROM im_session_mappings WHERE platform = ?')

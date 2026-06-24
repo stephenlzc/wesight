@@ -1661,6 +1661,40 @@ const ThinkingBlock: React.FC<{
   );
 };
 
+const INLINE_REASONING_START_PATTERNS = [
+  /^the user\s+(asks?|is asking|wants?|requested|provided)\b/i,
+  /^we\s+(need|should|can|have to)\b/i,
+  /^i\s+(need|should|will|can|have to)\b/i,
+  /^need\s+(to|consider|maybe)\b/i,
+  /^let me\s+(check|look|inspect|read)\b/i,
+  /^looking at\b/i,
+  /^this\s+(request|task|looks|seems)\b/i,
+];
+
+const INLINE_REASONING_MARKERS = [
+  /\bneed\s+(to|consider|maybe)\b/i,
+  /\bi\s+(need|should|will|can)\b/i,
+  /\bwe\s+(need|should|can|have to)\b/i,
+  /\blet me\s+(check|look|inspect|read)\b/i,
+  /\buse\s+(the\s+)?(read|bash|grep|glob|edit|write)\s+tool\b/i,
+  /\brespond\s+(in|that|with)\b/i,
+  /\bshould\s+(read|check|answer|describe|respond)\b/i,
+];
+
+const isLikelyInlineReasoning = (content: string): boolean => {
+  const normalized = content.trim();
+  if (normalized.length < 40) return false;
+  const firstLine = normalized.split('\n').find((line) => line.trim())?.trim() ?? '';
+  if (!INLINE_REASONING_START_PATTERNS.some((pattern) => pattern.test(firstLine))) {
+    return false;
+  }
+  const markerCount = INLINE_REASONING_MARKERS.reduce(
+    (total, pattern) => total + (pattern.test(normalized) ? 1 : 0),
+    0,
+  );
+  return markerCount >= 2;
+};
+
 const getTeamMetadataString = (metadata: CoworkMessageMetadata | undefined, key: string): string => {
   const value = metadata?.[key];
   return typeof value === 'string' ? value : '';
@@ -1888,6 +1922,15 @@ export const AssistantTurnBlock: React.FC<{
                   );
                 }
                 if (item.message.metadata?.isThinking) {
+                  return (
+                    <ThinkingBlock
+                      key={item.message.id}
+                      message={item.message}
+                      mapDisplayText={mapDisplayText}
+                    />
+                  );
+                }
+                if (isLikelyInlineReasoning(item.message.content)) {
                   return (
                     <ThinkingBlock
                       key={item.message.id}

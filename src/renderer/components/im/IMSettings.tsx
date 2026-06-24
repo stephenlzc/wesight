@@ -491,6 +491,30 @@ const IMSettings: React.FC = () => {
   const weixinAgentBinding = config.settings?.platformAgentBindings?.weixin ?? 'main';
   const enabledAgents = useMemo(() => agents.filter(agent => agent.enabled), [agents]);
   const selectedWeixinAgent = enabledAgents.find(agent => `agent:${agent.id}` === weixinAgentBinding);
+  const getFeishuAgentBindingKey = (instanceId: string) => `feishu:${instanceId}`;
+  const getFeishuAgentBinding = (instanceId: string) => {
+    const bindings = config.settings?.platformAgentBindings ?? {};
+    return bindings[getFeishuAgentBindingKey(instanceId)] ?? bindings.feishu ?? 'main';
+  };
+  const handleFeishuAgentBindingChange = async (instanceId: string, value: string) => {
+    const currentSettings = config.settings;
+    const nextBindings = {
+      ...(currentSettings.platformAgentBindings ?? {}),
+    };
+    const bindingKey = getFeishuAgentBindingKey(instanceId);
+    const platformFallback = nextBindings.feishu;
+    if (value === 'main' && (!platformFallback || platformFallback === 'main')) {
+      delete nextBindings[bindingKey];
+    } else {
+      nextBindings[bindingKey] = value;
+    }
+    await imService.updateConfig({
+      settings: {
+        ...currentSettings,
+        platformAgentBindings: nextBindings,
+      },
+    });
+  };
   const handleWeixinAgentBindingChange = async (value: string) => {
     const currentSettings = config.settings;
     const nextBindings = {
@@ -1760,7 +1784,10 @@ const IMSettings: React.FC = () => {
                 isAgentEngineSupported={isFeishuAgentEngineSupported}
                 isLocalOpenClawOwned={feishuLocalOpenClawOwned}
                 readOnly={feishuLocalRuntimeOwned}
+                agents={enabledAgents}
+                agentBinding={getFeishuAgentBinding(activeFeishuInstanceId)}
                 enabledInstanceCount={enabledFeishuInstanceCount}
+                onAgentBindingChange={(value) => handleFeishuAgentBindingChange(activeFeishuInstanceId, value)}
                 onConfigChange={(update) => {
                   if (feishuLocalRuntimeOwned) return;
                   dispatch(setFeishuInstanceConfig({ instanceId: activeFeishuInstanceId, config: update, engineKey: selectedFeishuEngineKey }));

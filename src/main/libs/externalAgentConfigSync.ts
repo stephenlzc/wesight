@@ -92,6 +92,8 @@ const WESIGHT_CONFIG_BACKUP_RECENT_RETENTION = 20;
 const WESIGHT_MANAGED_META_KEY = '__wesight_managed';
 const CODEX_WESIGHT_META_BEGIN = '# WeSight managed Codex config: begin';
 const CODEX_WESIGHT_META_END = '# WeSight managed Codex config: end';
+const CODEX_LEGACY_SERVICE_TIER_PRIORITY = 'priority';
+const CODEX_SERVICE_TIER_FAST = 'fast';
 const CODEX_WESIGHT_META_KEYS = {
   OriginalModelProvider: 'original_model_provider',
   OriginalModel: 'original_model',
@@ -544,18 +546,19 @@ export const mergeCodexConfigForWesightModel = (
 };
 
 export const mergeCodexConfigForLocalCli = (existingText: string): string => {
-  const split = splitTomlHeadAndTables(existingText);
+  const normalizedText = normalizeCodexConfigForCurrentCli(existingText);
+  const split = splitTomlHeadAndTables(normalizedText);
   const existingMeta = extractCodexWesightManagedMeta(split.head);
-  if (!existingMeta.hasMeta && !hasCodexProviderTable(existingText, CODEX_LOCAL_PROVIDER_KEY)) {
-    return existingText;
+  if (!existingMeta.hasMeta && !hasCodexProviderTable(normalizedText, CODEX_LOCAL_PROVIDER_KEY)) {
+    return normalizedText;
   }
 
   const cleanHead = removeCodexWesightManagedMetaBlock(split.head);
   const currentProvider = extractTomlString(cleanHead, 'model_provider');
   const restoredProvider = existingMeta.originalModelProvider
-    ?? (hasCodexProviderTable(existingText, CODEX_LOCAL_PROVIDER_KEY) ? CODEX_LOCAL_PROVIDER_KEY : undefined);
+    ?? (hasCodexProviderTable(normalizedText, CODEX_LOCAL_PROVIDER_KEY) ? CODEX_LOCAL_PROVIDER_KEY : undefined);
   if (!restoredProvider) {
-    return existingText;
+    return normalizedText;
   }
 
   if (
@@ -563,7 +566,7 @@ export const mergeCodexConfigForLocalCli = (existingText: string): string => {
     && currentProvider === restoredProvider
     && !extractTomlTopLevelString(cleanHead, 'model')
   ) {
-    return existingText;
+    return normalizedText;
   }
 
   let head = removeTomlTopLevelKeys(cleanHead, [
@@ -585,6 +588,13 @@ export const mergeCodexConfigForLocalCli = (existingText: string): string => {
     existingMeta.originalDisableResponseStorage,
   );
   return `${removeTrailingBlankLines(head)}\n\n${removeTrailingBlankLines(split.tables)}\n`;
+};
+
+export const normalizeCodexConfigForCurrentCli = (configText: string): string => {
+  return configText.replace(
+    new RegExp(`^(\\s*service_tier\\s*=\\s*)["']${CODEX_LEGACY_SERVICE_TIER_PRIORITY}["']\\s*$`, 'gm'),
+    `$1"${CODEX_SERVICE_TIER_FAST}"`,
+  );
 };
 
 const extractTomlString = (configText: string, key: string): string => {

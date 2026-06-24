@@ -18,7 +18,7 @@ type AgentTeamRunnerOptions = {
   applyEngineConfigSource: (engine: CoworkAgentEngine) => void;
   resolveRuntimeSnapshot: (engine: CoworkAgentEngine) => CoworkSessionRuntimeSnapshot;
   prepareRuntimeSnapshot: (snapshot: CoworkSessionRuntimeSnapshot) => void;
-  mergeSystemPrompt: (engine: CoworkAgentEngine, systemPrompt?: string) => string;
+  mergeSystemPrompt: (engine: CoworkAgentEngine, systemPrompt?: string, agentId?: string | null) => string | undefined;
   broadcastMessage: (sessionId: string, message: CoworkMessage) => void;
   broadcastComplete: (sessionId: string) => void;
   broadcastError: (sessionId: string, error: string) => void;
@@ -84,10 +84,16 @@ export class AgentTeamRunner {
           throw new Error(ready.error || `${member.agent.name} engine is not ready`);
         }
 
+        const memberSystemPrompt = this.options.mergeSystemPrompt(
+          engine,
+          this.buildMemberRolePrompt(member.role),
+          member.agent.id,
+        ) || '';
+
         const childSession = this.options.coworkStore.createSession(
           `[${team.name}] ${member.agent.name}`,
           parentSession.cwd,
-          this.buildMemberSystemPrompt(member.agent, member.role),
+          memberSystemPrompt,
           parentSession.executionMode,
           this.mergeSkillIds(parentSession.activeSkillIds, team.skillIds, member.agent.skillIds),
           member.agent.id,
@@ -123,7 +129,7 @@ export class AgentTeamRunner {
         this.options.broadcastMessage(parentSession.id, startedMessage);
 
         await this.options.runtime.startSession(childSession.id, memberPrompt, {
-          systemPrompt: this.options.mergeSystemPrompt(engine, childSession.systemPrompt),
+          systemPrompt: childSession.systemPrompt,
           skillIds: childSession.activeSkillIds,
           workspaceRoot: parentSession.cwd,
           confirmationMode: 'modal',
@@ -207,10 +213,8 @@ export class AgentTeamRunner {
       .filter((member): member is { agent: Agent; role: string } => Boolean(member));
   }
 
-  private buildMemberSystemPrompt(agent: Agent, role: string): string {
+  private buildMemberRolePrompt(role: string): string {
     return [
-      agent.systemPrompt,
-      agent.identity,
       `You are working as ${role} in an Agent Team. Focus on your role, produce concise handoff notes, and keep the shared project directory consistent.`,
     ].filter(Boolean).join('\n\n');
   }

@@ -110,6 +110,15 @@ const resolveProbeUrl = (probe: OpenClawGatewayProbeSummary, fallbackPort: numbe
   return probe.url || `ws://127.0.0.1:${probe.port ?? fallbackPort}`;
 };
 
+const isProbeOnExpectedPort = async (
+  probe: OpenClawGatewayProbeSummary,
+  port: number,
+): Promise<boolean> => {
+  if (!probe.ok) return false;
+  if (probe.port === null || probe.port === port) return true;
+  return isPortReachable('127.0.0.1', probe.port);
+};
+
 export class OpenClawEngineManager extends EventEmitter {
   private readonly baseDir: string;
   private readonly logsDir: string;
@@ -346,11 +355,7 @@ export class OpenClawEngineManager extends EventEmitter {
 
     const runningProbe = probeOpenClawGateway(runtime.commandPath);
     this.lastProbe = runningProbe;
-    if (
-      !this.requireManagedGateway
-      && runningProbe.ok
-      && (runningProbe.port === null || runningProbe.port === port || await isPortReachable('127.0.0.1', runningProbe.port))
-    ) {
+    if (runningProbe.ok && await isProbeOnExpectedPort(runningProbe, port)) {
       this.gatewayMode = 'attached';
       this.gatewayRestartAttempt = 0;
       this.setStatus({
@@ -754,9 +759,10 @@ export class OpenClawEngineManager extends EventEmitter {
     if (this.status.phase !== 'running') {
       return false;
     }
-    if (this.gatewayMode !== 'managed' || !isGatewayProcessAlive(this.gatewayProcess)) {
+    if (this.gatewayMode === 'managed' && !isGatewayProcessAlive(this.gatewayProcess)) {
       return false;
     }
+    if (this.gatewayMode !== 'managed' && this.gatewayMode !== 'attached') return false;
     return Date.now() - this.lastRunningGatewayCheckAt < RUNNING_GATEWAY_RECHECK_MS;
   }
 

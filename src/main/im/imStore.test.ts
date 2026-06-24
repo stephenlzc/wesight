@@ -93,3 +93,25 @@ test('detects duplicate Feishu app ids across engine profiles', () => {
     },
   ]);
 });
+
+test('deleting a Feishu instance removes its Agent binding only', () => {
+  const { store } = createStore();
+
+  store.setIMSettings({
+    platformAgentBindings: {
+      'feishu:claude-bot': 'agent:claude-agent',
+      feishu: 'agent:fallback-agent',
+    },
+  });
+  store.setFeishuInstanceConfigForEngine(
+    FeishuEngineKey.ClaudeCode,
+    'claude-bot',
+    createFeishuInstance('claude-bot', 'cli_claude'),
+  );
+
+  store.deleteFeishuInstanceForEngine(FeishuEngineKey.ClaudeCode, 'claude-bot');
+
+  expect(store.getIMSettings().platformAgentBindings).toEqual({
+    feishu: 'agent:fallback-agent',
+  });
+});
