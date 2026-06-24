@@ -14,6 +14,7 @@ import {
   mergeClaudeSettingsForWesightModel,
   mergeCodexConfigForLocalCli,
   mergeCodexConfigForWesightModel,
+  normalizeCodexConfigForCurrentCli,
   releaseWesightClaudeRuntimeConfig,
   removeWesightManagedClaudeSettings,
   writeTextFileWithBackupIfChanged,
@@ -55,6 +56,20 @@ test('mergeCodexConfigForWesightModel preserves user TOML content', () => {
   expect(merged).toContain('base_url = "https://api.example.com/v1"');
   expect(merged).toContain('# WeSight managed Codex config: begin');
   expect(merged).not.toContain('sk-wesight-secret');
+});
+
+test('normalizeCodexConfigForCurrentCli migrates legacy priority service tier', () => {
+  const normalized = normalizeCodexConfigForCurrentCli([
+    'service_tier = "priority"',
+    'model_provider = "local_codex"',
+    '',
+    '[model_providers.local_codex]',
+    'name = "Local Codex"',
+    '',
+  ].join('\n'));
+
+  expect(normalized).toContain('service_tier = "fast"');
+  expect(normalized).not.toContain('service_tier = "priority"');
 });
 
 test('mergeCodexConfigForWesightModel is idempotent and removes duplicate managed entries', () => {

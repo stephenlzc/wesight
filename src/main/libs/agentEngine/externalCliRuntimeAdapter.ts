@@ -31,6 +31,7 @@ import {
   applySingleClaudeCredentialEnv,
   type ClaudeRuntimeConfigLease,
   cleanupWesightManagedCodexConfig,
+  normalizeCodexConfigForCurrentCli,
   releaseWesightClaudeRuntimeConfig,
 } from '../externalAgentConfigSync';
 import {
@@ -871,16 +872,20 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       commandProbeTimeoutMs: 4_000,
     });
     if (!commandResolution.found) return false;
+    const sdkEnv = Object.fromEntries(
+      Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
+    sdkEnv.KIMI_SHARE_DIR = shareDir;
+    if (!this.supportsKimiSdkWireMode(commandResolution.path ?? 'kimi', cwd, sdkEnv)) {
+      console.warn('[ExternalCliRuntimeAdapter] Kimi Code CLI does not support SDK wire mode; using prompt-mode fallback.');
+      return false;
+    }
 
     const selectedProvider = this.getSelectedProviderForLocalCli();
     const selectedModel = runtimeSnapshot?.modelId
       ?? selectedProvider?.summary.model
       ?? null;
     const permissionMode = this.store.getConfig().kimiCodePermissionMode ?? KimiCodePermissionMode.Auto;
-    const sdkEnv = Object.fromEntries(
-      Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
-    );
-    sdkEnv.KIMI_SHARE_DIR = shareDir;
     const promptWithFiles = imagePaths.length > 0
       ? `${prompt}\n\nAttached local files:\n${imagePaths.join('\n')}`
       : prompt;
@@ -996,6 +1001,28 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
     }
     if (eventType === 'TurnEnd') {
       active.completedFromEvent = true;
+    }
+  }
+
+  private supportsKimiSdkWireMode(
+    command: string,
+    cwd: string,
+    env: Record<string, string>,
+  ): boolean {
+    try {
+      const result = spawnSync(command, ['--work-dir', cwd, '--wire', '--help'], {
+        cwd,
+        env: { ...process.env, ...env },
+        encoding: 'utf8',
+        timeout: 4_000,
+      });
+      const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+      if (/unknown option ['"]?--work-dir/i.test(output) || /unknown option ['"]?--wire/i.test(output)) {
+        return false;
+      }
+      return result.status === 0;
+    } catch {
+      return false;
     }
   }
 
@@ -1457,12 +1484,29 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
       const promptWithFiles = imagePaths.length > 0
         ? `${prompt}\n\nAttached local files:\n${imagePaths.map((imagePath) => imagePath).join('\n')}`
         : prompt;
-      return [
+      const args: string[] = [];
+      if (cliSessionId) {
+        args.push('--session', cliSessionId);
+      }
+      const permissionMode = this.store.getConfig().kimiCodePermissionMode ?? KimiCodePermissionMode.Auto;
+      if (permissionMode === KimiCodePermissionMode.Yolo) {
+        args.push('--yolo');
+      } else if (permissionMode === KimiCodePermissionMode.Plan) {
+        args.push('--plan');
+      } else {
+        args.push('--auto');
+      }
+      const selectedModel = selectedProvider?.summary.model;
+      if (selectedModel) {
+        args.push('--model', selectedModel);
+      }
+      args.push(
         '-p',
         promptWithFiles,
         '--output-format',
         'stream-json',
-      ];
+      );
+      return args;
     }
 
     const canResumeCodexSession = this.getConfigSource() !== ExternalAgentConfigSource.WesightModel;
@@ -1829,13 +1873,14 @@ export class ExternalCliRuntimeAdapter extends EventEmitter implements CoworkRun
   }
 
   private overrideCodexConfigModel(configText: string, model: string): string {
+    const normalizedConfigText = normalizeCodexConfigForCurrentCli(configText);
     const normalizedModel = model.trim();
-    if (!normalizedModel) return configText;
+    if (!normalizedModel) return normalizedConfigText;
     const modelLine = `model = ${this.tomlString(normalizedModel)}`;
-    if (/^\s*model\s*=.*$/m.test(configText)) {
-      return configText.replace(/^\s*model\s*=.*$/m, modelLine);
+    if (/^\s*model\s*=.*$/m.test(normalizedConfigText)) {
+      return normalizedConfigText.replace(/^\s*model\s*=.*$/m, modelLine);
     }
-    return `${modelLine}\n${configText}`;
+    return `${modelLine}\n${normalizedConfigText}`;
   }
 
   private appendNoProxyHosts(env: Record<string, string | undefined>, hosts: string[]): void {

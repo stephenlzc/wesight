@@ -11,12 +11,15 @@ import path from 'path';
 import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
 import {
   AgentRunTargetType,
+  CoworkAgentEngine,
   CoworkSessionKind,
+  isCoworkAgentEngine,
   RuntimeCallSource,
 } from '../../shared/cowork/constants';
 import type { CoworkMessage, CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime, PermissionRequest } from '../libs/agentEngine/types';
+import { buildAgentRuntimePrompt, normalizeRuntimeAgentId } from '../libs/agentRuntimePrompt';
 import { buildIMMediaInstruction } from './imMediaInstruction';
 import { analyzeIMReply, DEFAULT_IM_EMPTY_REPLY } from './imReplyGuard';
 import {
@@ -76,6 +79,38 @@ const parsePlatformAgentBinding = (value: string | undefined): { type: AgentRunT
     return { type: AgentRunTargetType.Agent, id: id || 'main' };
   }
   return { type: AgentRunTargetType.Agent, id: value };
+};
+
+const getFeishuInstanceBindingKey = (conversationId: string): string | null => {
+  const instanceId = conversationId.split(':')[0]?.trim();
+  return instanceId ? `feishu:${instanceId}` : null;
+};
+
+const resolvePlatformAgentBindingValue = (
+  bindings: Record<string, string> | undefined,
+  platform: Platform,
+  conversationId: string,
+): string | undefined => {
+  if (!bindings) return undefined;
+  if (platform === 'feishu') {
+    const instanceBindingKey = getFeishuInstanceBindingKey(conversationId);
+    if (instanceBindingKey && bindings[instanceBindingKey]) {
+      return bindings[instanceBindingKey];
+    }
+  }
+  return bindings[platform];
+};
+
+const resolvePlatformAgentTarget = (
+  bindings: Record<string, string> | undefined,
+  platform: Platform,
+  conversationId: string,
+): { type: AgentRunTargetType; id: string; agentId: string } => {
+  const target = parsePlatformAgentBinding(resolvePlatformAgentBindingValue(bindings, platform, conversationId));
+  return {
+    ...target,
+    agentId: target.type === AgentRunTargetType.Team ? `team:${target.id}` : target.id,
+  };
 };
 
 const normalizeAgentBindingId = (value: string | undefined): string => {
@@ -295,12 +330,11 @@ export class IMCoworkHandler extends EventEmitter {
 
     // Start or continue session
     const isActive = this.coworkRuntime.isSessionActive(coworkSessionId);
-    const systemPrompt = await this.buildSystemPromptWithSkills();
-    const hasAvailableSkills = systemPrompt.includes('<available_skills>');
     const session = this.coworkStore.getSession(coworkSessionId);
     const runtimeAgentId = normalizeAgentBindingId(session?.agentId);
-    const runtimeAgent = this.coworkStore.getAgent(runtimeAgentId);
-    const runtimeAgentEngine = runtimeAgent?.agentEngine;
+    const runtimeAgentEngine = this.resolveAgentRuntimeEngine(runtimeAgentId);
+    const systemPrompt = await this.buildSystemPromptWithSkills(runtimeAgentId);
+    const hasAvailableSkills = systemPrompt.includes('<available_skills>');
     if (session && session.systemPrompt !== systemPrompt) {
       // Claude resume sessions may ignore updated system prompt.
       // Reset claudeSessionId so this turn starts a fresh SDK session with new prompt.
@@ -393,6 +427,20 @@ export class IMCoworkHandler extends EventEmitter {
         this.clearPendingPermissionsBySessionId(existing.coworkSessionId);
         this.coworkRuntime.stopSession(existing.coworkSessionId);
       } else {
+        const imSettings = this.imStore.getIMSettings();
+        const currentTarget = resolvePlatformAgentTarget(
+          imSettings.platformAgentBindings,
+          platform,
+          imConversationId,
+        );
+        if (existing.agentId !== currentTarget.agentId) {
+          console.log('[IMCoworkHandler] agent binding changed for IM conversation, creating a new session.');
+          this.imStore.deleteSessionMapping(imConversationId, platform);
+          this.imSessionIds.delete(existing.coworkSessionId);
+          this.sessionConversationMap.delete(existing.coworkSessionId);
+          this.clearPendingPermissionsBySessionId(existing.coworkSessionId);
+          return this.createCoworkSessionForConversation(imConversationId, platform, senderId, message);
+        }
         this.imStore.updateSessionLastActive(imConversationId, platform);
         this.trackSessionMapping(existing);
         return existing.coworkSessionId;
@@ -412,8 +460,6 @@ export class IMCoworkHandler extends EventEmitter {
     // Create new Cowork session
     const config = this.coworkStore.getConfig();
     const title = this.buildSessionTitle(platform, imConversationId, senderId, message);
-    const systemPrompt = await this.buildSystemPromptWithSkills();
-
     const selectedWorkspaceRoot = (config.workingDirectory || '').trim();
     if (!selectedWorkspaceRoot) {
       throw new Error('IM 工作目录未配置，请先在应用中选择任务目录。');
@@ -423,13 +469,14 @@ export class IMCoworkHandler extends EventEmitter {
       throw new Error(`IM 工作目录不存在或无效: ${resolvedWorkspaceRoot}`);
     }
 
-    // Resolve the agent bound to this platform (single-instance platforms only;
-    // multi-instance platforms route through OpenClaw channel session sync)
     const imSettings = this.imStore.getIMSettings();
-    const bindingTarget = parsePlatformAgentBinding(imSettings.platformAgentBindings?.[platform]);
-    const agentId = bindingTarget.type === AgentRunTargetType.Team
-      ? `team:${bindingTarget.id}`
-      : bindingTarget.id;
+    const bindingTarget = resolvePlatformAgentTarget(
+      imSettings.platformAgentBindings,
+      platform,
+      imConversationId,
+    );
+    const agentId = bindingTarget.agentId;
+    const systemPrompt = await this.buildSystemPromptWithSkills(agentId);
 
     const session = this.coworkStore.createSession(
       title,
@@ -498,19 +545,21 @@ export class IMCoworkHandler extends EventEmitter {
     return `IM-${platform}-${Date.now()}`;
   }
 
-  private async buildSystemPromptWithSkills(): Promise<string> {
+  private async buildSystemPromptWithSkills(agentId: string = 'main'): Promise<string> {
     const config = this.coworkStore.getConfig();
     const imSettings = this.imStore.getIMSettings();
     const systemPrompt = config.systemPrompt || '';
-    const scheduledTaskPrompt = buildScheduledTaskEnginePrompt(config.agentEngine);
+    const normalizedAgentId = normalizeRuntimeAgentId(agentId);
+    const runtimeEngine = this.resolveAgentRuntimeEngine(normalizedAgentId);
+    const runtimeAgent = normalizedAgentId !== 'main' && !normalizedAgentId.startsWith('team:')
+      ? this.coworkStore.getAgent(normalizedAgentId)
+      : null;
+    const scheduledTaskPrompt = buildScheduledTaskEnginePrompt(runtimeEngine);
 
     // Build media instruction for IM media sending capability
     const mediaInstruction = buildIMMediaInstruction(imSettings);
 
     const sections: string[] = [];
-    if (systemPrompt) {
-      sections.push(systemPrompt);
-    }
 
     if (imSettings.skillsEnabled && this.getSkillsPrompt) {
       const skillsPrompt = await this.getSkillsPrompt();
@@ -528,7 +577,27 @@ export class IMCoworkHandler extends EventEmitter {
       sections.push(mediaInstruction);
     }
 
-    return sections.join('\n\n');
+    return buildAgentRuntimePrompt({
+      engine: runtimeEngine,
+      agent: runtimeAgent,
+      agentId: normalizedAgentId,
+      baseSystemPrompt: systemPrompt,
+      extraSections: sections,
+      context: 'im',
+    }) || '';
+  }
+
+  private resolveAgentRuntimeEngine(agentId: string): CoworkAgentEngine {
+    const config = this.coworkStore.getConfig();
+    const normalizedAgentId = normalizeAgentBindingId(agentId);
+    if (!normalizedAgentId || normalizedAgentId === 'main' || normalizedAgentId.startsWith('team:')) {
+      return config.agentEngine;
+    }
+    const agent = this.coworkStore.getAgent(normalizedAgentId);
+    if (agent?.agentEngine && isCoworkAgentEngine(agent.agentEngine)) {
+      return agent.agentEngine;
+    }
+    return config.agentEngine;
   }
 
   private async handleDirectScheduledTaskRequest(
