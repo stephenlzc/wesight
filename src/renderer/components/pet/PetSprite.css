@@ -27,9 +27,26 @@
   animation: pet-sprite-think 1.4s ease-in-out infinite;
 }
 
+.pet-sprite--speaking {
+  animation: pet-sprite-speak-body 0.9s ease-in-out infinite;
+}
+
 .pet-sprite--working,
 .pet-sprite--coding {
   animation: pet-sprite-work 0.72s ease-in-out infinite;
+}
+
+.pet-sprite--nana {
+  image-rendering: auto;
+  filter: drop-shadow(0 15px 22px rgba(83, 53, 35, 0.24));
+}
+
+.pet-sprite--nana.pet-sprite--playful {
+  animation: pet-sprite-nana-playful 3.1s ease-in-out infinite;
+}
+
+.pet-sprite--nana.pet-sprite--speaking {
+  animation: pet-sprite-speak-body 0.9s ease-in-out infinite;
 }
 
 .pet-sprite--done {
@@ -58,6 +75,37 @@
 
 .pet-sprite__eye--right {
   animation-delay: 90ms;
+}
+
+.pet-sprite__mouth--speaking {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pet-sprite-mouth-talk 0.24s ease-in-out infinite;
+}
+
+.pet-sprite__nana-eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pet-sprite-nana-blink 5.8s ease-in-out infinite;
+}
+
+.pet-sprite__nana-eye--right {
+  animation-delay: 120ms;
+}
+
+.pet-sprite__nana-mouth {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.pet-sprite__nana-mouth--speaking {
+  animation: pet-sprite-nana-talk 0.28s ease-in-out infinite;
+}
+
+.pet-sprite__nana-laptop {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pet-sprite-keyboard-pop 0.32s ease-out;
 }
 
 .pet-sprite__spark {
@@ -154,6 +202,51 @@
   }
 }
 
+@keyframes pet-sprite-mouth-talk {
+  0%,
+  100% {
+    transform: scaleY(0.55) scaleX(0.88);
+  }
+  50% {
+    transform: scaleY(1.22) scaleX(1.08);
+  }
+}
+
+@keyframes pet-sprite-nana-blink {
+  0%,
+  47%,
+  51%,
+  100% {
+    transform: scaleY(1);
+  }
+  49% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes pet-sprite-nana-talk {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(0.72) scaleX(0.9);
+  }
+  45% {
+    transform: translateY(0.5px) scaleY(1.24) scaleX(1.05);
+  }
+  72% {
+    transform: translateY(-0.2px) scaleY(0.92) scaleX(0.98);
+  }
+}
+
+@keyframes pet-sprite-nana-playful {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-0.6deg);
+  }
+  50% {
+    transform: translateY(-6px) rotate(0.9deg);
+  }
+}
+
 @keyframes pet-sprite-wave-left {
   0%,
   100% {
@@ -181,6 +274,16 @@
   }
   50% {
     transform: translateY(-4px) rotate(-1deg);
+  }
+}
+
+@keyframes pet-sprite-speak-body {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-2px) rotate(0.5deg);
   }
 }
 
@@ -314,6 +417,7 @@
   .pet-sprite--playful,
   .pet-sprite--dragging,
   .pet-sprite--thinking,
+  .pet-sprite--speaking,
   .pet-sprite--working,
   .pet-sprite--coding,
   .pet-sprite--done,
@@ -327,6 +431,10 @@
   .pet-sprite--walking .pet-sprite__leg-left,
   .pet-sprite--walking .pet-sprite__leg-right,
   .pet-sprite__eye,
+  .pet-sprite__mouth--speaking,
+  .pet-sprite__nana-eye,
+  .pet-sprite__nana-mouth--speaking,
+  .pet-sprite__nana-laptop,
   .pet-sprite__spark,
   .pet-sprite__brand-expression,
   .pet-sprite__brand-chest-glow,

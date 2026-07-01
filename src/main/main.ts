@@ -49,13 +49,22 @@ import {
   isFeishuRuntimeOwnership,
 } from '../shared/im/constants';
 import {
+  type DesktopPetCloneVoiceInput,
+  type DesktopPetCloneVoiceResult,
   DesktopPetIpcChannel,
   type DesktopPetTaskSnapshot,
   DesktopPetTaskSource,
   DesktopPetTaskStatus,
+  type DesktopPetTestVoiceInput,
+  type DesktopPetTestVoiceResult,
+  type DesktopPetVoiceReadyPayload,
+  isPetVariant,
   normalizePetConfig,
+  normalizePetVoiceConfig,
   type PetConfig,
   type PetPosition,
+  PetVariant,
+  PetVoiceProvider,
 } from '../shared/pet/constants';
 import { PlatformRegistry } from '../shared/platform';
 import { SkillsIpcChannel } from '../shared/skills/constants';
@@ -114,6 +123,11 @@ import { resolveContinuationRuntimeSnapshot } from './libs/coworkRuntimeSnapshot
 import { ensureCoworkStudioAssets } from './libs/coworkStudioAssets';
 import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
 import { DeepSeekTuiRuntimeManager } from './libs/deepSeekTuiRuntimeManager';
+import {
+  cloneMiniMaxPetVoice,
+  getPetVoiceProfileForVariant,
+  synthesizePetVoice,
+} from './libs/desktopPetVoiceService';
 import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints';
 import { mergeEnterpriseOpenclawConfig,resolveEnterpriseConfigPath, syncEnterpriseConfig } from './libs/enterpriseConfigSync';
 import {
@@ -2898,6 +2912,11 @@ type AppConfigSettings = {
   theme?: string;
   language?: string;
   useSystemProxy?: boolean;
+  api?: {
+    key?: string;
+    baseUrl?: string;
+  };
+  providers?: Record<string, { apiKey?: string }>;
   pet?: Partial<PetConfig> | null;
 };
 
@@ -2947,7 +2966,9 @@ const DESKTOP_PET_WINDOW_SIZE = {
 } as const;
 
 const DESKTOP_PET_TASK_TITLE_MAX_CHARS = 34;
+const DESKTOP_PET_VOICE_THROTTLE_MS = 15_000;
 let desktopPetTaskSnapshot: DesktopPetTaskSnapshot | null = null;
+const desktopPetVoiceLastSpokenAt = new Map<string, number>();
 
 const getStoredDesktopPetConfig = (): PetConfig => {
   const config = getStore().get<AppConfigSettings>('app_config');
@@ -3009,6 +3030,84 @@ const sendDesktopPetTaskSnapshot = (): void => {
     return;
   }
   desktopPetWindow.webContents.send(DesktopPetIpcChannel.TaskChanged, desktopPetTaskSnapshot);
+};
+
+const sendDesktopPetVoiceReady = (payload: DesktopPetVoiceReadyPayload): void => {
+  if (!desktopPetWindow || desktopPetWindow.isDestroyed() || desktopPetWindow.webContents.isDestroyed()) {
+    return;
+  }
+  desktopPetWindow.webContents.send(DesktopPetIpcChannel.VoiceReady, payload);
+};
+
+const getMiniMaxModelProviderApiKey = (): string => {
+  const config = getStore().get<AppConfigSettings>('app_config');
+  const providerApiKey = config?.providers?.minimax?.apiKey?.trim();
+  if (providerApiKey) {
+    return providerApiKey;
+  }
+  const primaryBaseUrl = config?.api?.baseUrl?.toLowerCase() ?? '';
+  if (primaryBaseUrl.includes('minimax')) {
+    return config?.api?.key?.trim() ?? '';
+  }
+  return '';
+};
+
+const getMiniMaxModelProviderApiKeyFromInput = (value: unknown): string => {
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : getMiniMaxModelProviderApiKey();
+};
+
+const getDesktopPetVoiceText = (status: DesktopPetTaskStatus): string | null => {
+  switch (status) {
+    case DesktopPetTaskStatus.Thinking:
+      return '我开始想一下。';
+    case DesktopPetTaskStatus.Replying:
+      return '我正在回复你。';
+    case DesktopPetTaskStatus.Coding:
+      return '我正在写代码。';
+    case DesktopPetTaskStatus.Permission:
+      return '有一步操作需要你确认。';
+    case DesktopPetTaskStatus.Completed:
+      return '任务完成啦，点我可以查看结果。';
+    case DesktopPetTaskStatus.Error:
+      return '任务遇到问题了，点我看看原因。';
+    default:
+      return null;
+  }
+};
+
+const queueDesktopPetVoiceForTask = (sessionId: string, status: DesktopPetTaskStatus): void => {
+  const text = getDesktopPetVoiceText(status);
+  if (!text) return;
+
+  const config = getEffectiveDesktopPetConfig();
+  const voiceConfig = normalizePetVoiceConfig(config.voice);
+  if (!config.enabled || !voiceConfig.enabled) return;
+
+  const profile = getPetVoiceProfileForVariant(voiceConfig, config.variant);
+  if (!profile) return;
+
+  const throttleKey = `${sessionId}:${status}`;
+  const now = Date.now();
+  const lastSpokenAt = desktopPetVoiceLastSpokenAt.get(throttleKey) ?? 0;
+  if (now - lastSpokenAt < DESKTOP_PET_VOICE_THROTTLE_MS) return;
+  desktopPetVoiceLastSpokenAt.set(throttleKey, now);
+
+  void synthesizePetVoice({
+    variant: config.variant,
+    text,
+    status,
+    sessionId,
+    profile,
+    voiceConfig,
+    modelProviderApiKey: getMiniMaxModelProviderApiKey(),
+    tempDir: app.getPath('temp'),
+  }).then((payload) => {
+    sendDesktopPetVoiceReady(payload);
+  }).catch((error) => {
+    console.debug('[DesktopPetVoice] failed to synthesize task speech:', error);
+  });
 };
 
 const trimDesktopPetTaskText = (value: string, maxChars = DESKTOP_PET_TASK_TITLE_MAX_CHARS): string => {
@@ -3109,6 +3208,7 @@ const updateDesktopPetTaskSnapshot = (sessionId: string, status: DesktopPetTaskS
     updatedAt: Date.now(),
   };
   sendDesktopPetTaskSnapshot();
+  queueDesktopPetVoiceForTask(sessionId, status);
 };
 
 const getDesktopPetStatusForMessage = (message: CoworkMessage): DesktopPetTaskStatus => {
@@ -3576,6 +3676,56 @@ if (!gotTheLock) {
       mainWindow.webContents.send(DesktopPetIpcChannel.OpenTaskRequested, { sessionId });
     }
     return restored;
+  });
+
+  ipcMain.handle(DesktopPetIpcChannel.CloneVoice, async (_event, input: DesktopPetCloneVoiceInput): Promise<DesktopPetCloneVoiceResult> => {
+    try {
+      const cloneAudioPath = typeof input?.cloneAudioPath === 'string' ? input.cloneAudioPath : '';
+      if (!cloneAudioPath) {
+        return { success: false, error: 'Please select a voice cloning audio file.' };
+      }
+      const variant = isPetVariant(input?.variant) ? input.variant : PetVariant.WeSightAgent;
+      const voiceConfig = normalizePetVoiceConfig(input?.voiceConfig ?? getEffectiveDesktopPetConfig().voice);
+      if (voiceConfig.provider === PetVoiceProvider.LocalTts) {
+        return { success: false, error: 'Local TTS currently supports speech synthesis only.' };
+      }
+      const profile = await cloneMiniMaxPetVoice({
+        variant,
+        cloneAudioPath,
+        promptAudioPath: typeof input.promptAudioPath === 'string' ? input.promptAudioPath : null,
+        promptText: typeof input.promptText === 'string' ? input.promptText : '',
+        displayName: typeof input.displayName === 'string' ? input.displayName : '',
+        voiceConfig,
+        modelProviderApiKey: getMiniMaxModelProviderApiKeyFromInput(input?.modelProviderApiKey),
+      });
+      return { success: true, profile };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'MiniMax voice cloning failed.',
+      };
+    }
+  });
+
+  ipcMain.handle(DesktopPetIpcChannel.TestVoice, async (_event, input: DesktopPetTestVoiceInput): Promise<DesktopPetTestVoiceResult> => {
+    try {
+      const variant = isPetVariant(input?.variant) ? input.variant : PetVariant.WeSightAgent;
+      const voiceConfig = normalizePetVoiceConfig(input?.voiceConfig ?? getEffectiveDesktopPetConfig().voice);
+      const payload = await synthesizePetVoice({
+        variant,
+        text: typeof input?.text === 'string' && input.text.trim() ? input.text.trim() : '你好，我是你的 WeSight 桌面宠物。',
+        voiceConfig,
+        modelProviderApiKey: getMiniMaxModelProviderApiKeyFromInput(input?.modelProviderApiKey),
+        tempDir: app.getPath('temp'),
+      });
+      sendDesktopPetVoiceReady(payload);
+      return { success: true, audioPath: payload.audioPath, audioDataUrl: payload.audioDataUrl };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'MiniMax speech synthesis failed.',
+      };
+    }
   });
 
   // Network status change handler
@@ -7605,7 +7755,7 @@ if (!gotTheLock) {
         // 允许连接到所有域名，不做限制
         "connect-src *",
         "font-src 'self' data:",
-        "media-src 'self'",
+        "media-src 'self' data: blob: file: localfile:",
         "worker-src 'self' blob:",
         "frame-src 'self' http://127.0.0.1:18791"
       ];

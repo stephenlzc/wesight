@@ -18,7 +18,16 @@ import type {
 import type { CoworkModelOverride, CoworkSessionRuntimeSnapshot } from '@shared/cowork/runtimeSnapshot';
 import type { CoworkStudioAssetsResult } from '@shared/cowork/studioAssets';
 import type { FeishuEngineKeyType, FeishuManagementModeType, FeishuRuntimeOwnershipType, WeixinOwnershipType } from '@shared/im/constants';
-import type { DesktopPetTaskSnapshot, PetConfig, PetPosition } from '@shared/pet/constants';
+import type {
+  DesktopPetCloneVoiceInput,
+  DesktopPetCloneVoiceResult,
+  DesktopPetTaskSnapshot,
+  DesktopPetTestVoiceInput,
+  DesktopPetTestVoiceResult,
+  DesktopPetVoiceReadyPayload,
+  PetConfig,
+  PetPosition,
+} from '@shared/pet/constants';
 import type { SkillMarketplaceSort, SkillMarketplaceSourceType } from '@shared/skills/constants';
 
 interface ApiResponse {
@@ -954,9 +963,12 @@ interface IElectronAPI {
     openMainWindow: () => Promise<boolean>;
     getTaskSnapshot: () => Promise<DesktopPetTaskSnapshot | null>;
     openTask: (sessionId: string) => Promise<boolean>;
+    cloneVoice: (input: DesktopPetCloneVoiceInput) => Promise<DesktopPetCloneVoiceResult>;
+    testVoice: (input: DesktopPetTestVoiceInput) => Promise<DesktopPetTestVoiceResult>;
     onConfigChanged: (callback: (config: PetConfig) => void) => () => void;
     onTaskChanged: (callback: (snapshot: DesktopPetTaskSnapshot | null) => void) => () => void;
     onOpenTaskRequested: (callback: (data: { sessionId: string }) => void) => () => void;
+    onVoiceReady: (callback: (payload: DesktopPetVoiceReadyPayload) => void) => () => void;
   };
   networkStatus: {
     send: (status: 'online' | 'offline') => void;

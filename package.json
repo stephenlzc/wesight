@@ -6,7 +6,7 @@
     "email": "hello@wesight.ai"
   },
   "license": "MIT",
-  "version": "2026.6.24",
+  "version": "2026.6.28",
   "openclaw": {
     "version": "v2026.3.2",
     "repo": "https://github.com/openclaw/openclaw.git",

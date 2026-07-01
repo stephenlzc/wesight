@@ -15,6 +15,7 @@ export const PetMood = {
   Dragging: 'dragging',
   Walking: 'walking',
   Thinking: 'thinking',
+  Speaking: 'speaking',
   Working: 'working',
   Coding: 'coding',
   Done: 'done',
@@ -115,6 +116,15 @@ const PET_PALETTES: Record<PetVariantType, PetPalette> = {
     blush: '#f43f5e',
     line: '#000000',
   },
+  [PetVariant.Nana]: {
+    shell: '#f4c7ad',
+    shellDark: '#d49a7e',
+    face: '#f9d5c2',
+    faceDark: '#e9b89d',
+    accent: '#9f6f36',
+    blush: '#f4a9b8',
+    line: '#5f3b24',
+  },
 };
 
 interface PetSpriteProps {
@@ -156,10 +166,23 @@ const renderMouth = (palette: PetPalette, mood: PetMood) => {
   if (mood === PetMood.Happy) {
     return <path d="M54 61 C58 68 66 68 70 61" fill="none" stroke={palette.accent} strokeWidth="3" strokeLinecap="round" />;
   }
+  if (mood === PetMood.Speaking) {
+    return (
+      <ellipse
+        className="pet-sprite__mouth pet-sprite__mouth--speaking"
+        cx="62"
+        cy="62"
+        rx="5"
+        ry="3"
+        fill={palette.accent}
+        opacity="0.95"
+      />
+    );
+  }
   if (mood === PetMood.Dragging) {
     return <path d="M57 62 H68" stroke={palette.accent} strokeWidth="3" strokeLinecap="round" />;
   }
-  return <path d="M57 61 C60 64 65 64 68 61" fill="none" stroke={palette.accent} strokeWidth="3" strokeLinecap="round" />;
+  return <path className="pet-sprite__mouth" d="M57 61 C60 64 65 64 68 61" fill="none" stroke={palette.accent} strokeWidth="3" strokeLinecap="round" />;
 };
 
 const renderWeSightExpression = (mood: PetMood) => {
@@ -303,6 +326,7 @@ const WeSightAgentSprite: React.FC<{
     mood === PetMood.Dragging ? 'pet-sprite--dragging' : '',
     mood === PetMood.Walking ? 'pet-sprite--walking' : '',
     mood === PetMood.Thinking ? 'pet-sprite--thinking' : '',
+    mood === PetMood.Speaking ? 'pet-sprite--speaking' : '',
     mood === PetMood.Working ? 'pet-sprite--working' : '',
     mood === PetMood.Coding ? 'pet-sprite--coding' : '',
     mood === PetMood.Done ? 'pet-sprite--done' : '',
@@ -388,6 +412,129 @@ const WeSightAgentSprite: React.FC<{
   );
 };
 
+const NanaSprite: React.FC<{
+  motion: PetMotionType;
+  mood: PetMood;
+  size: number;
+  className: string;
+}> = ({ motion, mood, size, className }) => {
+  const spriteClassName = [
+    'pet-sprite',
+    'pet-sprite--nana',
+    motion === PetMotion.Playful ? 'pet-sprite--playful' : '',
+    mood === PetMood.Happy ? 'pet-sprite--happy' : '',
+    mood === PetMood.Dragging ? 'pet-sprite--dragging' : '',
+    mood === PetMood.Walking ? 'pet-sprite--walking' : '',
+    mood === PetMood.Thinking ? 'pet-sprite--thinking' : '',
+    mood === PetMood.Speaking ? 'pet-sprite--speaking' : '',
+    mood === PetMood.Working ? 'pet-sprite--working' : '',
+    mood === PetMood.Coding ? 'pet-sprite--coding' : '',
+    mood === PetMood.Done ? 'pet-sprite--done' : '',
+    mood === PetMood.Error ? 'pet-sprite--error' : '',
+    className,
+  ].filter(Boolean).join(' ');
+
+  const isSpeaking = mood === PetMood.Speaking || mood === PetMood.Working;
+  const isFocused = mood === PetMood.Coding || mood === PetMood.Working || mood === PetMood.Thinking;
+
+  const renderNanaMouth = () => {
+    if (mood === PetMood.Error) {
+      return <path d="M53 72 C58 68 65 68 70 72" fill="none" stroke="#a75462" strokeWidth="2.4" strokeLinecap="round" />;
+    }
+    if (mood === PetMood.Done || mood === PetMood.Happy) {
+      return <path d="M53 70 C58 77 67 77 72 70" fill="none" stroke="#b65c70" strokeWidth="2.7" strokeLinecap="round" />;
+    }
+    if (isSpeaking) {
+      return (
+        <g className="pet-sprite__nana-mouth pet-sprite__nana-mouth--speaking">
+          <path d="M52 68 C57 65 67 65 72 68 C70 75 55 75 52 68Z" fill="#d76f84" />
+          <path d="M56 70 C60 72 65 72 69 70" fill="none" stroke="#f8b7c2" strokeWidth="1.4" strokeLinecap="round" opacity="0.82" />
+        </g>
+      );
+    }
+    return <path className="pet-sprite__nana-mouth" d="M54 69 C59 72 65 72 70 69" fill="none" stroke="#b65c70" strokeWidth="2.4" strokeLinecap="round" />;
+  };
+
+  return (
+    <svg
+      className={spriteClassName}
+      width={size}
+      height={size}
+      viewBox="0 0 120 140"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+      shapeRendering="geometricPrecision"
+    >
+      <defs>
+        <radialGradient id="nana-pet-skin" cx="48%" cy="35%" r="70%">
+          <stop offset="0" stopColor="#ffe6d5" />
+          <stop offset="0.62" stopColor="#f5c3ad" />
+          <stop offset="1" stopColor="#d99a82" />
+        </radialGradient>
+        <linearGradient id="nana-pet-hair" x1="27" y1="15" x2="94" y2="114" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#6f4a2f" />
+          <stop offset="0.35" stopColor="#b98252" />
+          <stop offset="0.7" stopColor="#dfb27a" />
+          <stop offset="1" stopColor="#8f5d36" />
+        </linearGradient>
+        <linearGradient id="nana-pet-shirt" x1="34" y1="86" x2="88" y2="132" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#1f2933" />
+          <stop offset="1" stopColor="#07090f" />
+        </linearGradient>
+        <radialGradient id="nana-pet-eye" cx="42%" cy="36%" r="60%">
+          <stop offset="0" stopColor="#d8c18b" />
+          <stop offset="0.55" stopColor="#8a703e" />
+          <stop offset="1" stopColor="#352515" />
+        </radialGradient>
+      </defs>
+
+      <ellipse cx="61" cy="128" rx="34" ry="8" fill="rgba(68, 45, 30, 0.2)" />
+      <path d="M30 50 C28 30 41 16 60 15 C82 14 95 30 94 55 C106 77 101 109 86 120 C79 105 80 86 88 70 C76 82 45 82 33 70 C41 88 42 106 35 120 C18 106 17 73 30 50Z" fill="url(#nana-pet-hair)" stroke="#5f3b24" strokeWidth="2" />
+      <path d="M38 80 C30 92 25 108 24 128 H96 C95 108 90 92 82 80 C72 92 49 92 38 80Z" fill="url(#nana-pet-shirt)" stroke="#0f1117" strokeWidth="2.5" />
+      <path d="M52 80 H70 L75 102 C68 108 55 108 47 102Z" fill="#f1bba5" />
+      <path d="M46 94 L59 126 L72 94 C79 101 84 113 86 128 H32 C34 113 39 101 46 94Z" fill="#0b0d13" opacity="0.95" />
+      <path d="M41 94 L58 126" stroke="#252b35" strokeWidth="2" opacity="0.75" />
+      <path d="M78 94 L61 126" stroke="#252b35" strokeWidth="2" opacity="0.75" />
+
+      <path d="M29 58 C22 56 19 66 23 74 C26 80 33 80 36 74Z" fill="#e9ad96" stroke="#87543a" strokeWidth="1.6" />
+      <path d="M91 58 C99 56 102 66 98 74 C95 80 88 80 85 74Z" fill="#e9ad96" stroke="#87543a" strokeWidth="1.6" />
+      <path d="M34 52 C34 31 44 21 61 21 C79 21 88 32 88 53 C88 77 76 91 61 91 C45 91 34 77 34 52Z" fill="url(#nana-pet-skin)" stroke="#87543a" strokeWidth="2" />
+
+      <path d="M32 52 C34 31 45 20 62 20 C46 24 39 38 38 58 C36 67 34 74 31 82 C26 70 26 58 32 52Z" fill="url(#nana-pet-hair)" opacity="0.94" />
+      <path d="M64 20 C79 23 88 35 89 54 C93 68 94 89 88 105 C82 89 83 72 85 58 C78 49 68 36 64 20Z" fill="url(#nana-pet-hair)" opacity="0.96" />
+      <path d="M36 42 C48 24 71 22 87 46 C74 37 55 33 36 42Z" fill="#6d452c" opacity="0.86" />
+      <path d="M47 22 C59 17 75 21 84 35 C72 28 59 26 45 32Z" fill="#d4a06a" opacity="0.62" />
+
+      <path d="M45 53 C50 49 55 49 59 52" fill="none" stroke="#6c4b38" strokeWidth="2" strokeLinecap="round" />
+      <path d="M66 52 C70 49 76 49 80 53" fill="none" stroke="#6c4b38" strokeWidth="2" strokeLinecap="round" />
+      <g className="pet-sprite__nana-eye">
+        <ellipse cx="52" cy="59" rx="6.2" ry="5" fill="#fff7ef" />
+        <circle cx="53" cy="59" r="3.5" fill="url(#nana-pet-eye)" />
+        <circle cx="54" cy="58" r="1.5" fill="#12100d" />
+        <circle cx="51.5" cy="56.8" r="1.1" fill="#fffaf0" opacity="0.92" />
+      </g>
+      <g className="pet-sprite__nana-eye pet-sprite__nana-eye--right">
+        <ellipse cx="73" cy="59" rx="6.2" ry="5" fill="#fff7ef" />
+        <circle cx="72" cy="59" r="3.5" fill="url(#nana-pet-eye)" />
+        <circle cx="71" cy="58" r="1.5" fill="#12100d" />
+        <circle cx="74" cy="56.8" r="1.1" fill="#fffaf0" opacity="0.92" />
+      </g>
+      <path d="M63 61 C61 66 59 68 57 69 C60 71 64 71 67 69" fill="none" stroke="#c98976" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="43" cy="69" r="4.4" fill="#f3a6ad" opacity="0.36" />
+      <circle cx="80" cy="69" r="4.4" fill="#f3a6ad" opacity="0.36" />
+      {renderNanaMouth()}
+
+      {isFocused && (
+        <g className="pet-sprite__nana-laptop">
+          <rect x="36" y="105" width="51" height="24" rx="5" fill="#111827" stroke="#5f3b24" strokeWidth="2" />
+          <rect x="43" y="110" width="37" height="12" rx="2" fill="#1f2937" />
+          <path d="M49 116 H55 M60 116 H66 M71 116 H75" stroke="#facc15" strokeWidth="1.6" strokeLinecap="round" />
+        </g>
+      )}
+    </svg>
+  );
+};
+
 const VariantAccessory: React.FC<{ variant: PetVariantType; palette: PetPalette }> = ({ variant, palette }) => {
   switch (variant) {
     case PetVariant.AquaDrop:
@@ -452,6 +599,17 @@ const PetSprite: React.FC<PetSpriteProps> = ({
     );
   }
 
+  if (variant === PetVariant.Nana) {
+    return (
+      <NanaSprite
+        motion={motion}
+        mood={mood}
+        size={size}
+        className={className}
+      />
+    );
+  }
+
   const palette = PET_PALETTES[variant];
   const isDrop = variant === PetVariant.AquaDrop;
   const isWoodLike = variant === PetVariant.WoodBox || variant === PetVariant.SproutBox;
@@ -462,6 +620,7 @@ const PetSprite: React.FC<PetSpriteProps> = ({
     mood === PetMood.Dragging ? 'pet-sprite--dragging' : '',
     mood === PetMood.Walking ? 'pet-sprite--walking' : '',
     mood === PetMood.Thinking ? 'pet-sprite--thinking' : '',
+    mood === PetMood.Speaking ? 'pet-sprite--speaking' : '',
     mood === PetMood.Working ? 'pet-sprite--working' : '',
     mood === PetMood.Coding ? 'pet-sprite--coding' : '',
     mood === PetMood.Done ? 'pet-sprite--done' : '',

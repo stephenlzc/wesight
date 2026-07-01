@@ -6,7 +6,17 @@ import type { CoworkFileActivity } from '../shared/cowork/fileActivity';
 import type { CoworkModelOverride } from '../shared/cowork/runtimeSnapshot';
 import { DialogIpcChannel } from '../shared/dialog/constants';
 import { type FeishuEngineKeyType, type FeishuManagementModeType, type FeishuRuntimeOwnershipType, ImIpcChannel } from '../shared/im/constants';
-import { DesktopPetIpcChannel, type DesktopPetTaskSnapshot, type PetConfig, type PetPosition } from '../shared/pet/constants';
+import {
+  type DesktopPetCloneVoiceInput,
+  type DesktopPetCloneVoiceResult,
+  DesktopPetIpcChannel,
+  type DesktopPetTaskSnapshot,
+  type DesktopPetTestVoiceInput,
+  type DesktopPetTestVoiceResult,
+  type DesktopPetVoiceReadyPayload,
+  type PetConfig,
+  type PetPosition,
+} from '../shared/pet/constants';
 import type { Platform } from '../shared/platform';
 import { SkillsIpcChannel } from '../shared/skills/constants';
 
@@ -79,6 +89,10 @@ contextBridge.exposeInMainWorld('electron', {
     openMainWindow: () => ipcRenderer.invoke(DesktopPetIpcChannel.OpenMainWindow),
     getTaskSnapshot: () => ipcRenderer.invoke(DesktopPetIpcChannel.GetTaskSnapshot),
     openTask: (sessionId: string) => ipcRenderer.invoke(DesktopPetIpcChannel.OpenTask, { sessionId }),
+    cloneVoice: (input: DesktopPetCloneVoiceInput): Promise<DesktopPetCloneVoiceResult> =>
+      ipcRenderer.invoke(DesktopPetIpcChannel.CloneVoice, input),
+    testVoice: (input: DesktopPetTestVoiceInput): Promise<DesktopPetTestVoiceResult> =>
+      ipcRenderer.invoke(DesktopPetIpcChannel.TestVoice, input),
     onConfigChanged: (callback: (config: PetConfig) => void) => {
       const handler = (_event: IpcRendererEvent, config: PetConfig) => callback(config);
       ipcRenderer.on(DesktopPetIpcChannel.ConfigChanged, handler);
@@ -93,6 +107,11 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: IpcRendererEvent, data: { sessionId: string }) => callback(data);
       ipcRenderer.on(DesktopPetIpcChannel.OpenTaskRequested, handler);
       return () => ipcRenderer.removeListener(DesktopPetIpcChannel.OpenTaskRequested, handler);
+    },
+    onVoiceReady: (callback: (payload: DesktopPetVoiceReadyPayload) => void) => {
+      const handler = (_event: IpcRendererEvent, payload: DesktopPetVoiceReadyPayload) => callback(payload);
+      ipcRenderer.on(DesktopPetIpcChannel.VoiceReady, handler);
+      return () => ipcRenderer.removeListener(DesktopPetIpcChannel.VoiceReady, handler);
     },
   },
   api: {

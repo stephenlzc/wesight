@@ -12,12 +12,23 @@ import {
 } from '@shared/cowork/constants';
 import {
   DEFAULT_PET_CONFIG,
+  LOCAL_TTS_DEFAULT_BASE_URL,
+  LOCAL_TTS_DEFAULT_MODEL,
+  LOCAL_TTS_DEFAULT_VOICE_ID,
+  LOCAL_TTS_DEFAULT_VOICE_NAME,
   normalizePetConfig,
+  normalizePetVoiceConfig,
+  PET_VOICE_TTS_MODELS,
   type PetConfig,
   PetMotion,
   type PetMotion as PetMotionType,
   PetVariant,
   type PetVariant as PetVariantType,
+  PetVoiceAuthMode,
+  type PetVoiceConfig,
+  type PetVoiceProfile,
+  PetVoiceProvider,
+  PetVoiceSource,
 } from '@shared/pet/constants';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
@@ -188,6 +199,7 @@ const PET_VARIANT_OPTIONS: Array<{
   { value: PetVariant.StackBot, labelKey: 'petVariantStackBot' },
   { value: PetVariant.AstroBot, labelKey: 'petVariantAstroBot' },
   { value: PetVariant.ShadowBot, labelKey: 'petVariantShadowBot' },
+  { value: PetVariant.Nana, labelKey: 'petVariantNana' },
 ];
 
 const PET_MOTION_OPTIONS: Array<{
@@ -197,6 +209,23 @@ const PET_MOTION_OPTIONS: Array<{
   { value: PetMotion.Calm, labelKey: 'petMotionCalm' },
   { value: PetMotion.Playful, labelKey: 'petMotionPlayful' },
 ];
+
+const DEFAULT_PET_VOICE_TEST_TEXT = '你好，我是你的 WeSight 桌面宠物。';
+
+const getPetVoiceProfileForVariant = (
+  voiceConfig: PetVoiceConfig,
+  variant: PetVariantType,
+): PetVoiceProfile | null => (
+  voiceConfig.voiceProfilesByVariant[variant]
+  ?? voiceConfig.voiceProfilesByVariant[PetVariant.WeSightAgent]
+  ?? null
+);
+
+const toAudioSource = (audioPath: string): string => (
+  audioPath.startsWith('file://') || audioPath.startsWith('data:')
+    ? audioPath
+    : `file://${encodeURI(audioPath)}`
+);
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
@@ -665,6 +694,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [petEnabled, setPetEnabled] = useState(DEFAULT_PET_CONFIG.enabled);
   const [petVariant, setPetVariant] = useState<PetVariantType>(DEFAULT_PET_CONFIG.variant);
   const [petMotion, setPetMotion] = useState<PetMotionType>(DEFAULT_PET_CONFIG.motion);
+  const [petVoice, setPetVoice] = useState<PetVoiceConfig>(() => normalizePetVoiceConfig(DEFAULT_PET_CONFIG.voice));
+  const [petVoiceCloneAudioPath, setPetVoiceCloneAudioPath] = useState('');
+  const [petVoicePromptAudioPath, setPetVoicePromptAudioPath] = useState('');
+  const [petVoicePromptText, setPetVoicePromptText] = useState('');
+  const [petVoiceDisplayName, setPetVoiceDisplayName] = useState('');
+  const [petVoiceTestText, setPetVoiceTestText] = useState(DEFAULT_PET_VOICE_TEST_TEXT);
+  const [isCloningPetVoice, setIsCloningPetVoice] = useState(false);
+  const [isTestingPetVoice, setIsTestingPetVoice] = useState(false);
+  const petVoiceAudioRef = useRef<HTMLAudioElement | null>(null);
   const [language, setLanguage] = useState<LanguageType>('zh');
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
@@ -854,8 +892,195 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setPetEnabled(normalized.enabled);
     setPetVariant(normalized.variant);
     setPetMotion(normalized.motion);
+    setPetVoice(normalized.voice);
     void window.electron.desktopPet.applyPreview(normalized);
   }, []);
+
+  const buildCurrentPetConfig = useCallback((voiceConfig = petVoice): PetConfig => normalizePetConfig({
+    enabled: petEnabled,
+    variant: petVariant,
+    motion: petMotion,
+    voice: voiceConfig,
+  }), [petEnabled, petMotion, petVariant, petVoice]);
+
+  const updatePetVoiceConfig = useCallback((updater: (current: PetVoiceConfig) => PetVoiceConfig) => {
+    const nextVoice = normalizePetVoiceConfig(updater(petVoice));
+    setPetVoice(nextVoice);
+    void window.electron.desktopPet.applyPreview(buildCurrentPetConfig(nextVoice));
+  }, [buildCurrentPetConfig, petVoice]);
+
+  const updateCurrentPetVoiceProfile = useCallback((patch: Partial<PetVoiceProfile>) => {
+    updatePetVoiceConfig((current) => {
+      const currentProfile = getPetVoiceProfileForVariant(current, petVariant);
+      const voiceId = typeof patch.voiceId === 'string'
+        ? patch.voiceId.trim()
+        : currentProfile?.voiceId ?? '';
+      const profiles = { ...current.voiceProfilesByVariant };
+      if (!voiceId) {
+        delete profiles[petVariant];
+        return {
+          ...current,
+          voiceProfilesByVariant: profiles,
+        };
+      }
+      profiles[petVariant] = {
+        voiceId,
+        displayName: patch.displayName ?? currentProfile?.displayName ?? voiceId,
+        source: patch.source ?? currentProfile?.source ?? PetVoiceSource.System,
+        model: patch.model ?? currentProfile?.model ?? current.model,
+        speed: patch.speed ?? currentProfile?.speed ?? current.speed,
+        volume: patch.volume ?? currentProfile?.volume ?? current.volume,
+        createdAt: patch.createdAt ?? currentProfile?.createdAt ?? Date.now(),
+      };
+      return {
+        ...current,
+        voiceProfilesByVariant: profiles,
+      };
+    });
+  }, [petVariant, updatePetVoiceConfig]);
+
+  const handlePetVoiceProviderChange = useCallback((provider: PetVoiceProvider) => {
+    updatePetVoiceConfig((current) => {
+      if (current.provider === provider) {
+        return current;
+      }
+      const profiles = { ...current.voiceProfilesByVariant };
+      if (provider === PetVoiceProvider.LocalTts) {
+        profiles[petVariant] = {
+          voiceId: LOCAL_TTS_DEFAULT_VOICE_ID,
+          displayName: LOCAL_TTS_DEFAULT_VOICE_NAME,
+          source: PetVoiceSource.System,
+          model: LOCAL_TTS_DEFAULT_MODEL,
+          speed: current.speed,
+          volume: current.volume,
+          createdAt: Date.now(),
+        };
+        return {
+          ...current,
+          provider,
+          authMode: PetVoiceAuthMode.PetApiKey,
+          baseUrl: LOCAL_TTS_DEFAULT_BASE_URL,
+          model: LOCAL_TTS_DEFAULT_MODEL,
+          voiceProfilesByVariant: profiles,
+        };
+      }
+      return {
+        ...current,
+        provider,
+        baseUrl: DEFAULT_PET_CONFIG.voice.baseUrl,
+        model: DEFAULT_PET_CONFIG.voice.model,
+        voiceProfilesByVariant: profiles,
+      };
+    });
+  }, [petVariant, updatePetVoiceConfig]);
+
+  const handleSelectPetVoiceAudio = useCallback(async (target: 'clone' | 'prompt') => {
+    const result = await window.electron.dialog.selectFile({
+      title: target === 'clone'
+        ? i18nService.t('petVoiceSelectCloneAudio')
+        : i18nService.t('petVoiceSelectPromptAudio'),
+      filters: [
+        { name: 'Audio', extensions: ['mp3', 'm4a', 'wav'] },
+      ],
+    });
+    if (!result.success || !result.path) return;
+    if (target === 'clone') {
+      setPetVoiceCloneAudioPath(result.path);
+    } else {
+      setPetVoicePromptAudioPath(result.path);
+    }
+  }, []);
+
+  const playPetVoiceAudio = useCallback((audioSource: string) => {
+    try {
+      petVoiceAudioRef.current?.pause();
+      const audio = new Audio(toAudioSource(audioSource));
+      petVoiceAudioRef.current = audio;
+      void audio.play().catch((playError) => {
+        console.debug('[Settings] failed to play pet voice audio:', playError);
+      });
+    } catch (playError) {
+      console.debug('[Settings] failed to prepare pet voice audio:', playError);
+    }
+  }, []);
+
+  const getPetVoiceModelProviderApiKey = useCallback(() => {
+    if (petVoice.provider !== PetVoiceProvider.MiniMax) {
+      return undefined;
+    }
+    if (petVoice.authMode !== PetVoiceAuthMode.ReuseModelProvider) {
+      return undefined;
+    }
+    return providers.minimax.apiKey.trim() || undefined;
+  }, [petVoice.authMode, petVoice.provider, providers.minimax.apiKey]);
+
+  const handleClonePetVoice = useCallback(async () => {
+    if (!petVoiceCloneAudioPath) {
+      setError(i18nService.t('petVoiceCloneAudioRequired'));
+      return;
+    }
+    setIsCloningPetVoice(true);
+    setError(null);
+    try {
+      const result = await window.electron.desktopPet.cloneVoice({
+        variant: petVariant,
+        voiceConfig: petVoice,
+        modelProviderApiKey: getPetVoiceModelProviderApiKey(),
+        cloneAudioPath: petVoiceCloneAudioPath,
+        promptAudioPath: petVoicePromptAudioPath || null,
+        promptText: petVoicePromptText,
+        displayName: petVoiceDisplayName,
+      });
+      if (!result.success || !result.profile) {
+        setError(result.error || i18nService.t('petVoiceCloneFailed'));
+        return;
+      }
+      updatePetVoiceConfig((current) => ({
+        ...current,
+        voiceProfilesByVariant: {
+          ...current.voiceProfilesByVariant,
+          [petVariant]: result.profile!,
+        },
+      }));
+      setNoticeMessage(i18nService.t('petVoiceCloneSuccess'));
+      setPetVoiceDisplayName('');
+    } catch (cloneError) {
+      setError(cloneError instanceof Error ? cloneError.message : i18nService.t('petVoiceCloneFailed'));
+    } finally {
+      setIsCloningPetVoice(false);
+    }
+  }, [
+    petVariant,
+    petVoice,
+    petVoiceCloneAudioPath,
+    petVoiceDisplayName,
+    petVoicePromptAudioPath,
+    petVoicePromptText,
+    getPetVoiceModelProviderApiKey,
+    updatePetVoiceConfig,
+  ]);
+
+  const handleTestPetVoice = useCallback(async () => {
+    setIsTestingPetVoice(true);
+    setError(null);
+    try {
+      const result = await window.electron.desktopPet.testVoice({
+        variant: petVariant,
+        voiceConfig: petVoice,
+        modelProviderApiKey: getPetVoiceModelProviderApiKey(),
+        text: petVoiceTestText,
+      });
+      if (!result.success || (!result.audioPath && !result.audioDataUrl)) {
+        setError(result.error || i18nService.t('petVoiceTestFailed'));
+        return;
+      }
+      playPetVoiceAudio(result.audioDataUrl || result.audioPath || '');
+    } catch (testError) {
+      setError(testError instanceof Error ? testError.message : i18nService.t('petVoiceTestFailed'));
+    } finally {
+      setIsTestingPetVoice(false);
+    }
+  }, [petVariant, petVoice, petVoiceTestText, getPetVoiceModelProviderApiKey, playPetVoiceAudio]);
 
   const handleCopyContactEmail = useCallback(async () => {
     const copied = await copyTextToClipboard(ABOUT_CONTACT_EMAIL);
@@ -1241,6 +1466,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       setPetEnabled(savedPetConfig.enabled);
       setPetVariant(savedPetConfig.variant);
       setPetMotion(savedPetConfig.motion);
+      setPetVoice(savedPetConfig.voice);
       const savedTestMode = config.app?.testMode ?? false;
       setTestMode(savedTestMode);
       if (savedTestMode) setTestModeUnlocked(true);
@@ -2205,6 +2431,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           enabled: petEnabled,
           variant: petVariant,
           motion: petMotion,
+          voice: normalizePetVoiceConfig(petVoice),
         },
         shortcuts,
         app: {
@@ -5099,7 +5326,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   enabled: petEnabled,
                   variant: petVariant,
                   motion: petMotion,
+                  voice: petVoice,
                 };
+                const currentVoiceProfile = getPetVoiceProfileForVariant(petVoice, petVariant);
+                const isLocalTtsVoice = petVoice.provider === PetVoiceProvider.LocalTts;
 
                 return (
                   <div className="mt-6 rounded-xl border border-border bg-surface-raised/60 p-4">
@@ -5201,6 +5431,334 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                               );
                             })}
                           </div>
+                        </div>
+
+                        <div className="rounded-xl border border-border bg-background p-4">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold uppercase tracking-wide text-secondary">
+                                {i18nService.t('petVoiceTitle')}
+                              </div>
+                              <p className="mt-1 text-xs leading-5 text-secondary">
+                                {i18nService.t('petVoiceHint')}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={petVoice.enabled}
+                              onClick={() => updatePetVoiceConfig((current) => ({
+                                ...current,
+                                enabled: !current.enabled,
+                              }))}
+                              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                                petVoice.enabled
+                                  ? 'bg-primary'
+                                  : 'bg-gray-300 dark:bg-gray-600'
+                              }`}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                  petVoice.enabled ? 'translate-x-6' : 'translate-x-1'
+                                }`}
+                              />
+                            </button>
+                          </div>
+
+                          {petVoice.enabled && (
+                            <div className="mt-4 space-y-4">
+                              <div>
+                                <div className="mb-2 text-xs font-medium text-secondary">
+                                  {i18nService.t('petVoiceProvider')}
+                                </div>
+                                <div className="grid grid-cols-2 gap-3 rounded-xl border border-border bg-surface-raised p-1">
+                                  {[
+                                    { value: PetVoiceProvider.MiniMax, label: i18nService.t('petVoiceProviderMiniMax') },
+                                    { value: PetVoiceProvider.LocalTts, label: i18nService.t('petVoiceProviderLocalTts') },
+                                  ].map((option) => {
+                                    const isSelected = petVoice.provider === option.value;
+                                    return (
+                                      <button
+                                        key={option.value}
+                                        type="button"
+                                        onClick={() => handlePetVoiceProviderChange(option.value)}
+                                        className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
+                                          isSelected
+                                            ? 'bg-primary text-white shadow-sm'
+                                            : 'text-secondary hover:bg-background hover:text-foreground'
+                                        }`}
+                                      >
+                                        {option.label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+
+                              {!isLocalTtsVoice && (
+                              <div className="grid grid-cols-2 gap-3 rounded-xl border border-border bg-surface-raised p-1">
+                                {[
+                                  { value: PetVoiceAuthMode.ReuseModelProvider, label: i18nService.t('petVoiceReuseMiniMaxProvider') },
+                                  { value: PetVoiceAuthMode.PetApiKey, label: i18nService.t('petVoiceUseSeparateApiKey') },
+                                ].map((option) => {
+                                  const isSelected = petVoice.authMode === option.value;
+                                  return (
+                                    <button
+                                      key={option.value}
+                                      type="button"
+                                      onClick={() => updatePetVoiceConfig((current) => ({
+                                        ...current,
+                                        authMode: option.value,
+                                      }))}
+                                      className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
+                                        isSelected
+                                          ? 'bg-primary text-white shadow-sm'
+                                          : 'text-secondary hover:bg-background hover:text-foreground'
+                                      }`}
+                                    >
+                                      {option.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              )}
+
+                              {isLocalTtsVoice && (
+                                <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-5 text-secondary">
+                                  {i18nService.t('petVoiceLocalTtsSynthesisOnly')}
+                                </div>
+                              )}
+
+                              {(isLocalTtsVoice || petVoice.authMode === PetVoiceAuthMode.PetApiKey) && (
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-secondary">
+                                    {i18nService.t(isLocalTtsVoice ? 'petVoiceLocalTtsApiKey' : 'petVoiceMiniMaxApiKey')}
+                                  </label>
+                                  <input
+                                    type="password"
+                                    value={petVoice.apiKey}
+                                    onChange={(event) => updatePetVoiceConfig((current) => ({
+                                      ...current,
+                                      apiKey: event.target.value,
+                                    }))}
+                                    placeholder="sk-..."
+                                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
+                                  />
+                                </div>
+                              )}
+
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-secondary">
+                                    {i18nService.t('petVoiceTtsModel')}
+                                  </label>
+                                  {isLocalTtsVoice ? (
+                                    <input
+                                      type="text"
+                                      value={petVoice.model}
+                                      onChange={(event) => updatePetVoiceConfig((current) => ({
+                                        ...current,
+                                        model: event.target.value,
+                                      }))}
+                                      placeholder={LOCAL_TTS_DEFAULT_MODEL}
+                                      className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
+                                    />
+                                  ) : (
+                                    <ThemedSelect
+                                      id="pet-voice-model"
+                                      value={petVoice.model}
+                                      onChange={(value) => updatePetVoiceConfig((current) => ({
+                                        ...current,
+                                        model: value,
+                                      }))}
+                                      options={PET_VOICE_TTS_MODELS.map((model) => ({
+                                        value: model,
+                                        label: model,
+                                      }))}
+                                    />
+                                  )}
+                                </div>
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-secondary">
+                                    {i18nService.t(isLocalTtsVoice ? 'petVoiceLocalTtsBaseUrl' : 'petVoiceBaseUrl')}
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={petVoice.baseUrl}
+                                    onChange={(event) => updatePetVoiceConfig((current) => ({
+                                      ...current,
+                                      baseUrl: event.target.value,
+                                    }))}
+                                    placeholder={isLocalTtsVoice ? LOCAL_TTS_DEFAULT_BASE_URL : undefined}
+                                    className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-secondary">
+                                    {i18nService.t('petVoiceSpeed')}
+                                  </label>
+                                  <input
+                                    type="range"
+                                    min="0.5"
+                                    max="2"
+                                    step="0.05"
+                                    value={petVoice.speed}
+                                    onChange={(event) => updatePetVoiceConfig((current) => ({
+                                      ...current,
+                                      speed: Number(event.target.value),
+                                    }))}
+                                    className="w-full accent-primary"
+                                  />
+                                  <div className="mt-1 text-xs text-secondary">{petVoice.speed.toFixed(2)}</div>
+                                </div>
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-secondary">
+                                    {i18nService.t('petVoiceVolume')}
+                                  </label>
+                                  <input
+                                    type="range"
+                                    min="0.1"
+                                    max="2"
+                                    step="0.05"
+                                    value={petVoice.volume}
+                                    onChange={(event) => updatePetVoiceConfig((current) => ({
+                                      ...current,
+                                      volume: Number(event.target.value),
+                                    }))}
+                                    className="w-full accent-primary"
+                                  />
+                                  <div className="mt-1 text-xs text-secondary">{petVoice.volume.toFixed(2)}</div>
+                                </div>
+                              </div>
+
+                              <div className="rounded-xl border border-border bg-surface-raised p-3">
+                                <div className="mb-2 flex items-center justify-between gap-3">
+                                  <div>
+                                    <div className="text-xs font-medium text-secondary">
+                                      {i18nService.t('petVoiceCurrentProfile')}
+                                    </div>
+                                    <div className="mt-1 text-sm font-semibold text-foreground">
+                                      {currentVoiceProfile?.displayName || i18nService.t('petVoiceNoProfile')}
+                                    </div>
+                                  </div>
+                                  <span className="rounded-full bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
+                                    {i18nService.t(PET_VARIANT_OPTIONS.find((option) => option.value === petVariant)?.labelKey ?? 'petVariantWeSightAgent')}
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div>
+                                    <label className="mb-1 block text-xs font-medium text-secondary">
+                                      {i18nService.t('petVoiceId')}
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={currentVoiceProfile?.voiceId ?? ''}
+                                      onChange={(event) => updateCurrentPetVoiceProfile({
+                                        voiceId: event.target.value,
+                                        source: PetVoiceSource.System,
+                                      })}
+                                      placeholder={isLocalTtsVoice ? LOCAL_TTS_DEFAULT_VOICE_ID : 'male-qn-qingse'}
+                                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="mb-1 block text-xs font-medium text-secondary">
+                                      {i18nService.t('petVoiceDisplayName')}
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={currentVoiceProfile?.displayName ?? ''}
+                                      onChange={(event) => updateCurrentPetVoiceProfile({
+                                        displayName: event.target.value,
+                                      })}
+                                      placeholder={i18nService.t('petVoiceDisplayNamePlaceholder')}
+                                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+                                  <input
+                                    type="text"
+                                    value={petVoiceTestText}
+                                    onChange={(event) => setPetVoiceTestText(event.target.value)}
+                                    className="min-w-0 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={isTestingPetVoice}
+                                    onClick={handleTestPetVoice}
+                                    className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {isTestingPetVoice ? i18nService.t('petVoiceTesting') : i18nService.t('petVoiceTest')}
+                                  </button>
+                                </div>
+                              </div>
+
+                              {!isLocalTtsVoice && (
+                              <div className="rounded-xl border border-dashed border-primary/40 bg-primary/5 p-3">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-primary">
+                                  {i18nService.t('petVoiceCloneTitle')}
+                                </div>
+                                <p className="mt-1 text-xs leading-5 text-secondary">
+                                  {i18nService.t('petVoiceCloneHint')}
+                                </p>
+                                <div className="mt-3 grid grid-cols-2 gap-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSelectPetVoiceAudio('clone')}
+                                    className="rounded-lg border border-border bg-background px-3 py-2 text-left text-xs text-foreground hover:border-primary/50"
+                                  >
+                                    <span className="block font-medium">{i18nService.t('petVoiceCloneAudio')}</span>
+                                    <span className="mt-1 block truncate text-secondary">
+                                      {petVoiceCloneAudioPath || i18nService.t('petVoiceNoAudioSelected')}
+                                    </span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSelectPetVoiceAudio('prompt')}
+                                    className="rounded-lg border border-border bg-background px-3 py-2 text-left text-xs text-foreground hover:border-primary/50"
+                                  >
+                                    <span className="block font-medium">{i18nService.t('petVoicePromptAudio')}</span>
+                                    <span className="mt-1 block truncate text-secondary">
+                                      {petVoicePromptAudioPath || i18nService.t('petVoiceOptionalAudio')}
+                                    </span>
+                                  </button>
+                                </div>
+                                <div className="mt-3 grid grid-cols-2 gap-3">
+                                  <input
+                                    type="text"
+                                    value={petVoiceDisplayName}
+                                    onChange={(event) => setPetVoiceDisplayName(event.target.value)}
+                                    placeholder={i18nService.t('petVoiceCloneDisplayNamePlaceholder')}
+                                    className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={petVoicePromptText}
+                                    onChange={(event) => setPetVoicePromptText(event.target.value)}
+                                    placeholder={i18nService.t('petVoicePromptTextPlaceholder')}
+                                    className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/30"
+                                  />
+                                </div>
+                                <div className="mt-3 flex justify-end">
+                                  <button
+                                    type="button"
+                                    disabled={isCloningPetVoice}
+                                    onClick={handleClonePetVoice}
+                                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {isCloningPetVoice ? i18nService.t('petVoiceCloning') : i18nService.t('petVoiceCloneAction')}
+                                  </button>
+                                </div>
+                              </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}

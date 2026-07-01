@@ -54,12 +54,14 @@ const DesktopPetWindow: React.FC = () => {
   const [taskSnapshot, setTaskSnapshot] = useState<DesktopPetTaskSnapshot | null>(null);
   const [isTaskCollapsed, setIsTaskCollapsed] = useState(false);
   const [mood, setMood] = useState<PetMood>(PetMood.Idle);
+  const [isVoiceSpeaking, setIsVoiceSpeaking] = useState(false);
   const [bubbleKey, setBubbleKey] = useState<string>('desktopPetBubbleIdle');
   const [isBubbleVisible, setIsBubbleVisible] = useState(false);
   const [dragPhase, setDragPhase] = useState<DragPhase>(DragPhase.Idle);
   const bubbleTimerRef = useRef<number | null>(null);
   const taskCollapseTimerRef = useRef<number | null>(null);
   const lastTaskSessionRef = useRef<string | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const dragRef = useRef<DragState>({
     phase: DragPhase.Idle,
     startScreenX: 0,
@@ -155,11 +157,44 @@ const DesktopPetWindow: React.FC = () => {
       }
     });
 
+    const unsubscribeVoice = window.electron.desktopPet.onVoiceReady((payload) => {
+      const audioSource = payload.audioDataUrl || payload.audioPath;
+      if (!active || !audioSource) return;
+      try {
+        currentAudioRef.current?.pause();
+        const audioSrc = audioSource.startsWith('file://') || audioSource.startsWith('data:')
+          ? audioSource
+          : `file://${encodeURI(audioSource)}`;
+        const audio = new Audio(audioSrc);
+        setIsVoiceSpeaking(true);
+        setMood(PetMood.Speaking);
+        audio.addEventListener('ended', () => {
+          setIsVoiceSpeaking(false);
+          setMood(PetMood.Idle);
+        }, { once: true });
+        audio.addEventListener('error', () => {
+          setIsVoiceSpeaking(false);
+          setMood(PetMood.Idle);
+        }, { once: true });
+        currentAudioRef.current = audio;
+        void audio.play().catch((error) => {
+          setIsVoiceSpeaking(false);
+          setMood(PetMood.Idle);
+          console.debug('[DesktopPet] failed to play voice audio:', error);
+        });
+      } catch (error) {
+        console.debug('[DesktopPet] failed to prepare voice audio:', error);
+      }
+    });
+
     return () => {
       active = false;
       setMouseInteractive(false);
       unsubscribe();
       unsubscribeTask();
+      unsubscribeVoice();
+      currentAudioRef.current?.pause();
+      currentAudioRef.current = null;
       document.documentElement.classList.remove('desktop-pet-page');
       if (bubbleTimerRef.current != null) {
         window.clearTimeout(bubbleTimerRef.current);
@@ -381,7 +416,7 @@ const DesktopPetWindow: React.FC = () => {
       case DesktopPetTaskStatus.Permission:
         return PetMood.Thinking;
       case DesktopPetTaskStatus.Replying:
-        return PetMood.Working;
+        return PetMood.Speaking;
       case DesktopPetTaskStatus.Completed:
         return PetMood.Done;
       case DesktopPetTaskStatus.Error:
@@ -401,7 +436,7 @@ const DesktopPetWindow: React.FC = () => {
   const taskMood = getMoodForTask(taskSnapshot);
   const resolvedMood = dragPhase === DragPhase.Dragging
     ? PetMood.Dragging
-    : taskMood ?? mood;
+    : (isVoiceSpeaking ? PetMood.Speaking : taskMood ?? mood);
 
   if (!config.enabled) {
     return null;
